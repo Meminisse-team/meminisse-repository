@@ -1,1 +1,1 @@
-# syncholar-repository
+# meminisse-repository
