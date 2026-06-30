@@ -1,0 +1,25 @@
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pgvector==0.3.6
+
+# Config
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# Google Antigravity (ADK) + Vertex AI
+google-adk==1.2.1
+google-cloud-aiplatform==1.71.1
+
+# AWS S3
+boto3==1.35.74
+
+# Dev / test
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.0
