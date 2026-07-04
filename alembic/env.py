@@ -9,7 +9,11 @@ from app.models import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    try:
+        # Python 3.10+: explicit UTF-8 prevents CP949 decode errors on Windows
+        fileConfig(config.config_file_name, encoding="utf-8")
+    except TypeError:
+        fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
 

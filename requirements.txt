@@ -2,7 +2,7 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 
-# Database
+# Database (Supabase PostgreSQL + pgvector)
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
@@ -12,14 +12,17 @@ pgvector==0.3.6
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 
-# Google Antigravity (ADK) + Vertex AI
-google-adk==1.2.1
-google-cloud-aiplatform==1.71.1
+# AI — Solar LLM (라벨 추출 / 산문 재조립 / 목차·챕터 집필)
+# AsyncOpenAI(base_url="https://api.upstage.ai/v1/solar") 로 직통 호출
+openai==1.54.0
 
-# AWS S3
+# AI — Upstage Document Parse (Phase 1 텍스트 사진 선(先) 라벨링)
+# openai 패키지와 별개로 multipart/form-data 업로드가 필요하므로 httpx 직접 사용
+httpx==0.28.0
+
+# AWS S3 (미디어 원본 저장)
 boto3==1.35.74
 
 # Dev / test
 pytest==8.3.4
 pytest-asyncio==0.24.0
-httpx==0.28.0
