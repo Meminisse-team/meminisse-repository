@@ -4,7 +4,6 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
-    Enum,
     ForeignKey,
     Integer,
     SmallInteger,
@@ -15,7 +14,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.models.base import Base
+from app.models.base import Base, str_enum
 from app.models.enums import MessageRole, SessionStatus, SessionType
 
 
@@ -33,7 +32,7 @@ class InterviewSession(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     session_type = Column(
-        Enum(SessionType, name="sessiontype"),
+        str_enum(SessionType, name="sessiontype"),
         nullable=False,
         default=SessionType.FIXED_QUESTION,
         server_default=SessionType.FIXED_QUESTION.value,
@@ -47,7 +46,7 @@ class InterviewSession(Base):
         nullable=True,
     )
     status = Column(
-        Enum(SessionStatus, name="sessionstatus"),
+        str_enum(SessionStatus, name="sessionstatus"),
         nullable=False,
         default=SessionStatus.OPEN,
         server_default=SessionStatus.OPEN.value,
@@ -118,7 +117,7 @@ class ChatLog(Base):
         nullable=False,
         index=True,
     )
-    role = Column(Enum(MessageRole, name="messagerole"), nullable=False)
+    role = Column(str_enum(MessageRole, name="messagerole"), nullable=False)
     content = Column(Text, nullable=False)
     turn_index = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

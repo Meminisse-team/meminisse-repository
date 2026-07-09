@@ -1,11 +1,11 @@
 import uuid
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.models.base import Base
+from app.models.base import Base, str_enum
 from app.models.enums import AutobiographyStatus, DraftStatus
 
 
@@ -19,7 +19,7 @@ class Autobiography(Base):
     )
     title = Column(String(512), nullable=True)
     status = Column(
-        Enum(AutobiographyStatus, name="autobiographystatus"),
+        str_enum(AutobiographyStatus, name="autobiographystatus"),
         nullable=False,
         default=AutobiographyStatus.IN_PROGRESS,
         server_default=AutobiographyStatus.IN_PROGRESS.value,
@@ -98,7 +98,7 @@ class ChapterDraft(Base):
     # 예: {"flags": [{"sentence": "...", "reason": "not_entailed_by_sources"}]}
     groundedness_report = Column(JSONB, nullable=True)
     status = Column(
-        Enum(DraftStatus, name="draftstatus"),
+        str_enum(DraftStatus, name="draftstatus"),
         nullable=False,
         default=DraftStatus.DRAFT,
         server_default=DraftStatus.DRAFT.value,

@@ -10,9 +10,21 @@
 - chapter_drafts.source_session_ids → source_event_ids: 챕터 조립의 실제 검색 단위가
   세션이 아닌 이벤트이므로 참조 대상을 이벤트로 교정.
 - 임베딩 차원을 OpenAI(1536) → Upstage embedding-query/embedding-passage로 전환.
-  NOTE: upstage_embeddings_api_docs.txt 내 서술부(4096차원)와 공식 스펙부(1024차원)가
-  서로 모순되므로, 실제 UPSTAGE_API_KEY로 1회 호출해 응답 벡터 길이를 확인한 뒤
-  EMBEDDING_DIM이 다르면 이 마이그레이션의 vector(N)을 재작성해야 한다(사전 데이터 없음).
+  실제 UPSTAGE_API_KEY로 embedding-query/embedding-passage를 1회 호출해 확인한 결과
+  4096차원으로 검증됨(upstage_embeddings_api_docs.txt의 1024차원 서술은 오기로 판단).
+  단, pgvector의 HNSW/IVFFlat 인덱스는 vector 타입 기준 2000차원, halfvec 타입도
+  4000차원까지만 지원하므로(Supabase pgvector 0.8.2 실측) 4096차원에는 근사 인덱스를
+  아예 만들 수 없다 — 저장 자체는 문제없다(vector 타입 저장 한계는 16,000차원). 따라서
+  events.embedding에는 인덱스 없이 컬럼만 두고 순차 스캔으로 검색한다(하단 참조).
+
+  향후 개발 과제(지금은 의도적으로 보류): 유저당 이벤트 수가 늘어 순차 스캔이 실제로
+  느려지면, (1) PCA/랜덤 프로젝션으로 4096차원을 2000차원 이하로 축소한 벡터를 별도
+  컬럼에 추가 저장하고 그 축소 벡터에만 HNSW를 걸어 "인덱스로 후보 N개 추출 → 원본
+  4096차원으로 재정렬(rerank)"하는 2단계 검색을 도입하거나, (2) pgvector의 이진
+  양자화(bit 타입 + 해밍 거리)로 더 가벼운 1차 필터를 두는 방법이 있다. 둘 다 기존
+  순차 스캔 쿼리를 건드리지 않는 순수 추가(additive) 마이그레이션으로 붙일 수 있다.
+  단순히 앞쪽 N차원만 잘라 쓰는 truncation은 Upstage 임베딩이 Matryoshka 방식으로
+  학습되었다는 근거가 없어 검증 없이는 채택하지 않는다.
 
 Revision ID: 002
 Revises: 001
@@ -30,7 +42,7 @@ down_revision = "001"
 branch_labels = None
 depends_on = None
 
-EMBEDDING_DIM = 4096  # Upstage embedding-query / embedding-passage — 검증 전 잠정값
+EMBEDDING_DIM = 4096  # Upstage embedding-query / embedding-passage — 실제 API 응답으로 검증됨
 
 
 def upgrade() -> None:
@@ -123,12 +135,14 @@ def upgrade() -> None:
     op.create_index("ix_events_user_id", "events", ["user_id"])
     op.create_index("ix_events_session_id", "events", ["session_id"])
     op.create_index("ix_events_media_asset_id", "events", ["media_asset_id"])
-    op.execute(
-        "CREATE INDEX ix_events_embedding_hnsw ON events "
-        "USING hnsw (embedding vector_cosine_ops) "
-        "WITH (m = 16, ef_construction = 64) "
-        "WHERE embedding IS NOT NULL"
-    )
+    # HNSW(및 IVFFlat) 인덱스는 pgvector에서 vector 타입 2000차원, halfvec 타입도
+    # 4000차원까지만 지원한다(실측: Supabase pgvector 0.8.2). 실제 Upstage
+    # embedding-query/embedding-passage 응답은 4096차원으로 확인되어(EMBEDDING_DIM,
+    # app/models/base.py) 두 인덱스 타입 모두 애초에 생성이 불가능하다. 따라서 근사
+    # 인덱스 없이 vector(4096) 컬럼만 두고, 유사도 검색은 순차 스캔
+    # (ORDER BY embedding <=> query LIMIT N)으로 수행한다 — 해커톤 규모(유저당
+    # 수십~수백 이벤트)에서는 성능상 문제가 되지 않는다. 규모가 커졌을 때의
+    # 대안(차원 축소+rerank, 이진 양자화)은 이 파일 상단 모듈 docstring 참조.
 
     # ------------------------------------------------------------------ #
     # event_relations                                                      #
@@ -166,7 +180,6 @@ def downgrade() -> None:
     op.drop_index("ix_event_relations_from_event_id", table_name="event_relations")
     op.drop_table("event_relations")
 
-    op.execute("DROP INDEX IF EXISTS ix_events_embedding_hnsw")
     op.drop_index("ix_events_media_asset_id", table_name="events")
     op.drop_index("ix_events_session_id", table_name="events")
     op.drop_index("ix_events_user_id", table_name="events")

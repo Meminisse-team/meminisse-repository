@@ -1,11 +1,11 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, SmallInteger, String
+from sqlalchemy import Column, DateTime, ForeignKey, SmallInteger, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.models.base import Base
+from app.models.base import Base, str_enum
 from app.models.enums import UserStage
 
 
@@ -18,7 +18,7 @@ class User(Base):
     birth_year = Column(SmallInteger, nullable=True)   # 당시 나이 기반 생애주기 매핑에 사용
     hometown = Column(String(255), nullable=True)      # 고향 (초기 프로필)
     current_stage = Column(
-        Enum(UserStage, name="userstage"),
+        str_enum(UserStage, name="userstage"),
         nullable=False,
         default=UserStage.ONBOARDING,
         server_default=UserStage.ONBOARDING.value,

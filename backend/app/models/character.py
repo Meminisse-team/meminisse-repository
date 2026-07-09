@@ -1,11 +1,11 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.models.base import Base
+from app.models.base import Base, str_enum
 from app.models.enums import RiskClassification
 
 
@@ -31,7 +31,7 @@ class Character(Base):
     real_name = Column(String(100), nullable=True)       # NER 스캔으로 확보된 실명. 구술자 확인/추가 지정 가능.
     relation_to_user = Column(String(100), nullable=True)  # 예: "어머니의 친구", "첫째 형"
     risk_classification = Column(
-        Enum(RiskClassification, name="riskclassification"),
+        str_enum(RiskClassification, name="riskclassification"),
         nullable=False,
         default=RiskClassification.NONE,
         server_default=RiskClassification.NONE.value,

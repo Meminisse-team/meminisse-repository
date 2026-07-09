@@ -1,12 +1,12 @@
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Numeric, SmallInteger, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Numeric, SmallInteger, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.models.base import EMBEDDING_DIM, Base
+from app.models.base import EMBEDDING_DIM, Base, str_enum
 from app.models.enums import EventRelationType, EventSourceType, LifeMilestoneCategory, LifePeriod
 
 
@@ -30,7 +30,7 @@ class Event(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    source_type = Column(Enum(EventSourceType, name="eventsourcetype"), nullable=False)
+    source_type = Column(str_enum(EventSourceType, name="eventsourcetype"), nullable=False)
     # source_type == SESSION_CHAT 전용. DOCUMENT면 null.
     session_id = Column(
         UUID(as_uuid=True), ForeignKey("interview_sessions.id", ondelete="CASCADE"), nullable=True
@@ -44,7 +44,7 @@ class Event(Base):
     # DOCUMENT 예:     {"element_id": 4, "page": 2}  (Document Parse elements[].id)
     source_span = Column(JSONB, nullable=True)
 
-    life_period = Column(Enum(LifePeriod, name="lifeperiod"), nullable=True)
+    life_period = Column(str_enum(LifePeriod, name="lifeperiod"), nullable=True)
     # 시기가 불확실한 사건을 위한 상대적/범위형 표현 ("고등학교 시절", "1980년대 초").
     occurred_at_label = Column(String(100), nullable=True)
     place = Column(String(255), nullable=True)
@@ -76,7 +76,7 @@ class Event(Base):
     # 예: {"raw_length": 420, "emotion_intensity": 4, "mention_count": 2, "z_score": 1.8}
     importance_signals = Column(JSONB, nullable=True)
     life_milestone_category = Column(
-        Enum(LifeMilestoneCategory, name="lifemilestonecategory"), nullable=True
+        str_enum(LifeMilestoneCategory, name="lifemilestonecategory"), nullable=True
     )
 
     # verified=true로 승격된 이후에만 채워짐 (Upstage embedding-passage).
@@ -118,7 +118,7 @@ class EventRelation(Base):
     to_event_id = Column(
         UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    relation_type = Column(Enum(EventRelationType, name="eventrelationtype"), nullable=False)
+    relation_type = Column(str_enum(EventRelationType, name="eventrelationtype"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     from_event = relationship("Event", foreign_keys=[from_event_id])
