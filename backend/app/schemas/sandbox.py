@@ -194,3 +194,248 @@ class OcrValidityCheckResponse(BaseModel):
     messages_sent: list[dict[str, Any]]
     suspicious: bool
     note: str
+
+
+# --------------------------------------------------------------------------- #
+# 8. Phase 3 — 스타일 바이블 생성                                              #
+# --------------------------------------------------------------------------- #
+
+
+class StyleBibleRequest(BaseModel):
+    all_session_prose: list[str] = Field(
+        ..., min_length=1, examples=[["저는 1978년 부산에서 태어났습니다...", "학창 시절엔 조용한 아이였어요..."]]
+    )
+    system_prompt_override: str | None = Field(None, description="STYLE_BIBLE_SYSTEM_PROMPT 대신 사용할 임시 문구")
+    generation: GenerationOverrides | None = None
+
+
+class StyleBibleResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    style_bible_content: str
+
+
+# --------------------------------------------------------------------------- #
+# 9. Phase 3 — 이벤트 병합 판정                                                #
+# --------------------------------------------------------------------------- #
+
+
+class EventMergeJudgeRequest(BaseModel):
+    event_a_summary: str = Field(..., examples=["1990년 첫째 아이 출산 (서울)"])
+    event_b_summary: str = Field(..., examples=["1990년경 첫 아이를 낳음 (서울 소재 병원)"])
+    system_prompt_override: str | None = Field(
+        None, description="EVENT_MERGE_JUDGE_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class EventMergeJudgeResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    same_event: bool
+    reasoning: str
+
+
+# --------------------------------------------------------------------------- #
+# 10. Phase 4 — 동적 목차 생성 (Structured Outputs)                            #
+# --------------------------------------------------------------------------- #
+
+
+class TocGenerationRequest(BaseModel):
+    event_summaries_with_scores: str = Field(
+        ...,
+        examples=[
+            "- [중요도 12.5] 부산 출생 (시기: 1978년, 감정: 미상)\n"
+            "- [중요도 9.2] 첫 취업 (시기: 2001년, 감정: 설렘)"
+        ],
+    )
+    system_prompt_override: str | None = Field(None, description="TOC_GENERATION_SYSTEM_PROMPT 대신 사용할 임시 문구")
+    generation: GenerationOverrides | None = None
+
+
+class TocChapterOut(BaseModel):
+    chapter_index: int
+    title: str
+    theme_keywords: list[str]
+
+
+class TocCandidateOut(BaseModel):
+    chapters: list[TocChapterOut]
+
+
+class TocGenerationResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    candidates: list[TocCandidateOut]
+
+
+# --------------------------------------------------------------------------- #
+# 11. Phase 4 — 책 전체 시놉시스                                                #
+# --------------------------------------------------------------------------- #
+
+
+class BookSynopsisRequest(BaseModel):
+    style_bible: str = Field(..., examples=["간결하고 담담한 문체. 가족과 성실함을 중시함."])
+    toc: str = Field(..., examples=["1. 어린 시절 (유년기)\n2. 청춘의 방황 (청년기)"])
+    system_prompt_override: str | None = Field(None, description="BOOK_SYNOPSIS_SYSTEM_PROMPT 대신 사용할 임시 문구")
+    generation: GenerationOverrides | None = None
+
+
+class BookSynopsisResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    book_synopsis: str
+
+
+# --------------------------------------------------------------------------- #
+# 12. Phase 4 — 챕터 시놉시스                                                  #
+# --------------------------------------------------------------------------- #
+
+
+class ChapterSynopsisRequest(BaseModel):
+    book_synopsis: str = Field(..., examples=["부산에서 태어나 성실하게 삶을 일군 한 사람의 이야기."])
+    chapter_title: str = Field(..., examples=["1장. 어린 시절"])
+    event_summaries: list[str] = Field(..., examples=[["부산 출생", "초등학교 입학"]])
+    system_prompt_override: str | None = Field(
+        None, description="CHAPTER_SYNOPSIS_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class ChapterSynopsisResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    chapter_synopsis: str
+
+
+# --------------------------------------------------------------------------- #
+# 13. Phase 4 — 챕터 본문 집필 (하향식 집필의 최종 단계)                        #
+# --------------------------------------------------------------------------- #
+
+
+class ChapterWritingRequest(BaseModel):
+    style_bible: str = Field(..., examples=["간결하고 담담한 문체."])
+    book_synopsis: str = Field(..., examples=["부산에서 태어나 성실하게 삶을 일군 한 사람의 이야기."])
+    chapter_synopsis: str = Field(..., examples=["유년기의 평온함과 가족의 따뜻함을 그린다."])
+    previous_chapter_summary: str | None = Field(None, description="직전 챕터 요약. 첫 챕터면 생략")
+    retrieved_event_paragraphs: list[str] = Field(
+        ..., min_length=1, examples=[["저는 1978년 부산에서 태어났습니다."]]
+    )
+    system_prompt_override: str | None = Field(
+        None, description="CHAPTER_WRITING_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class ChapterWritingResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    chapter_content: str
+
+
+# --------------------------------------------------------------------------- #
+# 14. Phase 4 — 통일성 윤문 패스                                                #
+# --------------------------------------------------------------------------- #
+
+
+class UnityRevisionRequest(BaseModel):
+    style_bible: str = Field(..., examples=["간결하고 담담한 문체."])
+    full_manuscript: str = Field(..., examples=["[1장. 어린 시절]\n저는 부산에서 태어났습니다..."])
+    system_prompt_override: str | None = Field(
+        None, description="UNITY_REVISION_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class UnityRevisionResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    revised_manuscript: str
+
+
+# --------------------------------------------------------------------------- #
+# 15. Phase 4 — 원문 대조 팩트체크 (재추출)                                     #
+# --------------------------------------------------------------------------- #
+
+
+class FactReextractionRequest(BaseModel):
+    chapter_content: str = Field(..., examples=["저는 1978년 부산에서 태어나 스물다섯 되던 해 서울로 왔습니다."])
+    system_prompt_override: str | None = Field(
+        None, description="FACT_REEXTRACTION_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class FactOut(BaseModel):
+    fact_type: Literal["person", "year_or_age", "place", "quantity"]
+    raw_text: str
+
+
+class FactReextractionResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    facts: list[FactOut]
+
+
+# --------------------------------------------------------------------------- #
+# 16. 제3자 언급 위해성 분류                                                    #
+# --------------------------------------------------------------------------- #
+
+
+class ThirdPartyRiskRequest(BaseModel):
+    person_name: str = Field(..., examples=["김철수"])
+    chapter_excerpts: list[str] = Field(..., min_length=1, examples=[["김철수와 크게 다툰 적이 있다."]])
+    system_prompt_override: str | None = Field(
+        None, description="THIRD_PARTY_RISK_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class ThirdPartyRiskResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    person_name: str
+    risk_detected: bool
+    risk_classification: Literal["none", "negative_portrayal", "conflict", "crime_mention"]
+    risk_reasons: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# 17. 등장인물 NER 스캔                                                        #
+# --------------------------------------------------------------------------- #
+
+
+class NerExtractionRequest(BaseModel):
+    chapter_content: str = Field(..., examples=["김철수와 함께 학교를 다녔다. 그의 어머니도 종종 뵈었다."])
+    system_prompt_override: str | None = Field(
+        None, description="NER_EXTRACTION_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class PersonOut(BaseModel):
+    name: str
+    relation_to_narrator: str | None
+
+
+class NerExtractionResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    people: list[PersonOut]
+
+
+# --------------------------------------------------------------------------- #
+# 18. (LLM 미호출) OCR 확인 질문 문구 미리보기                                  #
+# --------------------------------------------------------------------------- #
+
+
+class OcrConfirmationQuestionRequest(BaseModel):
+    suspected_text: str = Field(..., examples=["1975년 부산"])
+    guessed_value: str = Field(..., examples=["1975년에 부산에 사신 것"])
+
+
+class OcrConfirmationQuestionResponse(BaseModel):
+    question: str
+
+
+# --------------------------------------------------------------------------- #
+# 19. (LLM 미호출) 생애 이정표 카테고리 키워드 분류 미리보기                     #
+# --------------------------------------------------------------------------- #
+
+
+class LifeMilestoneClassificationRequest(BaseModel):
+    text: str = Field(..., examples=["1990년에 첫째 아이를 출산했다."])
+
+
+class LifeMilestoneClassificationResponse(BaseModel):
+    category: str | None = Field(None, description="LIFE_MILESTONE_KEYWORDS 중 일치한 첫 카테고리. 없으면 null")
