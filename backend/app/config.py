@@ -1,8 +1,16 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # 게이트웨이 계층 DI 스위치 (app/gateways/factory.py 참조)
+    #   mock:     인메모리 Mock 게이트웨이. DB/S3 없이 로컬 실행·데모·테스트 전용.
+    #   postgres: 현재는 SQLAlchemy(Supabase) 구현체. 팀원의 Postgres/S3 연동 완성 후
+    #             이 값 자체는 그대로 두고 factory.py의 구현체 임포트만 교체하면 된다.
+    GATEWAY_BACKEND: Literal["mock", "postgres"] = "postgres"
 
     # Supabase PostgreSQL — Direct connection (마스터 권한, RLS 우회)
     # 형식: postgresql+asyncpg://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres

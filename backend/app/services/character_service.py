@@ -16,27 +16,19 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import prompts
 from app.clients import solar
-from app.models import (
-    Autobiography,
-    ChapterDraft,
-    Character,
-    CharacterMention,
-    ConsentRecord,
-    ConsentType,
-    RiskClassification,
-)
+from app.gateways.dto import AutobiographyRecord, ChapterDraftRecord, CharacterCreateData, CharacterRecord
+from app.gateways.factory import Gateways
+from app.models.enums import ConsentType, RiskClassification
 
 
 async def scan_and_classify_chapter(
-    db: AsyncSession, *, chapter: ChapterDraft, autobiography: Autobiography
-) -> list[Character]:
+    gateways: Gateways, *, chapter: ChapterDraftRecord, autobiography: AutobiographyRecord
+) -> list[CharacterRecord]:
+    """write_chapter() 파이프라인의 마지막 단계로 호출된다 — 커밋은 호출부(write_chapter)
+    책임이므로 여기서는 하지 않는다."""
     if not chapter.content:
         return []
 
@@ -47,54 +39,27 @@ async def scan_and_classify_chapter(
         reasoning_effort="low",
     )
 
-    characters: list[Character] = []
+    characters: list[CharacterRecord] = []
     for person in extraction.get("people", []):
         name = person["name"].strip()
         if not name:
             continue
-        character = await _get_or_create_character(
-            db,
-            autobiography_id=autobiography.id,
-            real_name=name,
-            relation=person.get("relation_to_narrator"),
+        character = await gateways.characters.get_or_create(
+            CharacterCreateData(
+                autobiography_id=autobiography.id,
+                real_name=name,
+                relation_to_user=person.get("relation_to_narrator"),
+            )
         )
         risk = await _classify_risk(person_name=name, chapter_excerpt=chapter.content)
         if risk.get("risk_detected"):
-            character.risk_classification = RiskClassification(risk["risk_classification"])
-        db.add(CharacterMention(character_id=character.id, chapter_draft_id=chapter.id))
+            await gateways.characters.update_risk_classification(
+                character.id, RiskClassification(risk["risk_classification"])
+            )
+        await gateways.characters.add_mention(character.id, chapter_draft_id=chapter.id)
         characters.append(character)
 
-    await db.flush()
     return characters
-
-
-async def _get_or_create_character(
-    db: AsyncSession, *, autobiography_id: uuid.UUID, real_name: str, relation: str | None
-) -> Character:
-    result = await db.execute(
-        select(Character).where(
-            Character.autobiography_id == autobiography_id, Character.real_name == real_name
-        )
-    )
-    character = result.scalar_one_or_none()
-    if character is not None:
-        return character
-
-    count_result = await db.execute(
-        select(func.count()).select_from(Character).where(Character.autobiography_id == autobiography_id)
-    )
-    next_index = count_result.scalar_one() + 1
-    display_name = relation or f"지인 {next_index}"
-
-    character = Character(
-        autobiography_id=autobiography_id,
-        display_name=display_name,
-        real_name=real_name,
-        relation_to_user=relation,
-    )
-    db.add(character)
-    await db.flush()
-    return character
 
 
 async def _classify_risk(*, person_name: str, chapter_excerpt: str) -> dict:
@@ -106,20 +71,17 @@ async def _classify_risk(*, person_name: str, chapter_excerpt: str) -> dict:
     )
 
 
-async def list_characters(db: AsyncSession, autobiography_id: uuid.UUID) -> list[Character]:
-    result = await db.execute(
-        select(Character).where(Character.autobiography_id == autobiography_id).order_by(Character.created_at)
-    )
-    return list(result.scalars().all())
+async def list_characters(gateways: Gateways, autobiography_id: uuid.UUID) -> list[CharacterRecord]:
+    return await gateways.characters.list_by_autobiography(autobiography_id)
 
 
-async def get_character(db: AsyncSession, character_id: uuid.UUID) -> Character | None:
-    return await db.get(Character, character_id)
+async def get_character(gateways: Gateways, character_id: uuid.UUID) -> CharacterRecord | None:
+    return await gateways.characters.get(character_id)
 
 
 async def retain_real_name(
-    db: AsyncSession, character_id: uuid.UUID, *, notice_version: str
-) -> Character:
+    gateways: Gateways, character_id: uuid.UUID, *, notice_version: str
+) -> CharacterRecord:
     """
     실명 유지 opt-in. 전수 가명화 기본값을 뒤집는 유일한 경로이므로, 인물 단위 법적
     책임 고지에 대한 유효한 동의(ConsentRecord)가 선행되어야 한다.
@@ -130,31 +92,20 @@ async def retain_real_name(
     이번 서비스 레이어 작업 범위 밖이다). 따라서 여기서는 "이 사용자가 실명 유지
     고지에 최소 1회 동의했는가"라는 완화된 게이트로 동작한다.
     """
-    character = await db.get(Character, character_id)
+    character = await gateways.characters.get(character_id)
     if character is None:
         raise ValueError(f"Character {character_id} not found")
 
-    autobiography = await db.get(Autobiography, character.autobiography_id)
+    autobiography = await gateways.autobiographies.get_by_id(character.autobiography_id)
     if autobiography is None:
         raise ValueError(f"Autobiography {character.autobiography_id} not found")
 
-    result = await db.execute(
-        select(ConsentRecord)
-        .where(
-            ConsentRecord.user_id == autobiography.user_id,
-            ConsentRecord.consent_type == ConsentType.DISCLOSURE_REALNAME,
-            ConsentRecord.revoked_at.is_(None),
-        )
-        .order_by(ConsentRecord.granted_at.desc())
-    )
-    if result.scalars().first() is None:
+    has_consent = await gateways.consents.has_active(autobiography.user_id, ConsentType.DISCLOSURE_REALNAME)
+    if not has_consent:
         raise PermissionError(
             f"인물 '{character.display_name}' 실명 유지 전 DISCLOSURE_REALNAME 동의가 필요합니다."
         )
 
-    character.real_name_retained = True
-    character.disclosure_notice_version = notice_version
-    character.disclosure_acknowledged_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(character)
+    character = await gateways.characters.retain_real_name(character_id, notice_version=notice_version)
+    await gateways.commit()
     return character

@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.agents import prompts
-from app.clients import document_parse, s3, solar
+from app.clients import document_parse, solar
 from app.clients import embeddings as embeddings_client
-from app.models import AssetType, Event, EventSourceType, LifePeriod, MediaAnalysisTrack, MediaAsset
+from app.gateways.dto import EventCreateData, MediaAssetCreateData, MediaAssetRecord
+from app.gateways.factory import Gateways
+from app.models.enums import AssetType, EventSourceType, LifePeriod, MediaAnalysisTrack
 from app.schemas.media import MediaAssetCreate
 
 # 이 길이 미만이면 "텍스트가 사실상 없는 사진"으로 간주해 PURE_MEMORY 트랙으로 분류한다.
@@ -38,70 +38,73 @@ def map_age_to_life_period(age: int | None) -> LifePeriod | None:
 
 
 async def upload_media_asset(
-    db: AsyncSession,
+    gateways: Gateways,
     payload: MediaAssetCreate,
     *,
     file_bytes: bytes,
     filename: str,
     content_type: str,
-) -> MediaAsset:
+) -> MediaAssetRecord:
     s3_key = f"users/{payload.user_id}/media/{uuid.uuid4()}_{filename}"
-    s3_url = await s3.upload_bytes(s3_key, file_bytes, content_type=content_type)
+    s3_url = await gateways.storage.put_object(s3_key, file_bytes, content_type=content_type)
 
-    asset = MediaAsset(
-        user_id=payload.user_id,
-        session_id=payload.session_id,
-        s3_key=s3_key,
-        s3_url=s3_url,
-        asset_type=payload.asset_type,
-        age_at_time=payload.age_at_time,
-        location_at_time=payload.location_at_time,
-        people_at_time=payload.people_at_time,
-        life_period_mapped=map_age_to_life_period(payload.age_at_time),
-        user_comment=payload.user_comment,
+    asset = await gateways.media_assets.create(
+        MediaAssetCreateData(
+            user_id=payload.user_id,
+            session_id=payload.session_id,
+            s3_key=s3_key,
+            s3_url=s3_url,
+            asset_type=payload.asset_type,
+            age_at_time=payload.age_at_time,
+            location_at_time=payload.location_at_time,
+            people_at_time=payload.people_at_time,
+            life_period_mapped=map_age_to_life_period(payload.age_at_time),
+            user_comment=payload.user_comment,
+        )
     )
-    db.add(asset)
-    await db.flush()
 
     if payload.asset_type == AssetType.IMAGE:
-        await _run_dual_track_analysis(db, asset=asset, file_bytes=file_bytes, filename=filename)
+        await _run_dual_track_analysis(gateways, asset=asset, file_bytes=file_bytes, filename=filename)
 
-    await db.commit()
-    await db.refresh(asset)
+    await gateways.commit()
     return asset
 
 
 async def _run_dual_track_analysis(
-    db: AsyncSession, *, asset: MediaAsset, file_bytes: bytes, filename: str
+    gateways: Gateways, *, asset: MediaAssetRecord, file_bytes: bytes, filename: str
 ) -> None:
     parsed = await document_parse.parse_document_sync(file_bytes, filename, output_formats=["text"])
     extracted_text = (parsed.get("content") or {}).get("text", "").strip()
 
     if len(extracted_text) < _MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK:
-        asset.analysis_track = MediaAnalysisTrack.PURE_MEMORY
+        await gateways.media_assets.update_analysis(
+            asset.id, analysis_track=MediaAnalysisTrack.PURE_MEMORY, pre_extracted_labels=None
+        )
         return
 
-    asset.analysis_track = MediaAnalysisTrack.TEXT_DOCUMENT
-    asset.pre_extracted_labels = parsed
+    await gateways.media_assets.update_analysis(
+        asset.id, analysis_track=MediaAnalysisTrack.TEXT_DOCUMENT, pre_extracted_labels=parsed
+    )
 
     validity = await _check_ocr_validity(extracted_text)
-    event = Event(
-        user_id=asset.user_id,
-        source_type=EventSourceType.DOCUMENT,
-        media_asset_id=asset.id,
-        life_period=asset.life_period_mapped,
-        one_line_summary=extracted_text[:100],
-        prose_paragraph=extracted_text,
-        source_span={"quoted_text": extracted_text[:200]},
-        confidence={"ocr_validity_note": validity["note"]},
-        verified=not validity["suspicious"],
+    verified = not validity["suspicious"]
+    event = await gateways.events.create(
+        EventCreateData(
+            user_id=asset.user_id,
+            source_type=EventSourceType.DOCUMENT,
+            media_asset_id=asset.id,
+            life_period=asset.life_period_mapped,
+            one_line_summary=extracted_text[:100],
+            prose_paragraph=extracted_text,
+            source_span={"quoted_text": extracted_text[:200]},
+            confidence={"ocr_validity_note": validity["note"]},
+            verified=verified,
+        )
     )
-    db.add(event)
-    await db.flush()
 
-    if event.verified:
+    if verified:
         vectors = await embeddings_client.embed_passages([event.prose_paragraph])
-        event.embedding = vectors[0]
+        await gateways.events.bulk_update_embeddings([(event.id, vectors[0])])
 
 
 async def _check_ocr_validity(extracted_text: str) -> dict:
