@@ -12,20 +12,15 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import Autobiography
+from app.gateways.dto import AutobiographyRecord
+from app.gateways.factory import Gateways
 
 
-async def get_or_create_autobiography(db: AsyncSession, user_id: uuid.UUID) -> Autobiography:
-    result = await db.execute(select(Autobiography).where(Autobiography.user_id == user_id))
-    autobiography = result.scalar_one_or_none()
+async def get_or_create_autobiography(gateways: Gateways, user_id: uuid.UUID) -> AutobiographyRecord:
+    autobiography = await gateways.autobiographies.get_by_user_id(user_id)
     if autobiography is not None:
         return autobiography
 
-    autobiography = Autobiography(user_id=user_id)
-    db.add(autobiography)
-    await db.commit()
-    await db.refresh(autobiography)
+    autobiography = await gateways.autobiographies.create(user_id)
+    await gateways.commit()
     return autobiography

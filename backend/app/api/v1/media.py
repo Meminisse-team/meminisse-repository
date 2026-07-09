@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Form, UploadFile, status
 
-from app.api.deps import DbSession
+from app.api.deps import GatewaysDep
 from app.models import AssetType
 from app.schemas.media import MediaAssetCreate, MediaAssetRead
 from app.services import media_service
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/media-assets", tags=["media"])
 
 @router.post("", response_model=MediaAssetRead, status_code=status.HTTP_201_CREATED)
 async def upload_media_asset(
-    db: DbSession,
+    gateways: GatewaysDep,
     file: UploadFile,
     user_id: uuid.UUID = Form(...),
     session_id: uuid.UUID | None = Form(None),
@@ -33,7 +33,7 @@ async def upload_media_asset(
     )
     file_bytes = await file.read()
     asset = await media_service.upload_media_asset(
-        db,
+        gateways,
         payload,
         file_bytes=file_bytes,
         filename=file.filename or "upload",

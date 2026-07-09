@@ -12,39 +12,30 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from app.agents import prompts
 from app.clients import embeddings, solar
-from app.models import Event, EventRelation, EventSourceType, InterviewSession
+from app.gateways.dto import EventCreateData, EventRecord, EventRelationCreateData
+from app.gateways.factory import Gateways
+from app.models.enums import EventSourceType
 
 
-async def process_completed_session(db: AsyncSession, session_id: uuid.UUID) -> list[Event]:
-    result = await db.execute(
-        select(InterviewSession)
-        .where(InterviewSession.id == session_id)
-        .options(selectinload(InterviewSession.chat_logs))
-    )
-    session = result.scalar_one_or_none()
+async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -> list[EventRecord]:
+    session = await gateways.sessions.get_by_id(session_id)
     if session is None:
         raise ValueError(f"InterviewSession {session_id} not found")
 
-    chat_turns = [
-        {"role": log.role.value, "content": log.content} for log in session.chat_logs
-    ]
+    chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
     prose_response = await solar.chat_completion(
         prompts.build_prose_reassembly_prompt(chat_turns=chat_turns),
         reasoning_effort="low",
     )
     session_prose = prose_response.choices[0].message.content or ""
-    session.session_prose = session_prose
+    await gateways.sessions.set_session_prose(session_id, session_prose)
 
     if not _passes_distortion_check(original_turns=chat_turns, reassembled_prose=session_prose):
         # 왜곡 임계값 초과: 자동 재처리 대신 최소 동작으로 세션만 저장하고 이벤트 추출은
         # 보류한다(진짜 NLI 모델이 붙기 전까지는 항상 통과하므로 이 분기는 도달하지 않는다).
-        await db.commit()
+        await gateways.commit()
         return []
 
     extraction = await solar.structured_completion(
@@ -55,11 +46,11 @@ async def process_completed_session(db: AsyncSession, session_id: uuid.UUID) -> 
     )
 
     events = await _persist_events(
-        db, session=session, extracted=extraction.get("events", []),
+        gateways, user_id=session.user_id, session_id=session_id, extracted=extraction.get("events", [])
     )
-    await _persist_relations(db, events=events, relations=extraction.get("relations", []))
+    await _persist_relations(gateways, events=events, relations=extraction.get("relations", []))
 
-    await db.commit()
+    await gateways.commit()
     return events
 
 
@@ -75,15 +66,16 @@ def _passes_distortion_check(*, original_turns: list[dict[str, str]], reassemble
 
 
 async def _persist_events(
-    db: AsyncSession, *, session: InterviewSession, extracted: list[dict]
-) -> list[Event]:
-    events: list[Event] = []
-    for item in extracted:
-        event = Event(
-            user_id=session.user_id,
+    gateways: Gateways, *, user_id: uuid.UUID, session_id: uuid.UUID, extracted: list[dict]
+) -> list[EventRecord]:
+    if not extracted:
+        return []
+
+    create_data = [
+        EventCreateData(
+            user_id=user_id,
             source_type=EventSourceType.SESSION_CHAT,
-            session_id=session.id,
-            life_period=None,  # 생애주기 큐 정렬은 추후 age/occurred_at_label 매핑 서비스에서 채움
+            session_id=session_id,
             occurred_at_label=item.get("occurred_at_label"),
             place=item.get("place"),
             people=item.get("people"),
@@ -98,31 +90,30 @@ async def _persist_events(
                 "occurred_at_label": item.get("occurred_at_confidence"),
             },
             source_span={"quoted_text": item.get("source_quote")},
-            verified=True,  # SESSION_CHAT: 왜곡 탐지 통과 시 즉시 승격 (위 docstring 참조)
+            verified=True,  # SESSION_CHAT: 왜곡 탐지 통과 시 즉시 승격 (모듈 docstring 참조)
         )
-        db.add(event)
-        events.append(event)
-    await db.flush()  # id 확보 (임베딩/관계 저장 전 필요)
+        for item in extracted
+    ]
+    events = await gateways.events.bulk_create(create_data)
 
-    if events:
-        vectors = await embeddings.embed_passages([e.prose_paragraph for e in events])
-        for event, vector in zip(events, vectors):
-            event.embedding = vector
-
+    vectors = await embeddings.embed_passages([e.prose_paragraph for e in events])
+    await gateways.events.bulk_update_embeddings(
+        [(event.id, vector) for event, vector in zip(events, vectors)]
+    )
     return events
 
 
 async def _persist_relations(
-    db: AsyncSession, *, events: list[Event], relations: list[dict]
+    gateways: Gateways, *, events: list[EventRecord], relations: list[dict]
 ) -> None:
-    for relation in relations:
-        from_index, to_index = relation["from_index"], relation["to_index"]
-        if not (0 <= from_index < len(events) and 0 <= to_index < len(events)):
-            continue
-        db.add(
-            EventRelation(
-                from_event_id=events[from_index].id,
-                to_event_id=events[to_index].id,
-                relation_type=relation["relation_type"],
-            )
+    valid_relations = [
+        EventRelationCreateData(
+            from_event_id=events[relation["from_index"]].id,
+            to_event_id=events[relation["to_index"]].id,
+            relation_type=relation["relation_type"],
         )
+        for relation in relations
+        if 0 <= relation["from_index"] < len(events) and 0 <= relation["to_index"] < len(events)
+    ]
+    if valid_relations:
+        await gateways.events.create_relations(valid_relations)
