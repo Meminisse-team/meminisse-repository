@@ -10,7 +10,7 @@ import asyncio
 import uuid
 
 from app.database import AsyncSessionLocal
-from app.services import event_extraction_service
+from app.services import autobiography_service, event_extraction_service
 from app.workers.celery_app import celery_app
 
 
@@ -22,3 +22,36 @@ def process_session_completion(session_id: str) -> None:
 async def _process_session_completion_async(session_id: uuid.UUID) -> None:
     async with AsyncSessionLocal() as db:
         await event_extraction_service.process_completed_session(db, session_id)
+
+
+@celery_app.task(name="consolidate_autobiography")
+def consolidate_autobiography(user_id: str) -> None:
+    """Phase 3(이벤트 병합·중요도 산정·스타일 바이블). 모든 인터뷰 세션 종료 후 트리거."""
+    asyncio.run(_consolidate_autobiography_async(uuid.UUID(user_id)))
+
+
+async def _consolidate_autobiography_async(user_id: uuid.UUID) -> None:
+    async with AsyncSessionLocal() as db:
+        await autobiography_service.consolidate_autobiography(db, user_id)
+
+
+@celery_app.task(name="write_chapter")
+def write_chapter(chapter_draft_id: str) -> None:
+    """Phase 4 챕터 단위 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔)."""
+    asyncio.run(_write_chapter_async(uuid.UUID(chapter_draft_id)))
+
+
+async def _write_chapter_async(chapter_draft_id: uuid.UUID) -> None:
+    async with AsyncSessionLocal() as db:
+        await autobiography_service.write_chapter(db, chapter_draft_id)
+
+
+@celery_app.task(name="finalize_manuscript")
+def finalize_manuscript(autobiography_id: str) -> None:
+    """Phase 4 통일성 윤문 패스. 모든 챕터 집필 완료 후 트리거."""
+    asyncio.run(_finalize_manuscript_async(uuid.UUID(autobiography_id)))
+
+
+async def _finalize_manuscript_async(autobiography_id: uuid.UUID) -> None:
+    async with AsyncSessionLocal() as db:
+        await autobiography_service.finalize_manuscript(db, autobiography_id)

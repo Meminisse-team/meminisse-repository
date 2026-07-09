@@ -1,10 +1,15 @@
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import DbSession
-from app.schemas.autobiography import AutobiographyRead
-from app.services import autobiography_service
+from app.schemas.autobiography import (
+    AutobiographyRead,
+    ChapterDraftRead,
+    TocCandidateSelect,
+)
+from app.schemas.character import CharacterRead, RetainRealNameRequest
+from app.services import autobiography_service, character_service
 
 router = APIRouter(prefix="/autobiographies", tags=["autobiographies"])
 
@@ -13,3 +18,101 @@ router = APIRouter(prefix="/autobiographies", tags=["autobiographies"])
 async def get_autobiography(user_id: uuid.UUID, db: DbSession) -> AutobiographyRead:
     autobiography = await autobiography_service.get_or_create_autobiography(db, user_id)
     return AutobiographyRead.model_validate(autobiography)
+
+
+@router.post("/{user_id}/consolidate", status_code=status.HTTP_202_ACCEPTED)
+async def consolidate(user_id: uuid.UUID) -> dict:
+    """
+    Phase 3(이벤트 병합·중요도 산정·스타일 바이블) 트리거. 여러 차례의 LLM 호출이
+    이어지는 무거운 연산이라 Celery 워커에 위임하고 즉시 202를 반환한다. 완료 여부는
+    GET /{user_id}의 status 필드가 CONSOLIDATED로 바뀌는 것으로 폴링한다.
+    """
+    from app.workers.tasks import consolidate_autobiography as consolidate_task
+
+    consolidate_task.delay(str(user_id))
+    return {"detail": "Phase 3 consolidation queued"}
+
+
+@router.post("/{autobiography_id}/toc/generate", response_model=AutobiographyRead)
+async def generate_toc(autobiography_id: uuid.UUID, db: DbSession) -> AutobiographyRead:
+    try:
+        autobiography = await autobiography_service.generate_toc_candidates(db, autobiography_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return AutobiographyRead.model_validate(autobiography)
+
+
+@router.post("/{autobiography_id}/toc/select", response_model=AutobiographyRead)
+async def select_toc(
+    autobiography_id: uuid.UUID, payload: TocCandidateSelect, db: DbSession
+) -> AutobiographyRead:
+    try:
+        autobiography = await autobiography_service.select_toc_candidate(
+            db, autobiography_id, payload.candidate_index
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return AutobiographyRead.model_validate(autobiography)
+
+
+@router.get("/{autobiography_id}/chapters", response_model=list[ChapterDraftRead])
+async def list_chapters(autobiography_id: uuid.UUID, db: DbSession) -> list[ChapterDraftRead]:
+    chapters = await autobiography_service.list_chapter_drafts(db, autobiography_id)
+    return [ChapterDraftRead.model_validate(chapter) for chapter in chapters]
+
+
+@router.post(
+    "/{autobiography_id}/chapters/{chapter_draft_id}/write", status_code=status.HTTP_202_ACCEPTED
+)
+async def write_chapter(
+    autobiography_id: uuid.UUID, chapter_draft_id: uuid.UUID, db: DbSession
+) -> dict:
+    """챕터 단위 하향식 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔) 트리거."""
+    chapter = await autobiography_service.get_chapter_draft(db, chapter_draft_id)
+    if chapter is None or chapter.autobiography_id != autobiography_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 챕터를 찾을 수 없습니다.")
+
+    from app.workers.tasks import write_chapter as write_chapter_task
+
+    write_chapter_task.delay(str(chapter_draft_id))
+    return {"detail": "Chapter writing queued"}
+
+
+@router.post("/{autobiography_id}/finalize", status_code=status.HTTP_202_ACCEPTED)
+async def finalize(autobiography_id: uuid.UUID) -> dict:
+    """전 챕터 집필 완료 후 통일성 윤문 패스 트리거."""
+    from app.workers.tasks import finalize_manuscript as finalize_task
+
+    finalize_task.delay(str(autobiography_id))
+    return {"detail": "Manuscript finalization queued"}
+
+
+@router.get("/{autobiography_id}/characters", response_model=list[CharacterRead])
+async def list_characters(autobiography_id: uuid.UUID, db: DbSession) -> list[CharacterRead]:
+    characters = await character_service.list_characters(db, autobiography_id)
+    return [CharacterRead.model_validate(character) for character in characters]
+
+
+@router.post(
+    "/{autobiography_id}/characters/{character_id}/retain-real-name", response_model=CharacterRead
+)
+async def retain_real_name(
+    autobiography_id: uuid.UUID,
+    character_id: uuid.UUID,
+    payload: RetainRealNameRequest,
+    db: DbSession,
+) -> CharacterRead:
+    """
+    전수 가명화 기본값(opt-out)을 뒤집는 유일한 경로. 인물 단위 법적 책임 고지에
+    대한 유효한 ConsentRecord(DISCLOSURE_REALNAME)가 없으면 409로 거부된다.
+    """
+    character = await character_service.get_character(db, character_id)
+    if character is None or character.autobiography_id != autobiography_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 인물을 찾을 수 없습니다.")
+    try:
+        character = await character_service.retain_real_name(
+            db, character_id, notice_version=payload.notice_version
+        )
+    except PermissionError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return CharacterRead.model_validate(character)

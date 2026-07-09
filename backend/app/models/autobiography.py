@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -40,7 +40,15 @@ class Autobiography(Base):
     #   "selected_candidate_index": null
     # }
     toc_data = Column(JSONB, nullable=True)
+    # Phase 3 산출물: 화자 문체·상용 표현·가치관 키워드·전체 감정 아크를 담은 단일 문서.
+    # 이후 모든 집필 프롬프트에 전역 상수로 주입되어 어조·생애 철학의 일관성을 보장한다.
+    style_bible = Column(JSONB, nullable=True)
+    # Phase 4 1단계 산출물: 책 전체 시놉시스. 챕터 순차 생성이 아닌 하향식 집필의 설계도.
+    book_synopsis = Column(Text, nullable=True)
     final_content = Column(Text, nullable=True)
+    # 최종 자서전 확정 시점에 설정. 이 날짜 이후 Layer 0 원문 로그(chat_logs 등)는
+    # 사용자 옵트인이 없는 한 자동 삭제 대상이 된다(개인정보보호법상 최소보유 원칙, 기획안 5절).
+    raw_log_retention_until = Column(Date, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -52,6 +60,9 @@ class Autobiography(Base):
         back_populates="autobiography",
         order_by="ChapterDraft.chapter_index",
         cascade="all, delete-orphan",
+    )
+    characters = relationship(
+        "Character", back_populates="autobiography", cascade="all, delete-orphan"
     )
 
 
@@ -74,10 +85,18 @@ class ChapterDraft(Base):
     )
     chapter_index = Column(Integer, nullable=False)
     title = Column(String(512), nullable=True)
+    # Phase 4 2단계 산출물: 이 챕터의 시놉시스. 책 전체 시놉시스 아래 하향식으로 생성된다.
+    chapter_synopsis = Column(Text, nullable=True)
     content = Column(Text, nullable=True)
     # 이 챕터 집필에 소환된 Event ID 목록 (M:N, 단일 FK 불가). RAG 검색 결과 + 팩트체크 시
     # 대조 대상이 되는 원천 이벤트 레코드를 그대로 추적한다.
     source_event_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list, server_default="{}")
+    # 원문 대조 팩트체크(재추출-정규화-대조) 결과. 라벨 값과 불일치하는 팩트만 플래그되어
+    # 최종 검토 화면에 표시된다. 예: {"flags": [{"claim": "...", "expected": "...", "found": "..."}]}
+    factcheck_report = Column(JSONB, nullable=True)
+    # 근거 검증(Groundedness Check) 결과. 문장-출처 이벤트 문단 쌍의 NLI 함의 판정.
+    # 예: {"flags": [{"sentence": "...", "reason": "not_entailed_by_sources"}]}
+    groundedness_report = Column(JSONB, nullable=True)
     status = Column(
         Enum(DraftStatus, name="draftstatus"),
         nullable=False,

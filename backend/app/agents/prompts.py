@@ -19,7 +19,8 @@ Meminisse 에이전트의 모든 시스템/유저 프롬프트를 한 곳에서 
   6. 세션 종료 후처리: 산문 재조립 / 이벤트 분할·라벨 추출 (Structured Outputs)
   7. Document Parse 1차 타당성 검증 + OCR 확인 질문
   8. Phase 3: 스타일 바이블 / 이벤트 병합 판정
-  9. Phase 4: 동적 목차 / 하향식 집필 / 통일성 윤문 / 팩트체크 / 제3자 위해성 분류
+  9. Phase 4: 동적 목차 / 하향식 집필 / 통일성 윤문 / 팩트체크 / 제3자 위해성 분류 / NER 스캔
+  10. Phase 3 중요도 스코어링: 생애 이정표 카테고리 매칭(결정론적 키워드 분류)
 """
 
 from __future__ import annotations
@@ -577,7 +578,11 @@ THIRD_PARTY_RISK_SYSTEM_PROMPT = """\
 아래 챕터 본문에서 특정 인물이 등장하는 문단의 서술 성격을 분류하세요
 (범죄/비위 언급, 부정적 인물 평가, 갈등·분쟁 당사자 여부 등). 이 분류는 실명
 유지 여부를 결정하지 않으며, 실명 유지 시 표시할 고지문의 강도만 조정하는
-보조 판단입니다.
+보조 판단입니다. risk_classification은 다음 중 하나여야 합니다:
+- "none": 위해성 없음
+- "negative_portrayal": 부정적 인물 평가
+- "conflict": 갈등·분쟁 당사자
+- "crime_mention": 범죄·비위 언급 (가장 높은 고지 강도)
 """
 
 THIRD_PARTY_RISK_SCHEMA: dict[str, Any] = {
@@ -585,9 +590,13 @@ THIRD_PARTY_RISK_SCHEMA: dict[str, Any] = {
     "properties": {
         "person_name": {"type": "string"},
         "risk_detected": {"type": "boolean"},
+        "risk_classification": {
+            "type": "string",
+            "enum": ["none", "negative_portrayal", "conflict", "crime_mention"],
+        },
         "risk_reasons": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["person_name", "risk_detected", "risk_reasons"],
+    "required": ["person_name", "risk_detected", "risk_classification", "risk_reasons"],
     "additionalProperties": False,
 }
 
@@ -599,3 +608,71 @@ def build_third_party_risk_prompt(*, person_name: str, chapter_excerpts: list[st
         {"role": "system", "content": THIRD_PARTY_RISK_SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
+
+
+# 등장인물 검토(기획안 Phase 4)의 선행 단계: 챕터 본문에서 구술자 본인을 제외한 실명
+# 인물 후보를 스캔한다. 별도 로컬 NER 모델이 아직 연동되지 않아 Solar Structured
+# Outputs로 대체한다 — 정확도가 낮을 수 있으므로 최종 검토 화면에서 사용자가 누락된
+# 인물을 직접 추가 지정할 수 있어야 한다(기획안 Phase 4: "탐지 재현율의 한계를 사람의
+# 확인으로 보완").
+NER_EXTRACTION_SYSTEM_PROMPT = """\
+아래 챕터 본문에서 구술자 본인을 제외한 모든 실명 등장인물을 찾아내세요.
+같은 인물을 가리키는 다른 표현(별칭·호칭)은 하나의 항목으로 묶어 대표 이름을
+고르세요. 구술자 본인, 지명, 단체명은 제외하세요.
+"""
+
+NER_EXTRACTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "people": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "relation_to_narrator": {
+                        **_NULLABLE_STRING,
+                        "description": "예: '어머니의 친구', '첫째 형'. 불명확하면 null.",
+                    },
+                },
+                "required": ["name", "relation_to_narrator"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["people"],
+    "additionalProperties": False,
+}
+
+
+def build_ner_extraction_prompt(*, chapter_content: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": NER_EXTRACTION_SYSTEM_PROMPT},
+        {"role": "user", "content": chapter_content},
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# 10. Phase 3 중요도 스코어링: 생애 이정표 카테고리 매칭 (결정론적 키워드 매칭)  #
+#     기획안 4절 CRISIS_KEYWORDS와 동일한 전략 — LLM 호출 없이 저비용 1차       #
+#     스크리닝으로 사용하며, 오분류 시에도 importance_score 산정에만 영향을 줄  #
+#     뿐 데이터 무결성을 해치지 않는 신호이므로 정밀도보다 비용 효율을 우선한다. #
+# --------------------------------------------------------------------------- #
+
+LIFE_MILESTONE_KEYWORDS: dict[str, list[str]] = {
+    "marriage": ["결혼", "혼인", "장가", "시집"],
+    "childbirth": ["출산", "태어났", "낳았", "임신"],
+    "career_change": ["이직", "취직", "퇴사", "창업", "입사"],
+    "illness": ["투병", "수술", "입원", "발병", "진단받"],
+    "bereavement": ["돌아가", "장례", "사별", "부고"],
+    "relocation": ["이사", "이주", "이민"],
+    "retirement": ["은퇴", "정년"],
+}
+
+
+def classify_life_milestone_category(text: str) -> str | None:
+    """일치하는 첫 카테고리를 반환(등장 순서 기준). 일치 없으면 None."""
+    for category, keywords in LIFE_MILESTONE_KEYWORDS.items():
+        if any(keyword in text for keyword in keywords):
+            return category
+    return None
