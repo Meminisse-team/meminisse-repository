@@ -1,13 +1,13 @@
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, SmallInteger, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Numeric, SmallInteger, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.models.base import EMBEDDING_DIM, Base
-from app.models.enums import EventRelationType, EventSourceType, LifePeriod
+from app.models.enums import EventRelationType, EventSourceType, LifeMilestoneCategory, LifePeriod
 
 
 class Event(Base):
@@ -67,6 +67,17 @@ class Event(Base):
     # Layer 1 검증 게이트. false인 동안 embedding은 null이며 RAG/집필에서 제외된다.
     verified = Column(Boolean, nullable=False, default=False, server_default="false")
     is_must_include = Column(Boolean, nullable=False, default=False, server_default="false")
+
+    # Phase 3 중요도 스코어링(기획안: "계산 가능한 신호의 가중합", 사용자 내 z-score 정규화 적용).
+    # 목차 후보 생성 시 정렬 키로 사용. precision=9: '꼭 넣기' 고정 가산점(1000)이 다른 신호를
+    # 압도해야 하므로(서비스 레이어 MUST_INCLUDE_BONUS) Numeric(6,3)로는 자릿수가 부족하다.
+    importance_score = Column(Numeric(9, 3), nullable=True)
+    # 스코어 산출 근거 스냅샷 — "왜 이 사건이 목차에 들어갔는가"를 재현 가능하게 설명하기 위함.
+    # 예: {"raw_length": 420, "emotion_intensity": 4, "mention_count": 2, "z_score": 1.8}
+    importance_signals = Column(JSONB, nullable=True)
+    life_milestone_category = Column(
+        Enum(LifeMilestoneCategory, name="lifemilestonecategory"), nullable=True
+    )
 
     # verified=true로 승격된 이후에만 채워짐 (Upstage embedding-passage).
     embedding = Column(Vector(EMBEDDING_DIM), nullable=True)

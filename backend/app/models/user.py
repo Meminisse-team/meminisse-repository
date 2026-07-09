@@ -41,3 +41,6 @@ class User(Base):
     autobiography = relationship(
         "Autobiography", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    consent_records = relationship(
+        "ConsentRecord", back_populates="user", cascade="all, delete-orphan"
+    )

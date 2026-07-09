@@ -70,3 +70,37 @@ class EventRelationType(str, PyEnum):
     OVERCOME = "overcome"        # from_event가 to_event를 극복함
     FOLLOWED_BY = "followed_by"  # 시간상 연속
     RELATED = "related"          # 기타 연관
+
+
+class LifeMilestoneCategory(str, PyEnum):
+    """중요도 스코어링의 생애 이정표 카테고리 매칭 신호(기획안 Phase 3, 회상요법 문헌 기반 범주)."""
+    MARRIAGE = "marriage"
+    CHILDBIRTH = "childbirth"
+    CAREER_CHANGE = "career_change"
+    ILLNESS = "illness"
+    BEREAVEMENT = "bereavement"
+    RELOCATION = "relocation"
+    RETIREMENT = "retirement"
+    OTHER = "other"
+
+
+class RiskClassification(str, PyEnum):
+    """등장인물 서술 성격 분류(기획안 Phase 4/6절). 가명 적용 여부의 게이트가 아니라
+    실명 유지 시도 시 고지 강도만 조정하는 보조 신호."""
+    NONE = "none"
+    NEGATIVE_PORTRAYAL = "negative_portrayal"
+    CONFLICT = "conflict"
+    CRIME_MENTION = "crime_mention"
+
+
+class ConsentType(str, PyEnum):
+    """동의 기록 종류(기획안 5절 동의 주체 분리, 6절 실명 유지 고지)."""
+    DATA_COLLECTION = "data_collection"        # 온보딩 첫 세션: 정보주체 본인의 데이터 수집·이용 동의
+    DISCLOSURE_REALNAME = "disclosure_realname"  # 인물 단위 실명 유지 법적 책임 고지 동의
+    RETENTION_EXTENSION = "retention_extension"  # 원문 로그 보관 기간 연장 옵트인
+
+
+class ConsentGrantedBy(str, PyEnum):
+    """동의 행위자. 자녀가 온보딩을 세팅하더라도 동의 자체는 정보주체 본인에게 받아야 한다."""
+    SELF = "self"          # 정보주체(부모) 본인
+    GUARDIAN = "guardian"  # 보호자/자녀 대리
