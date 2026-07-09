@@ -1,7 +1,9 @@
 """
 Celery 태스크는 동기 함수여야 하므로, 각 태스크는 asyncio.run()으로 서비스 레이어의
-비동기 함수를 감싸 실행한다. FastAPI 요청 경로의 AsyncSession과는 별개로, 태스크마다
-독립된 AsyncSessionLocal 컨텍스트를 새로 연다(워커 프로세스는 요청-응답 생명주기가 없다).
+비동기 함수를 감싸 실행한다. FastAPI 요청 경로와는 별개로, 태스크마다
+app.gateways.factory.gateways_context()로 독립된 게이트웨이 묶음을 새로 연다
+(워커 프로세스는 요청-응답 생명주기가 없다). GATEWAY_BACKEND 설정에 따라 이 컨텍스트가
+Mock/Postgres 어느 쪽을 열지 자동으로 결정하므로, 이 파일은 백엔드가 무엇인지 몰라도 된다.
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from app.database import AsyncSessionLocal
+from app.gateways.factory import gateways_context
 from app.services import autobiography_service, event_extraction_service
 from app.workers.celery_app import celery_app
 
@@ -20,8 +22,8 @@ def process_session_completion(session_id: str) -> None:
 
 
 async def _process_session_completion_async(session_id: uuid.UUID) -> None:
-    async with AsyncSessionLocal() as db:
-        await event_extraction_service.process_completed_session(db, session_id)
+    async with gateways_context() as gateways:
+        await event_extraction_service.process_completed_session(gateways, session_id)
 
 
 @celery_app.task(name="consolidate_autobiography")
@@ -31,8 +33,8 @@ def consolidate_autobiography(user_id: str) -> None:
 
 
 async def _consolidate_autobiography_async(user_id: uuid.UUID) -> None:
-    async with AsyncSessionLocal() as db:
-        await autobiography_service.consolidate_autobiography(db, user_id)
+    async with gateways_context() as gateways:
+        await autobiography_service.consolidate_autobiography(gateways, user_id)
 
 
 @celery_app.task(name="write_chapter")
@@ -42,8 +44,8 @@ def write_chapter(chapter_draft_id: str) -> None:
 
 
 async def _write_chapter_async(chapter_draft_id: uuid.UUID) -> None:
-    async with AsyncSessionLocal() as db:
-        await autobiography_service.write_chapter(db, chapter_draft_id)
+    async with gateways_context() as gateways:
+        await autobiography_service.write_chapter(gateways, chapter_draft_id)
 
 
 @celery_app.task(name="finalize_manuscript")
@@ -53,5 +55,5 @@ def finalize_manuscript(autobiography_id: str) -> None:
 
 
 async def _finalize_manuscript_async(autobiography_id: uuid.UUID) -> None:
-    async with AsyncSessionLocal() as db:
-        await autobiography_service.finalize_manuscript(db, autobiography_id)
+    async with gateways_context() as gateways:
+        await autobiography_service.finalize_manuscript(gateways, autobiography_id)

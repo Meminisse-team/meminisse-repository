@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.deps import DbSession
+from app.api.deps import GatewaysDep
 from app.schemas.autobiography import (
     AutobiographyRead,
     ChapterDraftRead,
@@ -15,8 +15,8 @@ router = APIRouter(prefix="/autobiographies", tags=["autobiographies"])
 
 
 @router.get("/{user_id}", response_model=AutobiographyRead)
-async def get_autobiography(user_id: uuid.UUID, db: DbSession) -> AutobiographyRead:
-    autobiography = await autobiography_service.get_or_create_autobiography(db, user_id)
+async def get_autobiography(user_id: uuid.UUID, gateways: GatewaysDep) -> AutobiographyRead:
+    autobiography = await autobiography_service.get_or_create_autobiography(gateways, user_id)
     return AutobiographyRead.model_validate(autobiography)
 
 
@@ -34,9 +34,9 @@ async def consolidate(user_id: uuid.UUID) -> dict:
 
 
 @router.post("/{autobiography_id}/toc/generate", response_model=AutobiographyRead)
-async def generate_toc(autobiography_id: uuid.UUID, db: DbSession) -> AutobiographyRead:
+async def generate_toc(autobiography_id: uuid.UUID, gateways: GatewaysDep) -> AutobiographyRead:
     try:
-        autobiography = await autobiography_service.generate_toc_candidates(db, autobiography_id)
+        autobiography = await autobiography_service.generate_toc_candidates(gateways, autobiography_id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return AutobiographyRead.model_validate(autobiography)
@@ -44,11 +44,11 @@ async def generate_toc(autobiography_id: uuid.UUID, db: DbSession) -> Autobiogra
 
 @router.post("/{autobiography_id}/toc/select", response_model=AutobiographyRead)
 async def select_toc(
-    autobiography_id: uuid.UUID, payload: TocCandidateSelect, db: DbSession
+    autobiography_id: uuid.UUID, payload: TocCandidateSelect, gateways: GatewaysDep
 ) -> AutobiographyRead:
     try:
         autobiography = await autobiography_service.select_toc_candidate(
-            db, autobiography_id, payload.candidate_index
+            gateways, autobiography_id, payload.candidate_index
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
@@ -56,8 +56,8 @@ async def select_toc(
 
 
 @router.get("/{autobiography_id}/chapters", response_model=list[ChapterDraftRead])
-async def list_chapters(autobiography_id: uuid.UUID, db: DbSession) -> list[ChapterDraftRead]:
-    chapters = await autobiography_service.list_chapter_drafts(db, autobiography_id)
+async def list_chapters(autobiography_id: uuid.UUID, gateways: GatewaysDep) -> list[ChapterDraftRead]:
+    chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography_id)
     return [ChapterDraftRead.model_validate(chapter) for chapter in chapters]
 
 
@@ -65,10 +65,10 @@ async def list_chapters(autobiography_id: uuid.UUID, db: DbSession) -> list[Chap
     "/{autobiography_id}/chapters/{chapter_draft_id}/write", status_code=status.HTTP_202_ACCEPTED
 )
 async def write_chapter(
-    autobiography_id: uuid.UUID, chapter_draft_id: uuid.UUID, db: DbSession
+    autobiography_id: uuid.UUID, chapter_draft_id: uuid.UUID, gateways: GatewaysDep
 ) -> dict:
     """챕터 단위 하향식 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔) 트리거."""
-    chapter = await autobiography_service.get_chapter_draft(db, chapter_draft_id)
+    chapter = await autobiography_service.get_chapter_draft(gateways, chapter_draft_id)
     if chapter is None or chapter.autobiography_id != autobiography_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 챕터를 찾을 수 없습니다.")
 
@@ -88,8 +88,8 @@ async def finalize(autobiography_id: uuid.UUID) -> dict:
 
 
 @router.get("/{autobiography_id}/characters", response_model=list[CharacterRead])
-async def list_characters(autobiography_id: uuid.UUID, db: DbSession) -> list[CharacterRead]:
-    characters = await character_service.list_characters(db, autobiography_id)
+async def list_characters(autobiography_id: uuid.UUID, gateways: GatewaysDep) -> list[CharacterRead]:
+    characters = await character_service.list_characters(gateways, autobiography_id)
     return [CharacterRead.model_validate(character) for character in characters]
 
 
@@ -100,18 +100,18 @@ async def retain_real_name(
     autobiography_id: uuid.UUID,
     character_id: uuid.UUID,
     payload: RetainRealNameRequest,
-    db: DbSession,
+    gateways: GatewaysDep,
 ) -> CharacterRead:
     """
     전수 가명화 기본값(opt-out)을 뒤집는 유일한 경로. 인물 단위 법적 책임 고지에
     대한 유효한 ConsentRecord(DISCLOSURE_REALNAME)가 없으면 409로 거부된다.
     """
-    character = await character_service.get_character(db, character_id)
+    character = await character_service.get_character(gateways, character_id)
     if character is None or character.autobiography_id != autobiography_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 인물을 찾을 수 없습니다.")
     try:
         character = await character_service.retain_real_name(
-            db, character_id, notice_version=payload.notice_version
+            gateways, character_id, notice_version=payload.notice_version
         )
     except PermissionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

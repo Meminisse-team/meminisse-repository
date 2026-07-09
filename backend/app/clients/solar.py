@@ -6,11 +6,16 @@ Solar LLM (solar-pro3) 채팅 완성 클라이언트.
 Solar를 호출한다. 프롬프트 자체(페르소나/슬롯/세이프가드 문구)는 app/agents/prompts.py에서
 관리하고, 이 모듈은 순수하게 "메시지 배열을 넣으면 응답을 받는" 얇은 API 래퍼로 유지한다.
 
-NOTE(검증 필요): upstage_solar_api_docs.txt 내에서 response_format(Structured Outputs)
-지원 모델 범위가 문서 상단 가이드("solar-pro3 포함 전 모델 지원")와 하단 공식 스펙
-("solar-pro-2 전용")으로 서로 모순된다. 이벤트 추출 파이프라인 전체가 Structured
-Outputs에 의존하므로, 실제 UPSTAGE_API_KEY로 solar-pro3 + response_format 조합을 1회
-테스트해 실패하면 STRUCTURED_OUTPUT_MODEL을 solar-pro2로 낮추는 폴백이 필요하다.
+NOTE(문서 자체 모순, 대안 구현함): upstage_solar_api_docs.txt 안에서 response_format
+(Structured Outputs) 지원 모델 범위가 세 군데에서 서로 다르게 적혀 있다 —
+(1) 파라미터 표: "all solar models (solar-pro3 포함)"
+(2) Structured Outputs 예제 코드: model="solar-pro3"로 실제 동작하는 예시 제시
+(3) response_format 필드 상세 설명: "only compatible with the solar-pro-2 model"
+이벤트 추출 등 이 프로젝트의 핵심 파이프라인이 Structured Outputs에 의존하므로 실패를
+문서 검증 시점까지 미룰 수 없어, structured_completion()에 자동 폴백을 구현했다: 우선
+solar-pro3로 시도하고, API가 response_format 비호환 계열의 400 에러를 반환하면
+solar-pro2로 1회 재시도한다. 실 UPSTAGE_API_KEY로 확인되면 이 폴백 분기가 영구히 타지
+않는 죽은 코드가 될 수도 있으니, 검증 후 필요 없다고 판단되면 제거해도 된다.
 """
 
 from __future__ import annotations
@@ -18,11 +23,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai import APIStatusError
 from openai.types.chat import ChatCompletion
 
 from app.clients.base import get_upstage_client
 
 DEFAULT_MODEL = "solar-pro3"
+
+# structured_completion()의 response_format 비호환 폴백 대상. 위 NOTE 참조.
+STRUCTURED_OUTPUT_FALLBACK_MODEL = "solar-pro2"
 
 
 async def chat_completion(
@@ -68,18 +77,40 @@ async def structured_completion(
 
     schema는 기획안 3절 요구대로 "단일 라벨 딕셔너리"가 아닌 호출부에서 array-of-events
     형태로 구성해 전달하는 것을 전제로 한다(예: agents/prompts.py의 EVENT_EXTRACTION_SCHEMA).
+
+    model이 solar-pro3(기본값)인데 API가 response_format을 이유로 400을 반환하면
+    solar-pro2로 1회 폴백한다 — 모듈 상단 NOTE(문서 자체 모순) 참조.
     """
-    response = await chat_completion(
-        messages,
-        model=model,
-        reasoning_effort=reasoning_effort,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {"name": schema_name, "strict": True, "schema": json_schema},
-        },
-        prompt_cache_key=prompt_cache_key,
-    )
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": schema_name, "strict": True, "schema": json_schema},
+    }
+    try:
+        response = await chat_completion(
+            messages,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            response_format=response_format,
+            prompt_cache_key=prompt_cache_key,
+        )
+    except APIStatusError as exc:
+        if model != DEFAULT_MODEL or not _is_response_format_incompatibility(exc):
+            raise
+        response = await chat_completion(
+            messages,
+            model=STRUCTURED_OUTPUT_FALLBACK_MODEL,
+            reasoning_effort=reasoning_effort,
+            response_format=response_format,
+            prompt_cache_key=prompt_cache_key,
+        )
     content = response.choices[0].message.content
     if content is None:
         raise ValueError(f"Solar structured output '{schema_name}' returned empty content")
     return json.loads(content)
+
+
+def _is_response_format_incompatibility(exc: APIStatusError) -> bool:
+    if exc.status_code != 400:
+        return False
+    message = str(exc).lower()
+    return "response_format" in message or "json_schema" in message

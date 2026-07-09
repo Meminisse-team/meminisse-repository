@@ -1,5 +1,3 @@
-from collections.abc import AsyncGenerator
-
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -15,6 +13,8 @@ engine = create_async_engine(
     connect_args={"statement_cache_size": 0},
 )
 
+# 세션 생명주기(획득 → try/rollback on error)는 app/gateways/factory.py의
+# gateways_context()가 관리한다. 여기서는 엔진/세션팩토리만 제공한다.
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -22,12 +22,3 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
-
-
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
