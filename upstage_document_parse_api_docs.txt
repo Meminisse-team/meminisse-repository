@@ -1,0 +1,492 @@
+```
+## Document Parse API
+
+Convert documents to structured HTML or Markdown with layout detection.
+
+### Endpoint (Synchronous)
+
+```
+POST https://api.upstage.ai/v1/document-digitization
+```
+
+### Endpoint (Asynchronous - for large documents)
+
+```
+POST https://api.upstage.ai/v1/document-digitization/async
+GET https://api.upstage.ai/v1/document-digitization/requests/{request_id}
+GET https://api.upstage.ai/v1/document-digitization/requests
+```
+
+### Limitations
+
+| API Type     | Max Pages | Notes                                 |
+| ------------ | --------- | ------------------------------------- |
+| Synchronous  | 100       | First 100 pages processed if exceeded |
+| Asynchronous | 1,000     | Batched in 10-page chunks             |
+
+### Request Body (multipart/form-data)
+
+| Parameter                | Type    | Required | Description                                                                                                                                                    |
+| ------------------------ | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`                  | string  | Yes      | Use `document-parse` or `document-parse-nightly`                                                                                                               |
+| `document`               | file    | Yes      | Document file to process                                                                                                                                       |
+| `mode`                   | string  | No       | `standard`, `enhanced`, or `auto`. Default: `standard`. Note: `enhanced` and `auto` modes require `document-parse-260128` or later. See Mode Options below     |
+| `output_formats`         | string  | No       | JSON array: `["text"]`, `["html"]`, `["markdown"]`, or any combination. Default: `["html"]`                                                                    |
+| `ocr`                    | string  | No       | `auto`: OCR only for images; digital-born PDFs use embedded text. `force`: Convert all files to images and always perform OCR. Default: `auto`                 |
+| `coordinates`            | boolean | No       | Return bounding boxes. Default: true                                                                                                                           |
+| `chart_recognition`      | boolean | No       | Convert charts to tables. Default: true. Note: Always enabled when `mode=enhanced` (parameter ignored)                                                         |
+| `merge_multipage_tables` | boolean | No       | Merge tables across pages. Default: false                                                                                                                      |
+| `base64_encoding`        | string  | No       | Categories to return as base64 images. Any layout category allowed: `["table"]`, `["figure"]`, `["equation"]`, etc.                                            |
+| `words`                  | boolean | No       | Include word-level OCR results (recognized words with bounding boxes) in the response, in addition to layout elements. Increases response size. Default: false |
+
+### Example Request
+
+```bash
+curl -X POST https://api.upstage.ai/v1/document-digitization \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "model=document-parse" \
+  -F "document=@/path/to/document.pdf" \
+  -F 'output_formats=["html", "markdown"]'
+```
+
+### Async API Example
+
+```python
+import requests
+import time
+
+api_key = "YOUR_API_KEY"
+
+# Step 1: Submit async request
+with open("large_document.pdf", "rb") as f:
+    response = requests.post(
+        "https://api.upstage.ai/v1/document-digitization/async",
+        headers={"Authorization": f"Bearer {api_key}"},
+        files={"document": f},
+        data={"model": "document-parse"}
+    )
+request_id = response.json()["request_id"]
+
+# Step 2: Poll for results
+while True:
+    status = requests.get(
+        f"https://api.upstage.ai/v1/document-digitization/requests/{request_id}",
+        headers={"Authorization": f"Bearer {api_key}"}
+    ).json()
+
+    if status["status"] == "completed":
+        # Download results from batch download_urls
+        for batch in status["batches"]:
+            if batch["status"] == "completed":
+                result = requests.get(batch["download_url"]).json()
+                print(f"Pages {batch['start_page']}-{batch['end_page']}: processed")
+        break
+    elif status["status"] == "failed":
+        raise Exception(status["failure_message"])
+
+    time.sleep(5)
+```
+
+### Async Status Response
+
+```json
+{
+  "id": "e7b1b3b0-1b3b-4b3b-8b3b-1b3b3b3b3b3b",
+  "status": "completed",
+  "model": "document-parse",
+  "failure_message": "",
+  "total_pages": 28,
+  "completed_pages": 28,
+  "batches": [
+    {
+      "id": 0,
+      "model": "document-parse-260128",
+      "status": "completed",
+      "failure_message": "",
+      "download_url": "https://...",
+      "start_page": 1,
+      "end_page": 10,
+      "requested_at": "2024-07-01T14:47:01Z",
+      "updated_at": "2024-07-01T14:47:15Z"
+    },
+    {
+      "id": 1,
+      "model": "document-parse-260128",
+      "status": "completed",
+      "failure_message": "",
+      "download_url": "https://...",
+      "start_page": 11,
+      "end_page": 20,
+      "requested_at": "2024-07-01T14:47:01Z",
+      "updated_at": "2024-07-01T14:47:13Z"
+    }
+  ],
+  "requested_at": "2024-07-01T14:47:01Z",
+  "completed_at": "2024-07-01T14:47:43Z"
+}
+```
+
+**Status Values:** `submitted` → `started` → `completed` | `failed`
+
+**Batch Status Values:** `scheduled` → `started` → `completed` | `failed` | `retrying`
+
+### Async API Important Notes
+
+- **Result format:** Each `download_url` returns the parsed result for that batch's pages in the **same JSON format as the synchronous response** (`elements`, `content`, `coordinates`, `usage`). Concatenate batches in `id` order to assemble the full document.
+- **download_url expiration:** Each `download_url` is valid for **15 minutes** after issuance. Re-fetch the request status to get a fresh URL.
+- **Result storage:** Results are stored for **30 days** after completion.
+- **Queue behavior:** Async API uses queue-based batch processing. During peak hours, jobs may wait up to **72 hours** before processing starts. Status `scheduled` or `started` during this time is normal.
+
+### Async Request History Response
+
+`GET /v1/document-digitization/requests` returns a list of all async requests:
+
+```json
+{
+  "requests": [
+    {
+      "id": "e7b1b3b0-1b3b-4b3b-8b3b-1b3b3b3b3b3b",
+      "status": "completed",
+      "model": "document-parse",
+      "requested_at": "2024-07-01T14:47:01Z",
+      "completed_at": "2024-07-01T14:47:43Z"
+    },
+    {
+      "id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "status": "started",
+      "model": "document-parse",
+      "requested_at": "2024-07-01T15:00:00Z",
+      "completed_at": null
+    }
+  ]
+}
+```
+
+### Example Response (Sync)
+
+```json
+{
+  "apiVersion": "1.1",
+  "model": "document-parse-260128",
+  "elements": [
+    {
+      "id": 1,
+      "category": "paragraph",
+      "page": 1,
+      "content": {
+        "text": "This is a paragraph.",
+        "html": "<p>This is a paragraph.</p>",
+        "markdown": "This is a paragraph."
+      },
+      "coordinates": [
+        {"x": 0.125, "y": 0.225},
+        {"x": 0.425, "y": 0.225},
+        {"x": 0.425, "y": 0.325},
+        {"x": 0.125, "y": 0.325}
+      ]
+    }
+  ],
+  "content": {
+    "text": "Full document text...",
+    "html": "<html>...</html>",
+    "markdown": "..."
+  },
+  "usage": {
+    "pages": 5,
+    "standard": [1, 2, 3, 4, 5],
+    "enhanced": []
+  }
+}
+```
+
+**`usage` fields:** `pages` is the total chargeable page count. `standard` and `enhanced` are lists of the 1-based page numbers processed in each mode — useful with `mode: "auto"` to see how each page was classified, and because each mode is billed at a different rate. Each list is omitted when empty.
+
+### Element Categories
+
+`paragraph`, `table`, `figure`, `chart`, `header`, `footer`, `caption`, `equation`, `heading1`, `list`, `index`, `footnote`
+
+### Chart Recognition Details
+
+When `chart_recognition=true`, charts are detected and converted to structured table format.
+
+**Supported chart types:** Bar charts, Line charts, Pie charts
+
+**Output behavior:**
+
+- **Recognition succeeds** → category: `chart`, HTML includes `<figcaption>` (Chart Title, X-Axis, Y-Axis, Chart Type) and `<table>` with extracted data
+- **Recognition fails** → category: `figure`, contains OCR text result only
+
+**Example chart output (success):**
+
+```json
+{
+  "category": "chart",
+  "content": {
+    "html": "<figure data-category='chart'><img data-coord=\"...\" /><figcaption><p>Chart Title: Sales Report</p><p>X-Axis: Month</p><p>Y-Axis: Revenue</p><p>Chart Type: bar</p></figcaption><table>...</table></figure>",
+    "markdown": "- Chart Type: bar\n| Month | Revenue |\n|---|---|\n| Jan | $100 |",
+    "text": "Chart Type: bar..."
+  }
+}
+```
+
+### Equation Recognition (LaTeX)
+
+Elements with category `equation` output recognized text in **LaTeX format** within `content.html` and `content.markdown`. This enables rendering with engines like MathJax.
+
+**Note:** `content.text` contains OCR result which may be inaccurate for equations (equation-specific recognition not applied to text output).
+
+**Example equation output:**
+
+```json
+{
+  "category": "equation",
+  "content": {
+    "html": "<p data-category='equation'>$$a_{n}=\\sum_{k=1}^{n}{\\frac{2k+1}{k^{2}}}$$</p>",
+    "markdown": "$$a_{n}=\\sum_{k=1}^{n}{\\frac{2k+1}{k^{2}}}$$",
+    "text": "an = Σ 2k+1/k²"
+  }
+}
+```
+
+### Coordinates Format
+
+Coordinates are **relative values between 0 and 1**, representing the position within the page.
+
+**To calculate absolute pixel position:**
+
+- `absolute_x = x * page_width`
+- `absolute_y = y * page_height`
+
+Each element has 4 coordinate points defining the bounding box corners (top-left, top-right, bottom-right, bottom-left).
+
+### Mode Options
+
+| Mode       | Description                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------ |
+| `standard` | Fast processing for text-heavy documents with simple tables                                |
+| `enhanced` | Better handling of complex tables, charts, images, and low-quality scans (additional cost) |
+| `auto`     | Automatically classifies each page as standard or enhanced and processes accordingly       |
+
+### Input Recommendations
+
+For best results:
+
+- **Minimum document width:** 640 pixels
+- **Minimum text size:** At least 2.5% of image height (e.g., 16px for 640px tall image)
+- **Resolution:** Use high-resolution documents for better text legibility
+- **Pixel calculation for non-image files:** PDF, DOCX, etc. are converted to images at 150 DPI before pixel count is calculated
+
+### Parameter Tips
+
+| Document Type                               | Recommended Settings                   |
+| ------------------------------------------- | -------------------------------------- |
+| Text-heavy documents (articles, contracts)  | `mode: "standard"`                     |
+| Complex tables, charts, images              | `mode: "enhanced"` (additional cost)   |
+| Mixed document types                        | `mode: "auto"` (auto-classifies pages) |
+| Scanned PDFs or images                      | `ocr: "force"`                         |
+| Digital-born PDFs                           | `ocr: "auto"` (default)                |
+| Need table images for downstream processing | `base64_encoding: ["table"]`           |
+| Multi-page tables                           | `merge_multipage_tables: true`         |
+| RAG/LLM ingestion                           | `output_formats: ["markdown"]`         |
+| Web display                                 | `output_formats: ["html"]`             |
+
+---
+```
+
+# **Document parsing API**
+
+**`POST`** / document-digitization
+
+## **Authorization**
+
+#### **`Authorization` `Required`  : Bearer <token>**
+
+In: `header`
+
+## **Request Body**
+
+**`multipart/form-data`  `Required`**
+
+#### **`model` `Required`  : string**
+
+A string value indicating the model used for inference. We recommend using the alias `document-parse`, which always points to the latest stable model. You may also specify a particular model version, but please note that models are frequently updated, and services tied to specific versions may be affected when those versions are deprecated. Available snapshot models are listed in the capabilities document. Use `document-parse-nightly` to test the latest features. This model may be updated without notice.
+
+#### **`document`  `Required` : file**
+
+The document file to be processed. Supported file formats are listed here.
+
+#### **`mode` : string**
+
+A string value specifying the parsing mode. Note that `enhanced` and `auto` modes are available from `document-parse-260128` and later versions.
+
+- Use `standard` for text-focused documents with simple tables.
+- Use `enhanced` for documents containing complex tables, images, charts, and other advanced visual elements.
+- Use `auto` to automatically classify pages as either `standard` or `enhanced` and process them accordingly.
+
+Default: `"standard"`
+
+Value in: `"standard" | "enhanced" | "auto"`
+
+#### **`chart_recognition` `Beta` : boolean**
+
+A boolean value indicating whether to use chart recognition. If `true`, charts are converted to tables. When `mode` is set to `enhanced`, chart recognition is always enabled regardless of this parameter.
+
+Default: `true`
+
+Value in: `true | false`
+
+#### **`merge_multipage_tables` `Beta` : boolean**
+
+A boolean value indicating whether to merge tables that are split across multiple pages into a single table. When set to `true`, tables spanning multiple pages will be combined into one cohesive table structure.
+
+Default: `false`
+
+Value in: `true | false`
+
+#### **`ocr` : string**
+
+A string value indicating whether to perform OCR inference on the document before layout detection. When set to `auto`, OCR is applied only to image documents; for non-image files (e.g., PDF, DOCX), layout and text detection will work only if the document is digital-born. When set to `force`, the input file is converted to images, and OCR is always performed before layout detection.
+
+Default: `"auto"`
+
+Value in: `"auto" | "force"`
+
+#### **`output_formats` : string**
+
+A string value indicating in which each layout element output is formatted. Possible values are `text`, `html`, and `markdown`.
+
+Default: `"['html']"`
+
+#### **`coordinates` : boolean**
+
+A boolean value indicating whether to return coordinates of bounding boxes of each layout element. The default value is `true`.
+
+Default: `true`
+
+Value in: `true | false`
+
+#### **`base64_encoding` : string**
+
+A string value indicating which layout category should be provided as a base64 encoded string. All category names can be found in the Layout Categories and HTML Tags section. This feature is useful when users want to crop the layout elements from the original document image and store or use them for their own purposes. For example, users can extract the base64 encoded images of all tables in the input document by setting `base64_encoding=["table"]`. In the response, the `elements[].base64_encoding` field will contain the base64 string of the corresponding element image. Note that this may increase the size of the response.
+
+Default: `[]`
+
+#### **`words` `Beta` : boolean**
+
+A boolean value indicating whether to include word-level OCR results in the response. When set to `true`, each recognized word and its bounding-box coordinates are returned in addition to the layout elements. Note that this may increase the size of the response.
+
+Default: `false`
+
+Value in: `true | false`
+
+## **Response**
+
+### **Response**
+
+**`api`** string
+
+A string representing the version of the API being used. A bump in the major version indicates a backward-incompatible update, while a minor version increase signifies a backward-compatible update.
+
+---
+
+**`model`** string
+
+A string representing the version of the model being used.
+
+---
+
+**`elements`** list
+
+A list of element objects, each containing information about the elements's text, confidence score, and bounding box.
+
+---
+
+**`elements[].id`** integer
+
+The unique identifier for an element.
+
+---
+
+**`elements[].category`** string
+
+The category of a given element. Categories are in {paragraph, table, figure, chart, header, footer, caption, equation, heading1, list, index, footnote}.
+
+---
+
+**`elements[].page`** integer
+
+The page number for an element. Starts from 1.
+
+---
+
+**`elements[].content.text`** string
+
+A string representing the text within an element. It usually provides an OCR result for elements.
+
+---
+
+**`elements[].content.html`** string
+
+A string representing the text within an element, in HTML format. See the Categories and HTML tags section for more information.
+
+---
+
+**`elements[].content.markdown`** string
+
+A markdown representing the text within an element. For others than `heading1`, `table`, `list` are the same with `text` field.
+
+---
+
+**`elements[].coordinates`** list
+
+A list with four (x, y) coordinates defining the corners of an element's bounding box. Each value is 4 digit decimal value between 0 and 1 which is the relative position of input document. In order to get the absolute position in pixel value, users can simply multiply the `x` and `y` with the width and height of the image document respectively.
+
+---
+
+**`elements[].base64_encoding`** string
+
+A base64 encoded string value of image cropped with the coordinates of the layout element.
+
+---
+
+**`content.text`** string
+
+A string representing the text of the entire document, typically created by concatenating the pages' serialized texts.
+
+---
+
+**`content.html`** string
+
+A string representing the text of the entire document in HTML format, typically created by concatenating the pages' serialized HTML snippets.
+
+---
+
+**`content.markdown`** string
+
+A mardown representing the text of the entire document, typically created by concatenating the pages' serialized markdown texts.
+
+---
+
+**`usage.pages`** integer
+
+The total count of pages in the input file that have been processed and are chargeable.
+
+---
+
+**`usage.standard`** list
+
+A list of 1-based page numbers that were processed in `standard` mode. Pages are reported per processing mode (`standard`, `enhanced`) so you can see how each page was parsed — useful when `mode` is set to `auto` — and because each mode is billed at a different rate. Omitted when empty.
+
+---
+
+**`usage.enhanced`** list
+
+A list of 1-based page numbers that were processed in `enhanced` mode. Omitted when empty.
+
+---
+
+### **Functionality overview**
+
+- **Unknown characters**: Characters are not recognized by the OCR model are considered "unknown characters" and are marked by the character `�`.
+- **Response time**: Standard documents containing up to 200 words take approximately three seconds. Longer documents can take up to tens of seconds.
+- **Timeout**: There is a server-side 5 minutes timeout for all requests.

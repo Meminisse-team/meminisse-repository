@@ -1,6 +1,7 @@
 # Web framework
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
+python-multipart==0.0.17
 
 # Database (Supabase PostgreSQL + pgvector)
 sqlalchemy[asyncio]==2.0.36
@@ -12,13 +13,17 @@ pgvector==0.3.6
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 
-# AI — Solar LLM (라벨 추출 / 산문 재조립 / 목차·챕터 집필)
-# AsyncOpenAI(base_url="https://api.upstage.ai/v1/solar") 로 직통 호출
+# AI — Solar LLM + Upstage Embeddings (라벨 추출 / 산문 재조립 / 목차·챕터 집필 / RAG 임베딩)
+# 둘 다 OpenAI SDK와 호환되므로 AsyncOpenAI(base_url="https://api.upstage.ai/v1")로 직통 호출
 openai==1.54.0
 
 # AI — Upstage Document Parse (Phase 1 텍스트 사진 선(先) 라벨링)
 # openai 패키지와 별개로 multipart/form-data 업로드가 필요하므로 httpx 직접 사용
 httpx==0.28.0
+
+# 비동기 워커 (세션 후처리 / Phase 3·4 파이프라인 / PDF 조판)
+celery==5.4.0
+redis==5.2.0
 
 # AWS S3 (미디어 원본 저장)
 boto3==1.35.74
