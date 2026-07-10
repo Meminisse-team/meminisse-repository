@@ -28,6 +28,11 @@ redis==5.2.0
 # AWS S3 (미디어 원본 저장)
 boto3==1.35.74
 
+# 인증 — 회원가입/로그인 자체는 Supabase Auth(GoTrue, httpx로 직접 호출)에 위임하므로
+# 비밀번호 해싱 라이브러리는 불필요. 세션 토큰(JWT) 서명 검증에만 PyJWT를 쓴다
+# (app/core/security.py, app/clients/supabase_auth.py)
+PyJWT==2.13.0
+
 # Dev / test
 pytest==8.3.4
 pytest-asyncio==0.24.0

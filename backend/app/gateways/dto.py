@@ -57,6 +57,12 @@ class UserRecord:
 
 @dataclass
 class UserCreateData:
+    """`id`는 이 프로젝트가 새로 생성하지 않는다 — Supabase Auth Admin API가
+    회원가입 시점에 `auth.users`를 먼저 만들고 발급한 id를 그대로 받아 쓴다
+    (app/services/user_service.py:create_user, app/clients/supabase_auth.py 참조).
+    비밀번호 관련 필드가 없는 이유도 동일 — 비밀번호는 Supabase Auth만 알고 있다."""
+
+    id: UUID
     email: str
     name: str
     birth_year: int | None = None

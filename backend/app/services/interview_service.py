@@ -20,10 +20,14 @@ from app.models.enums import MessageRole
 from app.schemas.interview import SessionCreate
 
 
-async def create_session(gateways: Gateways, payload: SessionCreate) -> InterviewSessionRecord:
+async def create_session(
+    gateways: Gateways, user_id: uuid.UUID, payload: SessionCreate
+) -> InterviewSessionRecord:
+    """user_id는 라우터가 인증된 current_user.id로부터 넘긴다(SessionCreate 스키마에는
+    더 이상 user_id 필드가 없다 — app/schemas/interview.py 참조)."""
     session = await gateways.sessions.create(
         SessionCreateData(
-            user_id=payload.user_id,
+            user_id=user_id,
             session_type=payload.session_type,
             question_id=payload.question_id,
             linked_media_asset_id=payload.linked_media_asset_id,

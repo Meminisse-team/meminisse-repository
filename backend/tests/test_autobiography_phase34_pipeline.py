@@ -15,14 +15,23 @@ Solar 호출은 전부 모킹한다 — 이 테스트의 목적은 프롬프트 
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import patch
 
 import pytest
 
-from app.gateways.dto import EventCreateData, SessionCreateData, UserCreateData
+from app.gateways.dto import EventCreateData, SessionCreateData
 from app.gateways.factory import Gateways, _build_mock_gateways
 from app.models.enums import ConsentGrantedBy, ConsentType, EventSourceType, SessionType
+from app.schemas.user import UserCreate
 from app.services import autobiography_service, character_service, consent_service, user_service
+
+
+async def _fake_admin_create_user(*, email: str, password: str, user_metadata: dict) -> uuid.UUID:
+    """user_service.create_user가 이제 Supabase Auth Admin API를 호출한다
+    (app/clients/supabase_auth.py) — 이 테스트의 관심사는 그 외부 호출이 아니라
+    Gateway 배선이므로, 다른 Upstage 호출들과 동일하게 모킹한다."""
+    return uuid.uuid4()
 
 
 class _FakeMessage:
@@ -66,7 +75,9 @@ async def _fake_structured_completion(messages, *, schema_name, json_schema, **k
 
 
 async def _seed_user_with_events(gateways: Gateways):
-    user = await user_service.create_user(gateways, UserCreateData(email="p34@example.com", name="테스터"))
+    user = await user_service.create_user(
+        gateways, UserCreate(email="p34@example.com", name="테스터", password="test-password-123")
+    )
 
     session = await gateways.sessions.create(
         SessionCreateData(user_id=user.id, session_type=SessionType.FIXED_QUESTION)
@@ -101,6 +112,7 @@ async def test_full_phase3_4_pipeline_runs_end_to_end() -> None:
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)
@@ -144,6 +156,7 @@ async def test_retain_real_name_requires_disclosure_consent() -> None:
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)
