@@ -40,12 +40,17 @@
 
 ## DB(Postgres + pgvector)를 구축할 때 주의할 점
 
-1. **마이그레이션은 이미 작성되어 있다.** `backend/alembic/versions/001_initial_schema.py`
-   (초기 스키마)와 `002_event_first_class_object.py`(이벤트 1급 객체화)를 그대로
-   `alembic upgrade head`로 적용하면 스키마가 맞춰진다. 스키마를 직접 새로
-   설계하지 말고, 이 마이그레이션 두 개를 검토한 뒤 필요하면 `003_...`으로 이어서
-   수정할 것 — 이미 적용된 마이그레이션 파일 자체를 고치지 말 것(다른 사람 환경에
-   이미 반영되어 있을 수 있음).
+1. **마이그레이션은 이미 작성되어 있다.** `backend/alembic/versions/` 아래
+   `001_initial_schema.py`(초기 스키마) → `002_event_first_class_object.py`
+   (이벤트 1급 객체화) → `003_phase3_4_and_compliance.py`(Phase 3/4 스키마 +
+   동의 기록) → `004_auth.py`(Supabase Auth 연동, `public.users.id →
+   auth.users.id` FK)까지 순서대로 쌓여 있다. `alembic upgrade head`로 한 번에
+   전부 적용하면 스키마가 맞춰진다. **2026-07-10 기준 004는 코드로는 존재하지만
+   실제 Supabase에는 아직 적용되지 않은 상태**다(하단 "회원가입/로그인 인증
+   추가에 따른 DB 작업" 절 참조) — 이 문서를 읽는 시점에 이미 적용했다면 이 문장은
+   지울 것. 스키마를 직접 새로 설계하지 말고, 기존 마이그레이션들을 검토한 뒤
+   필요하면 `005_...`로 이어서 수정할 것 — 이미 적용된 마이그레이션 파일 자체를
+   고치지 말 것(다른 사람 환경에 이미 반영되어 있을 수 있음).
 
 2. **Direct connection(5432) 사용을 원칙으로 하되, IPv4 전용 환경 등에서는 Supavisor
    Pooler(세션 모드, 포트 5432)도 허용된다 — 단 반드시 트랜잭션 모드(포트 6543)는
@@ -122,6 +127,9 @@ def _build_postgres_gateways(session) -> Gateways:
     from app.gateways.s3_gateway import S3ObjectStorageGateway
     from app.gateways.sqlalchemy_gateways import (
         SqlAlchemyAutobiographyGateway,
+        SqlAlchemyChapterDraftGateway,
+        SqlAlchemyCharacterGateway,
+        SqlAlchemyConsentGateway,
         SqlAlchemyEventGateway,
         SqlAlchemyInterviewSessionGateway,
         SqlAlchemyMediaAssetGateway,
@@ -133,10 +141,17 @@ def _build_postgres_gateways(session) -> Gateways:
         events=SqlAlchemyEventGateway(session),
         media_assets=SqlAlchemyMediaAssetGateway(session),
         autobiographies=SqlAlchemyAutobiographyGateway(session),
+        chapters=SqlAlchemyChapterDraftGateway(session),
+        characters=SqlAlchemyCharacterGateway(session),
+        consents=SqlAlchemyConsentGateway(session),
         storage=S3ObjectStorageGateway(),
         _commit=session.commit,
     )
 ```
+(Phase 3/4 작업 때 `chapters`/`characters`/`consents` 게이트웨이가 추가된 뒤 이
+예시가 한동안 갱신되지 않았던 적이 있다 — 이 문서의 코드 블록은 실제
+`app/gateways/factory.py`를 베낀 것이 아니라 손으로 유지보수하는 예시이므로,
+새 게이트웨이를 추가할 때마다 이 블록도 함께 고칠 것.)
 
 새 클래스 이름이 무엇이든(`SqlAlchemyEventGateway`를 그대로 고도화했든,
 `AsyncpgEventGateway`처럼 완전히 새로 짰든) `app/gateways/interfaces.py`의 ABC를
@@ -150,8 +165,10 @@ def _build_postgres_gateways(session) -> Gateways:
 - [ ] `search_verified`가 `verified=True AND embedding IS NOT NULL` 조건을
       실제 쿼리에서 강제하는가 (`test_event_gateway_gating.py`와 동일한 시나리오로
       직접 검증할 것)
-- [ ] `alembic upgrade head`가 실제 Supabase 인스턴스에 적용되었는가(✅ 2026-07-09
-      기준 `alembic_version=003`으로 확인됨 — 새로 스키마를 손대면 004로 이어갈 것)
+- [ ] `alembic upgrade head`가 실제 Supabase 인스턴스에 적용되었는가(2026-07-09
+      기준 `alembic_version=003`까지만 확인됨 — `004_auth.py`는 이미 작성돼 있지만
+      아직 실제 DB에 미적용 상태다. 이 문서를 읽는 시점에 004를 적용했다면 이
+      괄호를 지우고 체크할 것. 그 이후 새로 스키마를 손대면 005로 이어갈 것)
 - [x] `EMBEDDING_DIM`이 실제 Upstage 응답과 일치하는가 — 4096으로 확인 완료(위 3번 참조)
 - [ ] `.env`의 `GATEWAY_BACKEND=postgres`로 설정하고 `/health` 및 유저 생성
       플로우가 실제 DB에 기록되는지 확인했는가
