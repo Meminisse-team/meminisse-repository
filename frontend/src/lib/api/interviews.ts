@@ -1,8 +1,9 @@
 import { apiClient } from "@/lib/api/client";
 import type { InterviewSession, SessionType, TurnResponse } from "@/types/api";
 
+/** user_id는 없다 — 인증 토큰의 로그인 사용자로 서버가 항상 고정한다
+ * (backend/app/schemas/interview.py:SessionCreate 참조). */
 export interface CreateSessionInput {
-  user_id: string;
   session_type: SessionType;
   question_id?: string;
   linked_media_asset_id?: string;
