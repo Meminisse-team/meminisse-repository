@@ -22,6 +22,8 @@ async def create_user(payload: UserCreate, gateways: GatewaysDep) -> UserRead:
         user = await user_service.create_user(gateways, payload)
     except user_service.EmailAlreadyRegisteredError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "이미 등록된 이메일입니다.") from exc
+    except user_service.InvalidSignupError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return UserRead.model_validate(user)
 
 

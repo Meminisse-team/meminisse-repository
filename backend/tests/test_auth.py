@@ -113,6 +113,11 @@ def _patch_supabase_auth(monkeypatch: pytest.MonkeyPatch):
     # 테스트는 .env의 실제 값과 무관하게 항상 통과해야 하므로 더미 값으로 고정한다.
     monkeypatch.setattr(settings, "SUPABASE_ANON_KEY", "test-anon-key")
     monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+    # SUPABASE_URL이 비어 있으면(.env 미설정) f"{settings.SUPABASE_URL}/auth/v1/..."가
+    # 상대경로가 되어, httpx가 MockTransport 응답의 쿠키를 추출하려다 urllib에서
+    # "unknown url type"으로 죽는다(client-level 단위 테스트에서 실제로 재현됨) —
+    # 이 값도 실제 .env와 무관하게 항상 절대 URL이 되도록 고정한다.
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://test.supabase.co")
     fake = _FakeSupabaseAuth()
     monkeypatch.setattr(supabase_auth, "admin_create_user", fake.admin_create_user)
     monkeypatch.setattr(supabase_auth, "sign_in_with_password", fake.sign_in_with_password)
@@ -337,6 +342,61 @@ def test_interview_session_created_for_current_user_not_spoofable(client: TestCl
     )
     assert created.status_code == 201, created.text
     assert created.json()["user_id"] == signup["id"]
+
+
+def test_signup_with_non_duplicate_supabase_error_returns_400(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """이메일 중복(409)이 아닌 다른 Supabase Auth 거부 사유(예: 비밀번호 정책 위반)는
+    처리되지 않은 예외로 새어나가 500이 되는 대신 400으로 응답해야 한다
+    (app/services/user_service.py InvalidSignupError, app/clients/supabase_auth.py 참조)."""
+
+    async def _reject(*, email: str, password: str, user_metadata: dict) -> None:
+        raise supabase_auth.SupabaseAuthError(422, "Password should be at least 6 characters")
+
+    monkeypatch.setattr(supabase_auth, "admin_create_user", _reject)
+
+    resp = client.post(
+        "/api/v1/users",
+        json={"email": "weak-pw@example.com", "name": "약한비번", "password": "password1"},
+    )
+    assert resp.status_code == 400
+
+
+def test_cannot_attach_media_to_another_users_session(client: TestClient) -> None:
+    """세션 소유자가 아닌 사용자가 그 session_id로 사진을 업로드하려 하면 404여야 한다
+    (app/api/v1/media.py 소유권 검증 — 없으면 타인의 인터뷰 세션에 미디어를 연결시킬
+    수 있었다)."""
+    client.post(
+        "/api/v1/users",
+        json={"email": "media-owner@example.com", "name": "미디어주인", "password": "password123"},
+    )
+    owner_token = client.post(
+        "/api/v1/auth/login", json={"email": "media-owner@example.com", "password": "password123"}
+    ).json()["access_token"]
+    session = client.post(
+        "/api/v1/interview-sessions",
+        json={"session_type": "fixed_question"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()
+
+    client.post(
+        "/api/v1/users",
+        json={"email": "media-intruder@example.com", "name": "미디어침입자", "password": "password123"},
+    )
+    intruder_token = client.post(
+        "/api/v1/auth/login", json={"email": "media-intruder@example.com", "password": "password123"}
+    ).json()["access_token"]
+
+    # asset_type=document로 업로드해 듀얼 트랙 분석(Document Parse/Solar 실호출)을
+    # 건드리지 않는다 — 이 테스트의 관심사는 오직 session_id 소유권 검증이다.
+    resp = client.post(
+        "/api/v1/media-assets",
+        data={"session_id": session["id"], "asset_type": "document"},
+        files={"file": ("note.txt", b"hello", "text/plain")},
+        headers={"Authorization": f"Bearer {intruder_token}"},
+    )
+    assert resp.status_code == 404
 
 
 def test_cannot_read_another_users_interview_session(client: TestClient) -> None:

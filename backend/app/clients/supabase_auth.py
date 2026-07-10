@@ -84,7 +84,13 @@ async def admin_create_user(*, email: str, password: str, user_metadata: dict[st
         if "already" in message.lower() or "exists" in message.lower() or "registered" in message.lower():
             raise SupabaseAuthError(409, "이미 등록된 이메일입니다.")
         raise SupabaseAuthError(response.status_code, message)
-    response.raise_for_status()
+    if not response.is_success:
+        # 위에서 명시적으로 다루지 않은 상태코드(429 요청 제한, 5xx 등)까지 전부
+        # SupabaseAuthError로 통일한다. 예전에는 response.raise_for_status()가
+        # httpx.HTTPStatusError를 던졌는데, 이 예외는 호출부(user_service.create_user,
+        # 라우터)가 SupabaseAuthError만 잡도록 되어 있어 그대로 새어나가 500으로
+        # 응답됐다.
+        raise SupabaseAuthError(response.status_code, _error_message(response))
     return UUID(response.json()["id"])
 
 
@@ -99,7 +105,12 @@ async def sign_in_with_password(*, email: str, password: str) -> dict[str, Any]:
         )
     if response.status_code in (400, 401):
         raise SupabaseAuthError(401, "이메일 또는 비밀번호가 올바르지 않습니다.")
-    response.raise_for_status()
+    if not response.is_success:
+        # sign_in 실패 사유를 세분화해 노출하지 않는 기존 방침(auth_service.login
+        # docstring 참조)은 유지하되, 429/5xx 같은 미처리 상태코드가 httpx.HTTPStatusError로
+        # 새어나가 500이 되는 것만 막는다 — SupabaseAuthError로 통일해 auth_service가
+        # 항상 처리 가능하게 한다.
+        raise SupabaseAuthError(response.status_code, _error_message(response))
     return response.json()
 
 
@@ -114,5 +125,6 @@ async def refresh_access_token(*, refresh_token: str) -> dict[str, Any]:
         )
     if response.status_code in (400, 401):
         raise SupabaseAuthError(401, "리프레시 토큰이 유효하지 않습니다. 다시 로그인해 주세요.")
-    response.raise_for_status()
+    if not response.is_success:
+        raise SupabaseAuthError(response.status_code, _error_message(response))
     return response.json()

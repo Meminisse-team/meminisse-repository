@@ -11,6 +11,13 @@ class EmailAlreadyRegisteredError(Exception):
     SupabaseAuthError(409, ...)를 서비스 레이어 예외로 변환)."""
 
 
+class InvalidSignupError(Exception):
+    """이메일 중복이 아닌 다른 이유로 Supabase Auth가 계정 생성을 거부한 경우
+    (예: 프로젝트 비밀번호 정책 위반, 429 요청 제한, Supabase 측 5xx 등). 라우터가
+    이 예외를 못 잡으면 예전에는 그대로 500으로 새어나갔다 — 클라이언트가 가입
+    실패 이유를 알 수 있도록 400으로 매핑한다(app/api/v1/users.py 참조)."""
+
+
 async def create_user(gateways: Gateways, payload: UserCreate) -> UserRecord:
     """회원가입. 계정 생성 자체는 Supabase Auth Admin API가 담당하고(비밀번호를
     이 프로젝트가 저장하지 않기 위함), 그 결과로 받은 id를 그대로 이 프로젝트의
@@ -29,7 +36,7 @@ async def create_user(gateways: Gateways, payload: UserCreate) -> UserRecord:
     except supabase_auth.SupabaseAuthError as exc:
         if exc.status_code == 409:
             raise EmailAlreadyRegisteredError() from exc
-        raise
+        raise InvalidSignupError(str(exc)) from exc
 
     user = await gateways.users.create(
         UserCreateData(
