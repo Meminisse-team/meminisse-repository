@@ -77,7 +77,15 @@ class SqlAlchemyUserGateway(UserGateway):
         self._session = session
 
     async def create(self, data: UserCreateData) -> UserRecord:
-        user = User(email=data.email, name=data.name, birth_year=data.birth_year, hometown=data.hometown)
+        # id는 새로 생성하지 않는다 — Supabase Auth가 이미 발급한 auth.users.id를
+        # 그대로 받아 쓴다(app/services/user_service.py:create_user 참조).
+        user = User(
+            id=data.id,
+            email=data.email,
+            name=data.name,
+            birth_year=data.birth_year,
+            hometown=data.hometown,
+        )
         self._session.add(user)
         await self._session.flush()
         return _to_user_record(user)

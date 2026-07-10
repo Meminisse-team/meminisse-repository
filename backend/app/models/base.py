@@ -13,7 +13,15 @@ EMBEDDING_DIM = 4096
 
 
 class Base(DeclarativeBase):
-    pass
+    # updated_at 등 onupdate=func.now() 컬럼은 UPDATE 시점에 DB가 값을 계산하므로,
+    # eager_defaults(기본 False)가 꺼져 있으면 flush() 직후 그 컬럼이 "expired" 상태로
+    # 남는다. 이 상태에서 곧바로 동기적으로 속성에 접근하면(예: 게이트웨이가 flush 후
+    # 바로 _to_*_record(obj)로 DTO 변환) SQLAlchemy가 지연 로드를 시도하다
+    # sqlalchemy.exc.MissingGreenlet로 죽는다(AsyncSession 밖 코드에서 결과를 기다릴
+    # 방법이 없기 때문) — 실제 Supabase 연동 검증 중
+    # SqlAlchemyAutobiographyGateway.update() 등에서 재현됨. eager_defaults=True로
+    # UPDATE 문에 RETURNING을 붙여 flush 시점에 즉시 값을 채워 넣도록 전역 설정한다.
+    __mapper_args__ = {"eager_defaults": True}
 
 
 _E = TypeVar("_E", bound=PyEnum)

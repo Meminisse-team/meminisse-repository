@@ -7,7 +7,10 @@ from app.models.enums import MessageRole, SessionStatus, SessionType
 
 
 class SessionCreate(BaseModel):
-    user_id: uuid.UUID
+    """user_id는 요청 바디에 넣지 않는다 — 인증 토큰(현재 로그인한 사용자)에서 항상
+    유도한다(app/api/v1/interviews.py). 클라이언트가 임의의 user_id를 실어 보내
+    남의 세션을 만들 수 있는 경로를 원천 차단하기 위함."""
+
     session_type: SessionType
     question_id: uuid.UUID | None = None
     linked_media_asset_id: uuid.UUID | None = None

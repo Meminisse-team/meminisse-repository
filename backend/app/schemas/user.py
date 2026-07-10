@@ -1,13 +1,22 @@
 import uuid
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.enums import UserStage
 
 
 class UserCreate(BaseModel):
+    """회원가입 요청. POST /api/v1/users가 곧 가입 엔드포인트다(별도 /auth/signup을
+    두지 않았다 — REST 리소스 생성 관례상 "유저를 만드는 것"과 "가입"은 같은 동작이므로
+    분리가 오히려 혼란을 준다). 로그인은 이메일+비밀번호로 별도 POST /api/v1/auth/login.
+
+    `password`는 이 서버가 직접 저장하지 않는다 — Supabase Auth Admin API로 그대로
+    전달되어 auth.users 생성에만 쓰이고, 이후 이 프로젝트 코드/DB 어디에도 남지
+    않는다(app/services/user_service.py, app/clients/supabase_auth.py 참조)."""
+
     email: EmailStr
     name: str
+    password: str = Field(..., min_length=8, description="평문 비밀번호. Supabase Auth로 그대로 전달되며 이 서버에는 저장되지 않는다.")
     birth_year: int | None = None
     hometown: str | None = None
 

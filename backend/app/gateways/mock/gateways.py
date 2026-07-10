@@ -70,7 +70,7 @@ class MockUserGateway(UserGateway):
 
     async def create(self, data: UserCreateData) -> UserRecord:
         user = UserRecord(
-            id=uuid.uuid4(),
+            id=data.id,
             email=data.email,
             name=data.name,
             birth_year=data.birth_year,
