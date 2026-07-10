@@ -12,6 +12,8 @@ export type MessageRole = "user" | "assistant" | "system";
 export type AssetType = "image" | "audio" | "video" | "document";
 export type MediaAnalysisTrack = "text_document" | "pure_memory";
 export type AutobiographyStatus = "in_progress" | "consolidated" | "published";
+export type ConsentType = "data_collection" | "disclosure_realname" | "retention_extension";
+export type ConsentGrantedBy = "self" | "guardian";
 
 export interface User {
   id: string;
@@ -20,6 +22,25 @@ export interface User {
   birth_year: number | null;
   hometown: string | null;
   current_stage: UserStage;
+}
+
+/** POST /api/v1/auth/login, /api/v1/auth/refresh 응답. Supabase Auth가 발급한 세션을
+ * 그대로 전달한다(backend/app/schemas/auth.py:TokenResponse). */
+export interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface ConsentRecord {
+  id: string;
+  user_id: string;
+  consent_type: ConsentType;
+  notice_version: string;
+  granted_by: ConsentGrantedBy;
+  granted_at: string;
+  revoked_at: string | null;
 }
 
 export interface InterviewSession {

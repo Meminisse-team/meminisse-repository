@@ -8,19 +8,66 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sans-kr);
+  --font-serif-kr: var(--font-serif-kr);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/*
+  기획 요구사항: "배경은 완전한 흰색, 텍스트는 명시성 높은 검은색"을 시스템
+  다크모드 설정과 무관하게 항상 유지한다. 시니어 사용자가 OS 다크모드를 다른
+  이유로 켜 두었더라도 이 서비스 화면은 항상 동일한 고대비 라이트 테마여야
+  하므로, 기존에 있던 prefers-color-scheme:dark 오버라이드는 의도적으로 두지
+  않는다.
+*/
+
+html {
+  font-size: 18px; /* 시니어 접근성: 기본 글자 크기를 표준보다 크게 */
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans-kr), "Noto Sans KR", system-ui, sans-serif;
+}
+
+.font-serif-kr {
+  font-family: var(--font-serif-kr), "Gowun Batang", serif;
+}
+
+/* 파동(Ripple) 효과 — RippleRings 컴포넌트가 이 클래스를 반복 렌더링한다. */
+@keyframes ripple-expand {
+  0% {
+    transform: scale(0.75);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.ripple-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border-width: 1.5px;
+  border-style: solid;
+  border-color: currentColor;
+  animation: ripple-expand 3.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* 채팅 오버레이 등 화면 전환에 쓰는 잔잔한 페이드업. */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.4s ease-out both;
 }

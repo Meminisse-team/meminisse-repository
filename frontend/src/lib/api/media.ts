@@ -1,9 +1,10 @@
 import { apiClient } from "@/lib/api/client";
 import type { AssetType, MediaAsset } from "@/types/api";
 
+/** userId는 없다 — 인증 토큰의 로그인 사용자로 서버가 항상 고정한다
+ * (backend/app/api/v1/media.py 참조, Form 필드에서 제거됨). */
 export interface UploadMediaAssetInput {
   file: File;
-  userId: string;
   sessionId?: string;
   assetType?: AssetType;
   ageAtTime?: number;
@@ -15,7 +16,6 @@ export interface UploadMediaAssetInput {
 export const mediaApi = {
   upload: ({
     file,
-    userId,
     sessionId,
     assetType,
     ageAtTime,
@@ -25,7 +25,6 @@ export const mediaApi = {
   }: UploadMediaAssetInput) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("user_id", userId);
     if (sessionId) form.append("session_id", sessionId);
     if (assetType) form.append("asset_type", assetType);
     if (ageAtTime !== undefined) form.append("age_at_time", String(ageAtTime));
