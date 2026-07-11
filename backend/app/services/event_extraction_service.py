@@ -84,7 +84,23 @@ async def _persist_events(
             emotion_tag=item.get("emotion_tag"),
             emotion_intensity=item.get("emotion_intensity"),
             emotion_inferred=bool(item.get("emotion_inferred", False)),
-            labels={"values_reflected": item.get("values_reflected")},
+            # values_reflected(가치관, 필수 슬롯)와 reason/process(왜/어떻게, 저장 전용
+            # 보강 필드) + 선택 슬롯 6개(감사·후회·전환점·자부심·신념·메시지)를 전부
+            # 담는다. event_subject(narrator/other_person)는 화자 본인 사건인지
+            # 화자가 전하는 제3자 사건인지 구분하는 라벨 — Phase 3 중요도 스코어링·
+            # 등장인물 검토(Phase 4)가 이 값을 참조할 수 있다.
+            labels={
+                "values_reflected": item.get("values_reflected"),
+                "reason": item.get("reason"),
+                "process": item.get("process"),
+                "gratitude": item.get("gratitude"),
+                "regret": item.get("regret"),
+                "turning_point": item.get("turning_point"),
+                "pride": item.get("pride"),
+                "belief": item.get("belief"),
+                "message": item.get("message"),
+                "event_subject": item.get("event_subject"),
+            },
             confidence={
                 "place": item.get("place_confidence"),
                 "occurred_at_label": item.get("occurred_at_confidence"),

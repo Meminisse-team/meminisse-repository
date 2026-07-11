@@ -156,10 +156,19 @@ class EventItemOut(BaseModel):
     place: str | None
     occurred_at_label: str | None
     people: str | None
+    event_subject: Literal["narrator", "other_person"]
     emotion_tag: str | None
     emotion_intensity: int | None
     emotion_inferred: bool
     values_reflected: str | None
+    reason: str | None
+    process: str | None
+    gratitude: str | None
+    regret: str | None
+    turning_point: str | None
+    pride: str | None
+    belief: str | None
+    message: str | None
     source_quote: str
     place_confidence: float
     occurred_at_confidence: float

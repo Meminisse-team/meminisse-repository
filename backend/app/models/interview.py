@@ -51,7 +51,7 @@ class InterviewSession(Base):
         default=SessionStatus.OPEN,
         server_default=SessionStatus.OPEN.value,
     )
-    # 11개 슬롯(필수 5 + 추가 6) 충족 현황. 꼬리 질문 루프 발동 조건 판단(경량 게이팅)에만 사용하고
+    # 12개 슬롯(필수 6 + 추가 6) 충족 현황. 꼬리 질문 루프 발동 조건 판단(경량 게이팅)에만 사용하고
     # 세션 종료 후 정밀 추출(Event 테이블) 단계에서는 참조하지 않는다.
     # {"place":true,"time":true,"event":false,"emotion":false,"values":false,
     #  "gratitude":false,"regret":false,"turning_point":false,

@@ -11,7 +11,7 @@ Meminisse 에이전트의 모든 시스템/유저 프롬프트를 한 곳에서 
 교체할 수 있다.
 
 구성:
-  1. 슬롯 정의 (11개 라벨)
+  1. 슬롯 정의 (12개 라벨)
   2. 인터뷰 페르소나 (시스템 프롬프트)
   3. 경량 슬롯 게이팅 (대화 중 저비용 판별, 결과는 휘발성)
   4. 꼬리 질문 (사건 단위 예산 관리)
@@ -37,6 +37,11 @@ REQUIRED_SLOTS: dict[str, str] = {
     "event": "사건 내용",
     "emotion": "감정",
     "values": "가치관",
+    # "누가"가 아니라 "누구와"다 — 자서전은 화자 본인이 항상 주어이므로 "누가
+    # 했는가"는 답이 정해진 질문이다. 최종 저장 시 Event.people 컬럼에 대응하며,
+    # 혼자 겪은 사건이면 null이 아니라 "혼자"처럼 명시적으로 채워져야 슬롯 게이팅상
+    # "충족"으로 인정된다(SLOT_GATING_SYSTEM_PROMPT 참조) — 미확인 상태와 구분하기 위함.
+    "companion": "누구와",
 }
 
 OPTIONAL_SLOTS: dict[str, str] = {
@@ -94,6 +99,11 @@ def build_interview_system_prompt(
 SLOT_GATING_SYSTEM_PROMPT = """\
 당신은 인터뷰 답변에서 아래 슬롯이 채워졌는지만 저비용으로 판별하는 분류기입니다.
 서사를 재구성하거나 새로운 사실을 만들어내지 마세요. 오직 true/false 판정만 하세요.
+
+"누구와"(companion) 슬롯은 값이 있어야만 채워진 것이 아닙니다 — "혼자였다",
+"아무도 없었다"처럼 동행이 없었다는 사실이 명시적으로 답변에 드러나면 그것도
+충족(true)으로 판정하세요. 단순히 언급이 없는 것과 "혼자였다고 확인된 것"을
+구분해야 합니다.
 """
 
 
@@ -260,7 +270,20 @@ EVENT_EXTRACTION_SCHEMA: dict[str, Any] = {
                         **_NULLABLE_STRING,
                         "description": "확정 연도가 아니면 상대적 표현 허용 (예: '고등학교 시절').",
                     },
-                    "people": _NULLABLE_STRING,
+                    "people": {
+                        **_NULLABLE_STRING,
+                        "description": "누구와(화자 본인 제외 동행/관련 인물). 화자 혼자 겪은 사건이면 "
+                        "null이 아니라 '혼자'처럼 명시적으로 적으세요 — 언급 자체가 없는 것과 "
+                        "혼자였음이 확인된 것은 다릅니다.",
+                    },
+                    "event_subject": {
+                        "type": "string",
+                        "enum": ["narrator", "other_person"],
+                        "description": "narrator=화자 자신이 겪은 사건. other_person=화자가 전하는 "
+                        "제3자(가족·지인 등)의 사건(예: '친구 A가 ~일을 겪었다'). 화자 자신에게 일어난 "
+                        "일이 아니면 반드시 other_person으로 표시하세요 — 배제하지 않고 그대로 "
+                        "추출하되, 서술의 실제 주인공이 누구인지를 구분하기 위한 라벨입니다.",
+                    },
                     "emotion_tag": _NULLABLE_STRING,
                     "emotion_intensity": {"type": ["integer", "null"], "description": "1~5"},
                     "emotion_inferred": {
@@ -268,6 +291,28 @@ EVENT_EXTRACTION_SCHEMA: dict[str, Any] = {
                         "description": "명시 발화 없이 정황상 추론한 경우 true.",
                     },
                     "values_reflected": _NULLABLE_STRING,
+                    "reason": {
+                        **_NULLABLE_STRING,
+                        "description": "왜(사건이 왜 일어났는지, 화자가 왜 그렇게 행동·선택했는지 — "
+                        "동기·원인). 명시적 근거가 없으면 억지로 추론하지 말고 null.",
+                    },
+                    "process": {
+                        **_NULLABLE_STRING,
+                        "description": "어떻게(사건이 어떻게 전개됐는지 — 과정·방법). "
+                        "명시적 근거가 없으면 null.",
+                    },
+                    "gratitude": {**_NULLABLE_STRING, "description": "이 사건에서 드러나는 감사의 대상/내용."},
+                    "regret": {**_NULLABLE_STRING, "description": "이 사건에서 드러나는 후회."},
+                    "turning_point": {
+                        **_NULLABLE_STRING,
+                        "description": "이 사건이 화자 인생의 전환점이었다면 그 내용.",
+                    },
+                    "pride": {**_NULLABLE_STRING, "description": "이 사건에서 드러나는 자부심."},
+                    "belief": {**_NULLABLE_STRING, "description": "이 사건에서 드러나는 신념."},
+                    "message": {
+                        **_NULLABLE_STRING,
+                        "description": "이 사건과 관련해 후대에 남기고 싶은 말이 있다면 그 내용.",
+                    },
                     "source_quote": {
                         "type": "string",
                         "description": "prose_paragraph 내 근거가 되는 축어 구간(로컬 문자열 대조용). "
@@ -278,8 +323,10 @@ EVENT_EXTRACTION_SCHEMA: dict[str, Any] = {
                 },
                 "required": [
                     "one_line_summary", "prose_paragraph", "place", "occurred_at_label",
-                    "people", "emotion_tag", "emotion_intensity", "emotion_inferred",
-                    "values_reflected", "source_quote", "place_confidence", "occurred_at_confidence",
+                    "people", "event_subject", "emotion_tag", "emotion_intensity", "emotion_inferred",
+                    "values_reflected", "reason", "process", "gratitude", "regret", "turning_point",
+                    "pride", "belief", "message",
+                    "source_quote", "place_confidence", "occurred_at_confidence",
                 ],
                 "additionalProperties": False,
             },
@@ -312,6 +359,19 @@ EVENT_EXTRACTION_SYSTEM_PROMPT = """\
 confidence 점수로 불확실성을 표현하세요. 감정은 명시적 발화가 없으면
 emotion_inferred=true로 표시하고, source_span.quoted_text는 반드시 원문에
 실제로 존재하는 문자열이어야 합니다(사후 로컬 대조로 검증됩니다).
+
+people(누구와)은 화자 혼자 겪은 사건이어도 null로 비워두지 말고 "혼자"처럼
+명시적으로 채우세요 — 언급이 아예 없는 경우에만 null입니다.
+
+event_subject는 반드시 판단하세요: 화자 자신이 겪은 사건이면 narrator, 화자가
+전하는 제3자(가족·지인 등)의 이야기(예: "친구 A가 ~일을 겪었다")이면
+other_person입니다. other_person이라고 해서 그 사건을 배제하지 마세요 — 자서전
+안에서도 타인에게 일어난 일이 화자의 삶에 의미를 갖는 경우가 흔합니다. 다만
+서술의 실제 주인공이 누구인지는 정확히 표시해야 합니다.
+
+reason(왜)·process(어떻게)와 gratitude(감사)·regret(후회)·turning_point(전환점)·
+pride(자부심)·belief(신념)·message(후대에 남기고 싶은 말)는 모두 명시적 근거가
+있을 때만 채우고, 근거 없이 그럴듯하게 지어내지 마세요 — 해당 없으면 null입니다.
 """
 
 
