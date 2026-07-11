@@ -70,6 +70,15 @@ export default function DashboardHomePage() {
         <p className="mt-4 text-sm text-black/40">눌러서 이어가기 →</p>
       </button>
 
+      <Link
+        href="/dashboard/autobiography"
+        className="w-full max-w-md rounded-3xl border border-black/10 p-6 text-left transition-colors hover:border-black/30"
+      >
+        <p className="text-sm text-black/40">나의 자서전</p>
+        <p className="mt-2 text-lg leading-relaxed text-black">목차를 고르고, 완성된 이야기를 읽어보세요</p>
+        <p className="mt-4 text-sm text-black/40">눌러서 확인하기 →</p>
+      </Link>
+
       <ChatOverlay
         open={chatOpen}
         onClose={handleChatClose}

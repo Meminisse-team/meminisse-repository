@@ -123,12 +123,54 @@ export interface MediaAsset {
   created_at: string;
 }
 
+/** toc/generate가 만드는 후보 하나(backend/app/agents/prompts.py의 Structured Outputs
+ * 스키마와 1:1). candidate는 "index" 필드 없이 배열 순번으로만 식별된다 — toc/select에
+ * 보내는 candidate_index가 바로 이 배열의 순번(0/1/2)이다. */
+export interface TocChapterCandidate {
+  chapter_index: number;
+  title: string;
+  theme_keywords: string[];
+}
+
+export interface TocCandidate {
+  chapters: TocChapterCandidate[];
+}
+
+export interface TocData {
+  generated_at: string;
+  candidates: TocCandidate[];
+  selected_candidate_index: number | null;
+}
+
 export interface Autobiography {
   id: string;
   user_id: string;
   title: string | null;
   status: AutobiographyStatus;
-  toc_data: Record<string, unknown> | null;
+  toc_data: TocData | null;
+  style_bible: Record<string, unknown> | null;
+  book_synopsis: string | null;
+  /** finalize 완료 후에만 채워지는 전체 원고(챕터 구분 없는 단일 텍스트). */
+  final_content: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DraftStatus = "draft" | "reviewed" | "finalized";
+
+/** GET /api/v1/autobiographies/{id}/chapters 응답 단위
+ * (backend/app/schemas/autobiography.py:ChapterDraftRead). */
+export interface ChapterDraft {
+  id: string;
+  autobiography_id: string;
+  chapter_index: number;
+  title: string | null;
+  chapter_synopsis: string | null;
+  content: string | null;
+  source_event_ids: string[];
+  factcheck_report: Record<string, unknown> | null;
+  groundedness_report: Record<string, unknown> | null;
+  status: DraftStatus;
   created_at: string;
   updated_at: string;
 }
