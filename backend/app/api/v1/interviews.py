@@ -4,7 +4,14 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUserDep, GatewaysDep
 from app.gateways.dto import InterviewSessionRecord, UserRecord
-from app.schemas.interview import ChatMessageCreate, ChatMessageRead, SessionCreate, SessionRead, TurnResponse
+from app.schemas.interview import (
+    ChatMessageCreate,
+    ChatMessageRead,
+    SessionCreate,
+    SessionDetailRead,
+    SessionRead,
+    TurnResponse,
+)
 from app.services import interview_service
 
 router = APIRouter(prefix="/interview-sessions", tags=["interviews"])
@@ -30,12 +37,21 @@ async def create_session(
     return SessionRead.model_validate(session)
 
 
-@router.get("/{session_id}", response_model=SessionRead)
+@router.get("", response_model=list[SessionRead])
+async def list_sessions(gateways: GatewaysDep, current_user: CurrentUserDep) -> list[SessionRead]:
+    """본인 세션 전체를 최신순으로 반환한다(대시보드 '오늘의 대화'가 이어갈 세션을
+    찾거나 미리보기를 보여줄 때 사용). chat_logs는 포함하지 않는다 —
+    GET /{session_id}로 개별 조회할 것."""
+    sessions = await interview_service.list_sessions(gateways, current_user.id)
+    return [SessionRead.model_validate(session) for session in sessions]
+
+
+@router.get("/{session_id}", response_model=SessionDetailRead)
 async def get_session(
     session_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
-) -> SessionRead:
+) -> SessionDetailRead:
     session = await _get_own_session_or_404(gateways, session_id, current_user)
-    return SessionRead.model_validate(session)
+    return SessionDetailRead.model_validate(session)
 
 
 @router.post("/{session_id}/messages", response_model=TurnResponse)

@@ -151,6 +151,11 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
         )
         return [s.session_prose for s in sessions if s.session_prose]
 
+    async def list_by_user(self, user_id: uuid.UUID) -> list[InterviewSessionRecord]:
+        sessions = [s for s in self._store.sessions.values() if s.user_id == user_id]
+        sessions.sort(key=lambda s: s.started_at, reverse=True)
+        return sessions
+
     def _require_session(self, session_id: uuid.UUID) -> InterviewSessionRecord:
         session = self._store.sessions.get(session_id)
         if session is None:
@@ -251,6 +256,15 @@ class MockEventGateway(EventGateway):
         events.sort(key=lambda e: (e.importance_score is None, -(e.importance_score or 0)))
         return events
 
+    async def list_for_timeline(self, user_id: uuid.UUID) -> list[EventRecord]:
+        events = [
+            event
+            for event in self._store.events.values()
+            if event.user_id == user_id and event.verified and event.duplicate_of_event_id is None
+        ]
+        events.sort(key=lambda e: e.created_at, reverse=True)
+        return events
+
     async def list_mergeable(self, user_id: uuid.UUID) -> list[EventRecord]:
         events = [
             event
@@ -346,6 +360,11 @@ class MockMediaAssetGateway(MediaAssetGateway):
             raise KeyError(f"media asset not found in mock store: {media_asset_id}")
         asset.analysis_track = analysis_track
         asset.pre_extracted_labels = pre_extracted_labels
+
+    async def list_by_user(self, user_id: uuid.UUID) -> list[MediaAssetRecord]:
+        assets = [a for a in self._store.media_assets.values() if a.user_id == user_id]
+        assets.sort(key=lambda a: a.created_at, reverse=True)
+        return assets
 
 
 class MockAutobiographyGateway(AutobiographyGateway):

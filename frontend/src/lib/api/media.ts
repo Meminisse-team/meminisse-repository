@@ -34,4 +34,6 @@ export const mediaApi = {
 
     return apiClient.post<MediaAsset>("/api/v1/media-assets", form);
   },
+  /** 본인이 업로드한 미디어 전체를 최근 업로드순으로. */
+  list: () => apiClient.get<MediaAsset[]>("/api/v1/media-assets"),
 };
