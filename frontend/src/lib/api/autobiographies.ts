@@ -4,6 +4,10 @@ import type { Autobiography, ChapterDraft } from "@/types/api";
 export const autobiographiesApi = {
   /** get-or-create — 처음 호출하는 순간 in_progress 상태로 자동 생성된다. */
   get: (userId: string) => apiClient.get<Autobiography>(`/api/v1/autobiographies/${userId}`),
+  /** 202 — Celery 큐잉만 하고 즉시 반환한다(중복 이벤트 병합 + 중요도 산정 + 스타일
+   * 바이블 생성). 완료되면 get()의 status가 "consolidated"로 바뀐다. */
+  consolidate: (userId: string) =>
+    apiClient.post<{ detail: string }>(`/api/v1/autobiographies/${userId}/consolidate`),
   /** 목차 후보 3개를 동기적으로 생성한다. Phase 3(이벤트 병합)가 아직이면 409. */
   generateToc: (autobiographyId: string) =>
     apiClient.post<Autobiography>(`/api/v1/autobiographies/${autobiographyId}/toc/generate`),

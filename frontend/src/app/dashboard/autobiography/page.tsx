@@ -10,18 +10,21 @@ import type { Autobiography, ChapterDraft, TocCandidate } from "@/types/api";
 
 const POLL_INTERVAL_MS = 4000;
 
-/** 자서전 진행 상태에 따라 목차 만들기 → 목차 선택 → 챕터 집필 진행 → 최종본 열람까지
- * 한 화면에서 이어서 보여준다(기획안 5절 흐름 그대로, 별도 페이지로 쪼개지 않는다 —
- * 시니어 사용자가 "지금 자서전이 어디까지 왔는지"를 한 곳에서 확인할 수 있게 하기 위함).
+/** 자서전 진행 상태에 따라 이야기 정리(Phase 3) → 목차 만들기 → 목차 선택 → 챕터 집필
+ * 진행 → 최종본 열람까지 한 화면에서 이어서 보여준다(기획안 5절 흐름 그대로, 별도
+ * 페이지로 쪼개지 않는다 — 시니어 사용자가 "지금 자서전이 어디까지 왔는지"를 한 곳에서
+ * 확인할 수 있게 하기 위함).
  *
- * 챕터 집필(write)과 최종본 윤문(finalize)은 Celery로 큐잉만 하고 즉시 202를 반환하는
- * 비동기 작업이라, 완료 여부는 이 화면이 주기적으로 다시 조회(폴링)해서 확인한다. */
+ * 이야기 정리(consolidate)·챕터 집필(write)·최종본 윤문(finalize)은 전부 Celery로
+ * 큐잉만 하고 즉시 202를 반환하는 비동기 작업이라, 완료 여부는 이 화면이 주기적으로
+ * 다시 조회(폴링)해서 확인한다. 목차 생성/선택만 동기 응답(200)이다. */
 export default function AutobiographyPage() {
   const { user } = useCurrentUser();
   const [autobiography, setAutobiography] = useState<Autobiography | null>(null);
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [consolidateTriggered, setConsolidateTriggered] = useState(false);
   const [finalizeTriggered, setFinalizeTriggered] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selecting, setSelecting] = useState<number | null>(null);
@@ -55,6 +58,7 @@ export default function AutobiographyPage() {
       setChapters([]);
     }
     if (bio.final_content) setFinalizeTriggered(false);
+    if (bio.status !== "in_progress") setConsolidateTriggered(false);
     return bio;
   }, [user]);
 
@@ -73,13 +77,29 @@ export default function AutobiographyPage() {
     const waitingOnChapters = chapters.length > 0 && chapters.some((c) => c.content === null);
     const chaptersAllWritten = chapters.length > 0 && chapters.every((c) => c.content !== null);
     const waitingOnFinalize = chaptersAllWritten && finalizeTriggered && !autobiography?.final_content;
+    const waitingOnConsolidate = consolidateTriggered && autobiography?.status === "in_progress";
 
-    if (waitingOnChapters || waitingOnFinalize) {
+    if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate) {
       startPolling(() => void load());
     } else {
       stopPolling();
     }
-  }, [chapters, autobiography, finalizeTriggered, load, startPolling, stopPolling]);
+  }, [chapters, autobiography, finalizeTriggered, consolidateTriggered, load, startPolling, stopPolling]);
+
+  async function handleConsolidate() {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await autobiographiesApi.consolidate(user.id);
+      setConsolidateTriggered(true);
+      startPolling(() => void load());
+    } catch {
+      setError("이야기를 정리하지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleGenerateToc() {
     if (!autobiography) return;
@@ -185,10 +205,41 @@ export default function AutobiographyPage() {
         />
       ) : candidates.length > 0 ? (
         <TocSelection candidates={candidates} selecting={selecting} onSelect={handleSelectToc} />
+      ) : autobiography.status === "in_progress" ? (
+        <NeedsConsolidate
+          busy={busy}
+          triggered={consolidateTriggered}
+          onConsolidate={handleConsolidate}
+        />
       ) : (
         <NoTocYet busy={busy} onGenerate={handleGenerateToc} />
       )}
     </main>
+  );
+}
+
+function NeedsConsolidate({
+  busy,
+  triggered,
+  onConsolidate,
+}: {
+  busy: boolean;
+  triggered: boolean;
+  onConsolidate: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-6 rounded-2xl border border-black/10 p-6">
+      <p className="text-lg leading-relaxed text-black">
+        지금까지 나눈 이야기를 하나로 모아 정리할게요. 정리가 끝나면 목차를 만들 수 있어요.
+      </p>
+      {triggered ? (
+        <p className="text-sm text-black/40">이야기를 정리하고 있어요. 이 화면을 열어두면 자동으로 넘어가요...</p>
+      ) : (
+        <Button onClick={onConsolidate} disabled={busy}>
+          {busy ? "시작하는 중..." : "이야기 정리하기"}
+        </Button>
+      )}
+    </div>
   );
 }
 
