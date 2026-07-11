@@ -52,15 +52,23 @@ async def chat_completion(
         kwargs["temperature"] = temperature
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
-    if reasoning_effort is not None:
-        kwargs["reasoning_effort"] = reasoning_effort
     if response_format is not None:
         kwargs["response_format"] = response_format
     if tools is not None:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = tool_choice or "auto"
+    # reasoning_effort/prompt_cache_key는 Upstage(Solar) API가 지원하는 필드지만,
+    # 이 프로젝트에 고정된 openai SDK 버전(1.54.0)의 create()는 아직 이 두 파라미터를
+    # 정식 인자로 알지 못해 그대로 넘기면 TypeError로 죽는다(실제 Solar 채팅 호출에서
+    # 재현, 2026-07-11). SDK 버전과 무관하게 항상 존재하는 extra_body로 우회해 원시
+    # 요청 바디에 실어 보낸다.
+    extra_body: dict[str, Any] = {}
+    if reasoning_effort is not None:
+        extra_body["reasoning_effort"] = reasoning_effort
     if prompt_cache_key is not None:
-        kwargs["prompt_cache_key"] = prompt_cache_key
+        extra_body["prompt_cache_key"] = prompt_cache_key
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     return await client.chat.completions.create(**kwargs)
 
 

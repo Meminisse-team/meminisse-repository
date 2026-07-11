@@ -14,6 +14,16 @@ export type MediaAnalysisTrack = "text_document" | "pure_memory";
 export type AutobiographyStatus = "in_progress" | "consolidated" | "published";
 export type ConsentType = "data_collection" | "disclosure_realname" | "retention_extension";
 export type ConsentGrantedBy = "self" | "guardian";
+export type EventSourceType = "session_chat" | "document";
+export type LifeMilestoneCategory =
+  | "marriage"
+  | "childbirth"
+  | "career_change"
+  | "illness"
+  | "bereavement"
+  | "relocation"
+  | "retirement"
+  | "other";
 
 export interface User {
   id: string;
@@ -70,6 +80,32 @@ export interface TurnResponse {
   user_message: ChatMessage;
   assistant_message: ChatMessage;
   session: InterviewSession;
+}
+
+/** GET /api/v1/interview-sessions/{id} 전용 — 목록 조회(InterviewSession)에는 없는
+ * chat_logs가 포함된다(backend/app/schemas/interview.py:SessionDetailRead). */
+export interface InterviewSessionDetail extends InterviewSession {
+  chat_logs: ChatMessage[];
+}
+
+/** GET /api/v1/events 응답 단위 — '나의 이야기' 탭(backend/app/schemas/event.py:EventRead). */
+export interface EventItem {
+  id: string;
+  source_type: EventSourceType;
+  session_id: string | null;
+  media_asset_id: string | null;
+  life_period: LifePeriod | null;
+  occurred_at_label: string | null;
+  place: string | null;
+  people: string | null;
+  one_line_summary: string;
+  prose_paragraph: string;
+  emotion_tag: string | null;
+  emotion_intensity: number | null;
+  emotion_inferred: boolean;
+  is_must_include: boolean;
+  life_milestone_category: LifeMilestoneCategory | null;
+  created_at: string;
 }
 
 export interface MediaAsset {

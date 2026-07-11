@@ -2,47 +2,50 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import {
-  assistantOpeningLine,
-  dummyChatHistory,
-  type DummyChatMessage,
-} from "@/lib/dummy/chat";
+import { interviewsApi } from "@/lib/api/interviews";
+import type { ChatMessage } from "@/types/api";
 
 interface ChatOverlayProps {
   open: boolean;
   onClose: () => void;
-  /** 이전 대화 기록(더미)이 있으면 이어서 보여준다 — 없으면 첫 인사만 보여준다.
-   * 실제 세션 이어보기는 백엔드에 세션 목록 조회 API가 생기면 교체할 부분. */
-  hasPreviousSession?: boolean;
+  /** 이어갈 열린(open) 세션이 있으면 그 id, 없으면 null(첫 발화 시점에 새로 만든다). */
+  resumeSessionId: string | null;
+  /** 세션이 새로 생성되거나 종료돼 부모(대시보드 미리보기)가 갱신해야 할 때 호출. */
+  onSessionChanged?: (sessionId: string) => void;
 }
 
+const OPENING_LINE = "오늘은 어떤 기억을 함께 떠올려볼까요? 편하게 말씀해주세요.";
+
 /**
- * '오늘의 대화' 클릭 시 뜨는 채팅 컴포넌트. 지금은 발화 내역이 전부 더미다 —
- * 실제 전송은 lib/api/interviews.ts(interviewsApi.create/sendMessage)로 이미
- * 연동 가능하니, sendDummyReply 자리를 그 호출로 바꾸기만 하면 실제 파이프라인에
- * 그대로 연결된다.
+ * '오늘의 대화' 클릭 시 뜨는 채팅 컴포넌트. lib/api/interviews.ts를 통해 실제
+ * 백엔드(Solar 기반 인터뷰 에이전트)와 대화한다 — 더미 데이터는 쓰지 않는다.
+ * resumeSessionId가 있으면 그 세션의 chat_logs를 불러와 이어서 보여주고, 없으면
+ * 첫 메시지를 보낼 때 비로소 세션을 만든다(빈 세션이 계속 쌓이는 것을 방지).
  */
-export function ChatOverlay({ open, onClose, hasPreviousSession = true }: ChatOverlayProps) {
-  const [messages, setMessages] = useState<DummyChatMessage[]>([]);
+export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }: ChatOverlayProps) {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    setMessages(
-      hasPreviousSession
-        ? dummyChatHistory
-        : [
-            {
-              id: "opening",
-              role: "assistant",
-              content: assistantOpeningLine,
-              createdAt: new Date().toISOString(),
-            },
-          ],
-    );
-  }, [open, hasPreviousSession]);
+    setError(null);
+    setSessionId(resumeSessionId);
+    if (!resumeSessionId) {
+      setMessages([]);
+      return;
+    }
+    setLoading(true);
+    interviewsApi
+      .get(resumeSessionId)
+      .then((detail) => setMessages(detail.chat_logs))
+      .catch(() => setError("이전 대화를 불러오지 못했어요."))
+      .finally(() => setLoading(false));
+  }, [open, resumeSessionId]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -50,34 +53,40 @@ export function ChatOverlay({ open, onClose, hasPreviousSession = true }: ChatOv
 
   if (!open) return null;
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const content = input.trim();
     if (!content || sending) return;
-
-    const userMessage: DummyChatMessage = {
-      id: `local-${Date.now()}`,
-      role: "user",
-      content,
-      createdAt: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setSending(true);
-
-    // TODO: interviewsApi.sendMessage(sessionId, content)로 교체.
-    window.setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `local-reply-${Date.now()}`,
-          role: "assistant",
-          content: "말씀해주셔서 감사해요. 그때 기분은 어떠셨나요?",
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+    setError(null);
+    try {
+      let activeSessionId = sessionId;
+      if (!activeSessionId) {
+        const created = await interviewsApi.create({ session_type: "fixed_question" });
+        activeSessionId = created.id;
+        setSessionId(created.id);
+        onSessionChanged?.(created.id);
+      }
+      const turn = await interviewsApi.sendMessage(activeSessionId, content);
+      setMessages((prev) => [...prev, turn.user_message, turn.assistant_message]);
+    } catch {
+      setError("메시지를 보내지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
       setSending(false);
-    }, 900);
+    }
+  }
+
+  async function handleEnd() {
+    if (sessionId) {
+      try {
+        await interviewsApi.complete(sessionId);
+        onSessionChanged?.(sessionId);
+      } catch {
+        // 종료 호출이 실패해도 화면은 닫는다 — 다음에 다시 열면 미완료 세션으로 이어진다.
+      }
+    }
+    onClose();
   }
 
   return (
@@ -86,7 +95,7 @@ export function ChatOverlay({ open, onClose, hasPreviousSession = true }: ChatOv
         <span className="font-serif-kr text-lg text-black">오늘의 대화</span>
         <button
           type="button"
-          onClick={onClose}
+          onClick={() => void handleEnd()}
           className="text-base text-black/60 underline-offset-4 hover:text-black hover:underline"
         >
           대화 종료
@@ -94,6 +103,14 @@ export function ChatOverlay({ open, onClose, hasPreviousSession = true }: ChatOv
       </header>
 
       <div ref={listRef} className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
+        {loading && <p className="text-sm text-black/40">불러오는 중...</p>}
+        {!loading && messages.length === 0 && (
+          <div className="flex justify-start">
+            <p className="max-w-[75%] rounded-2xl bg-black/5 px-4 py-3 text-base leading-relaxed text-black">
+              {OPENING_LINE}
+            </p>
+          </div>
+        )}
         {messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <p
@@ -106,6 +123,7 @@ export function ChatOverlay({ open, onClose, hasPreviousSession = true }: ChatOv
           </div>
         ))}
         {sending && <p className="text-sm text-black/40">Meminisse가 듣고 있어요...</p>}
+        {error && <p className="text-sm text-black/50">{error}</p>}
       </div>
 
       <form onSubmit={handleSubmit} className="flex items-center gap-3 border-t border-black/10 px-6 py-4">

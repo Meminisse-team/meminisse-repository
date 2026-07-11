@@ -107,6 +107,11 @@ async def _run_dual_track_analysis(
         await gateways.events.bulk_update_embeddings([(event.id, vectors[0])])
 
 
+async def list_media_assets(gateways: Gateways, user_id: uuid.UUID) -> list[MediaAssetRecord]:
+    """GET /media-assets(사진첩 탭). created_at 내림차순 — 최근 업로드가 먼저 온다."""
+    return await gateways.media_assets.list_by_user(user_id)
+
+
 async def _check_ocr_validity(extracted_text: str) -> dict:
     return await solar.structured_completion(
         prompts.build_ocr_validity_check_prompt(ocr_text=extracted_text),

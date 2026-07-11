@@ -166,6 +166,16 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
         )
         return [s.session_prose for s in result.scalars().all() if s.session_prose]
 
+    async def list_by_user(self, user_id: UUID) -> list[InterviewSessionRecord]:
+        # chat_logs는 의도적으로 eager load하지 않는다 — 목록 조회에서 전체 대화까지
+        # 함께 내려주면 페이로드가 불필요하게 커진다(interfaces.py 계약 참조).
+        result = await self._session.execute(
+            select(InterviewSession)
+            .where(InterviewSession.user_id == user_id)
+            .order_by(InterviewSession.started_at.desc())
+        )
+        return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
+
     async def _require_session(self, session_id: UUID) -> InterviewSession:
         session_obj = await self._session.get(InterviewSession, session_id)
         if session_obj is None:
@@ -291,6 +301,19 @@ class SqlAlchemyEventGateway(EventGateway):
         result = await self._session.execute(stmt)
         return [_to_event_record(obj) for obj in result.scalars().all()]
 
+    async def list_for_timeline(self, user_id: UUID) -> list[EventRecord]:
+        stmt = (
+            select(Event)
+            .where(
+                Event.user_id == user_id,
+                Event.verified.is_(True),
+                Event.duplicate_of_event_id.is_(None),
+            )
+            .order_by(Event.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return [_to_event_record(obj) for obj in result.scalars().all()]
+
     async def list_mergeable(self, user_id: UUID) -> list[EventRecord]:
         stmt = (
             select(Event)
@@ -392,6 +415,15 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
         obj.analysis_track = analysis_track
         obj.pre_extracted_labels = pre_extracted_labels
         await self._session.flush()
+
+    async def list_by_user(self, user_id: UUID) -> list[MediaAssetRecord]:
+        stmt = (
+            select(MediaAsset)
+            .where(MediaAsset.user_id == user_id)
+            .order_by(MediaAsset.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return [_to_media_asset_record(obj) for obj in result.scalars().all()]
 
 
 class SqlAlchemyAutobiographyGateway(AutobiographyGateway):

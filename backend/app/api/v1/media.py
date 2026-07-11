@@ -50,3 +50,10 @@ async def upload_media_asset(
         content_type=file.content_type or "application/octet-stream",
     )
     return MediaAssetRead.model_validate(asset)
+
+
+@router.get("", response_model=list[MediaAssetRead])
+async def list_media_assets(gateways: GatewaysDep, current_user: CurrentUserDep) -> list[MediaAssetRead]:
+    """본인이 업로드한 미디어 전체를 최근 업로드순으로 반환한다(사진첩 탭)."""
+    assets = await media_service.list_media_assets(gateways, current_user.id)
+    return [MediaAssetRead.model_validate(asset) for asset in assets]

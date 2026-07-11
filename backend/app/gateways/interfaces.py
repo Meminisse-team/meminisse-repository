@@ -113,6 +113,13 @@ class InterviewSessionGateway(ABC):
         """session_prose가 채워진 완료 세션들을 started_at 오름차순으로. Phase 3
         consolidated_content 조립 및 스타일 바이블 생성 입력으로 쓰인다."""
 
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID) -> list[InterviewSessionRecord]:
+        """이 유저의 세션 전체를 started_at 내림차순(최신 순)으로 반환한다
+        (GET /interview-sessions, 대시보드 '오늘의 대화'가 이어갈 세션을 찾는 데 사용).
+        chat_logs는 채우지 않는다 — 목록 조회에서 매 세션의 전체 대화를 함께
+        내려주면 페이로드가 불필요하게 커진다(전체 대화는 get_by_id로 개별 조회)."""
+
 
 class EventGateway(ABC):
     """Layer 1(검증 계층)의 실체. Event/EventRelation을 다룬다."""
@@ -164,6 +171,15 @@ class EventGateway(ABC):
         importance_score 내림차순(null은 마지막)으로 정렬해 반환한다."""
 
     @abstractmethod
+    async def list_for_timeline(self, user_id: UUID) -> list[EventRecord]:
+        """list_unmerged_verified와 필터 조건은 동일(verified=True AND
+        duplicate_of_event_id IS NULL)하지만 정렬 기준이 다르다 — 이쪽은
+        created_at 내림차순(최근에 나눈 대화가 먼저)으로, '나의 이야기' 탭처럼
+        사용자가 시간순으로 훑어보는 화면 전용이다(GET /events). 목차 생성용
+        중요도 정렬(list_unmerged_verified)과 표시용 시간 정렬의 관심사가 달라
+        메서드를 분리했다 — 같은 쿼리에 정렬 파라미터를 얹지 않은 이유."""
+
+    @abstractmethod
     async def list_mergeable(self, user_id: UUID) -> list[EventRecord]:
         """Phase 3 병합 후보 순회 대상: verified=True, 아직 흡수되지 않음, embedding 존재.
         created_at 오름차순(먼저 등장한 이벤트를 canonical으로 우선 채택)."""
@@ -205,6 +221,11 @@ class MediaAssetGateway(ABC):
         pre_extracted_labels: dict | None,
     ) -> None:
         """Phase 1 듀얼 트랙 분석 결과(Document Parse 산출물)를 기록한다."""
+
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID) -> list[MediaAssetRecord]:
+        """이 유저가 업로드한 미디어 전체를 created_at 내림차순(최근 업로드가
+        먼저)으로 반환한다(GET /media-assets, 사진첩 탭)."""
 
 
 class AutobiographyGateway(ABC):
