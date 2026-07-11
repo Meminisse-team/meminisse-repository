@@ -28,6 +28,8 @@ from app.clients import solar
 from app.schemas.sandbox import (
     BookSynopsisRequest,
     BookSynopsisResponse,
+    BookTitleRequest,
+    BookTitleResponse,
     ChapterSynopsisRequest,
     ChapterSynopsisResponse,
     ChapterWritingRequest,
@@ -90,6 +92,7 @@ async def list_sandbox_scenarios() -> dict[str, str]:
         "POST /sandbox/event-merge-judge": "EVENT_MERGE_JUDGE_SYSTEM_PROMPT — Phase 3 이벤트 병합 판정",
         "POST /sandbox/toc-generation": "TOC_GENERATION_SYSTEM_PROMPT — Phase 4 동적 목차 후보 (Structured Outputs)",
         "POST /sandbox/book-synopsis": "BOOK_SYNOPSIS_SYSTEM_PROMPT — Phase 4 책 전체 시놉시스",
+        "POST /sandbox/book-title": "BOOK_TITLE_SYSTEM_PROMPT — Phase 4 책 제목 (표지·PDF에 노출, Structured Outputs)",
         "POST /sandbox/chapter-synopsis": "CHAPTER_SYNOPSIS_SYSTEM_PROMPT — Phase 4 챕터 시놉시스",
         "POST /sandbox/chapter-writing": "CHAPTER_WRITING_SYSTEM_PROMPT — Phase 4 챕터 본문 집필",
         "POST /sandbox/unity-revision": "UNITY_REVISION_SYSTEM_PROMPT — Phase 4 통일성 윤문 패스",
@@ -347,6 +350,24 @@ async def sandbox_book_synopsis(payload: BookSynopsisRequest) -> BookSynopsisRes
         temperature=opts.temperature,
     )
     return BookSynopsisResponse(messages_sent=messages, book_synopsis=response.choices[0].message.content or "")
+
+
+@router.post("/book-title", response_model=BookTitleResponse)
+async def sandbox_book_title(payload: BookTitleRequest) -> BookTitleResponse:
+    """app/services/autobiography_service.py의 _generate_book_title과 동일한 호출."""
+    messages = prompts.build_book_title_prompt(style_bible=payload.style_bible, toc=payload.toc)
+    if payload.system_prompt_override:
+        messages[0] = {"role": "system", "content": payload.system_prompt_override}
+
+    opts = payload.generation or GenerationOverrides()
+    result = await solar.structured_completion(
+        messages,
+        schema_name="book_title",
+        json_schema=prompts.BOOK_TITLE_SCHEMA,
+        model=opts.model or solar.DEFAULT_MODEL,
+        reasoning_effort=opts.reasoning_effort or "low",
+    )
+    return BookTitleResponse(messages_sent=messages, title=result["title"].strip())
 
 
 @router.post("/chapter-synopsis", response_model=ChapterSynopsisResponse)

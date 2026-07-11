@@ -395,6 +395,7 @@ class MockAutobiographyGateway(AutobiographyGateway):
         self,
         autobiography_id: uuid.UUID,
         *,
+        title: str | None = None,
         status: AutobiographyStatus | None = None,
         consolidated_content: str | None = None,
         style_bible: dict | None = None,
@@ -406,6 +407,8 @@ class MockAutobiographyGateway(AutobiographyGateway):
         autobiography = self._store.autobiographies.get(autobiography_id)
         if autobiography is None:
             raise KeyError(f"autobiography not found in mock store: {autobiography_id}")
+        if title is not None:
+            autobiography.title = title
         if status is not None:
             autobiography.status = status
         if consolidated_content is not None:

@@ -526,6 +526,29 @@ def build_book_synopsis_prompt(*, style_bible: str, toc: str) -> list[dict[str, 
     ]
 
 
+BOOK_TITLE_SYSTEM_PROMPT = """\
+아래 스타일 바이블과 전체 목차를 참고해 이 자서전의 제목을 하나 지으세요.
+표지와 실물 책 등에 그대로 노출되는 제목이므로, 구절이나 설명이 아니라
+독자의 눈길을 끄는 짧은 책 제목 하나만 지어야 합니다(부제 없이 12자 내외 권장).
+따옴표나 "제목:" 같은 접두어 없이 순수한 제목 텍스트만 담으세요.
+"""
+
+BOOK_TITLE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+    "additionalProperties": False,
+}
+
+
+def build_book_title_prompt(*, style_bible: str, toc: str) -> list[dict[str, str]]:
+    user_prompt = f"[스타일 바이블]\n{style_bible}\n\n[선택된 목차]\n{toc}"
+    return [
+        {"role": "system", "content": BOOK_TITLE_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 CHAPTER_SYNOPSIS_SYSTEM_PROMPT = """\
 아래 책 전체 시놉시스와 이 챕터에 배정된 사건 목록을 참고해 챕터 시놉시스를
 작성하세요. 챕터 본문 집필의 설계도이므로 사건들의 인과관계와 감정선을

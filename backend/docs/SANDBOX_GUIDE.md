@@ -3,7 +3,7 @@
 `/api/v1/sandbox/*` — `app/agents/prompts.py`의 **모든** 프롬프트를 DB/S3 없이, 인증 없이,
 Swagger UI에서 곧바로 Upstage Solar에 호출해 결과를 확인하는 개발자 전용 도구.
 
-이 문서는 19개 엔드포인트 각각에 대해 **(1) 무엇을 검증하기 위한 것인지, (2) 실제
+이 문서는 20개 엔드포인트 각각에 대해 **(1) 무엇을 검증하기 위한 것인지, (2) 실제
 서비스 코드의 어느 함수와 동일한지, (3) 입력 필드마다 무슨 값을 넣어야 하는지, (4) 응답
 필드가 각각 무엇을 의미하는지**를 빠짐없이 정리한다. 필드 타입/기본값은
 `app/schemas/sandbox.py`, 실제 프롬프트·스키마 정의는 `app/agents/prompts.py`를 기준으로
@@ -37,7 +37,7 @@ uvicorn app.main:app --reload
 ```
 
 브라우저에서 `http://localhost:8000/docs` 접속 → **"sandbox (dev-only, no auth)"** 태그 아래
-19개 엔드포인트가 보인다. `GET /sandbox`를 먼저 호출하면 전체 시나리오 요약을 한 번에 볼 수
+20개 엔드포인트가 보인다. `GET /sandbox`를 먼저 호출하면 전체 시나리오 요약을 한 번에 볼 수
 있다.
 
 ## 모든 요청에 공통되는 필드
@@ -408,6 +408,22 @@ Outputs가 강제된다.
 
 ---
 
+### 12-1. `POST /sandbox/book-title` — 책 제목
+
+**목적**: `autobiography_service._generate_book_title`과 동일한 호출. 표지·PDF 조판에
+그대로 노출되는 책 제목을 생성하는 프롬프트를 검증한다. Structured Outputs로 `{"title":
+string}`만 받는다 — 자유 서술이 아니라 "짧은 책 제목 한 줄"이라는 형식 제약이 핵심이므로,
+문체보다 "출력이 실제로 제목 하나만 담고 있는지"(따옴표·접두어 없이)를 확인하는 데 이
+샌드박스를 쓰면 된다.
+
+**입력 (`BookTitleRequest`)**: 위 12번(`book-synopsis`)과 필드 구성이 완전히 동일하다
+(`style_bible`, `toc`, `system_prompt_override`, `generation` — `reasoning_effort`
+기본값만 `"low"`로 다르다, 제목은 시놉시스보다 훨씬 짧은 산출물이라).
+
+**출력 (`BookTitleResponse`)**: `messages_sent`, `title`(생성된 제목 한 줄).
+
+---
+
 ### 13. `POST /sandbox/chapter-synopsis` — 챕터 시놉시스
 
 **목적**: `autobiography_service._generate_chapter_synopsis`와 동일한 호출. 책 전체
@@ -449,9 +465,9 @@ Outputs가 강제된다.
 **출력 (`ChapterWritingResponse`)**: `messages_sent`, `chapter_content`(생성된 챕터 본문
 전문).
 
-**전체 파이프라인 순서를 그대로 재현하려면**: `toc-generation` → `book-synopsis` →
-`chapter-synopsis` → `chapter-writing` 순으로, 이전 단계의 출력을 다음 단계 입력에 손으로
-이어 넣으면 된다.
+**전체 파이프라인 순서를 그대로 재현하려면**: `toc-generation` → `book-synopsis`/`book-title`
+(입력이 동일하므로 순서 무관, 실제 서비스도 같은 시점에 병렬로 생성) → `chapter-synopsis` →
+`chapter-writing` 순으로, 이전 단계의 출력을 다음 단계 입력에 손으로 이어 넣으면 된다.
 
 ---
 

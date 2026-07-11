@@ -528,10 +528,13 @@ toc_data, style_bible, book_synopsis, final_content, pdf_url, created_at, update
 **내부 동작**: 선택된 후보의 챕터 배열로 `ChapterDraft` 레코드들을 생성한다(`content`는 아직
 `null`). **재호출 시 이전 챕터 초안을 전부 대체**한다(멱등적 — 여러 번 호출해도 안전하며,
 매번 그 시점의 선택으로 덮어써짐). 이어서 스타일 바이블 + 선택된 목차를 바탕으로 책 전체
-시놉시스(`book_synopsis`, 하향식 집필의 최상위 설계도)를 생성한다.
+시놉시스(`book_synopsis`, 하향식 집필의 최상위 설계도)와 표지·PDF 조판에 그대로 노출되는
+책 제목(`title`, Structured Outputs로 12자 내외 단문만 받음)을 함께 생성한다. `toc/select`
+이전에는 `Autobiography.title`을 채울 방법 자체가 없다 — 목차가 확정돼야 비로소 제목을
+지을 컨텍스트(스타일 바이블 + 목차)가 갖춰지기 때문이다.
 
-**응답 (`AutobiographyRead`)**: `toc_data.selected_candidate_index`가 채워지고
-`book_synopsis`에 본문이 채워진 상태.
+**응답 (`AutobiographyRead`)**: `toc_data.selected_candidate_index`, `book_synopsis`,
+`title`이 모두 채워진 상태.
 
 **오류**:
 - 아직 `toc/generate`를 호출하지 않았으면 `409 Conflict`(`"먼저 목차 후보를 생성해야

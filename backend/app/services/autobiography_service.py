@@ -280,25 +280,44 @@ async def select_toc_candidate(
     )
 
     book_synopsis = await _generate_book_synopsis(autobiography, chosen)
+    title = await _generate_book_title(autobiography, chosen)
 
     autobiography = await gateways.autobiographies.update(
-        autobiography_id, toc_data=updated_toc, book_synopsis=book_synopsis
+        autobiography_id, toc_data=updated_toc, book_synopsis=book_synopsis, title=title
     )
     await gateways.commit()
     return autobiography
 
 
-async def _generate_book_synopsis(autobiography: AutobiographyRecord, selected_toc: dict) -> str:
-    style_bible_text = (autobiography.style_bible or {}).get("content", "")
-    toc_text = "\n".join(
+def _toc_text(selected_toc: dict) -> str:
+    return "\n".join(
         f"{chapter['chapter_index']}. {chapter['title']} ({', '.join(chapter.get('theme_keywords', []))})"
         for chapter in selected_toc["chapters"]
     )
+
+
+async def _generate_book_synopsis(autobiography: AutobiographyRecord, selected_toc: dict) -> str:
+    style_bible_text = (autobiography.style_bible or {}).get("content", "")
     response = await solar.chat_completion(
-        prompts.build_book_synopsis_prompt(style_bible=style_bible_text, toc=toc_text),
+        prompts.build_book_synopsis_prompt(style_bible=style_bible_text, toc=_toc_text(selected_toc)),
         reasoning_effort="medium",
     )
     return response.choices[0].message.content or ""
+
+
+async def _generate_book_title(autobiography: AutobiographyRecord, selected_toc: dict) -> str:
+    """표지·PDF 조판(app/services/pdf_service.py)에 그대로 노출되는 책 제목.
+    toc/select 이전에는 Autobiography.title이 채워질 방법이 아예 없었다 — 목차가
+    확정돼야 비로소 책 전체를 관통하는 제목을 지을 컨텍스트(스타일 바이블 + 목차)가
+    갖춰지므로, book_synopsis와 같은 시점에 함께 생성한다."""
+    style_bible_text = (autobiography.style_bible or {}).get("content", "")
+    result = await solar.structured_completion(
+        prompts.build_book_title_prompt(style_bible=style_bible_text, toc=_toc_text(selected_toc)),
+        schema_name="book_title",
+        json_schema=prompts.BOOK_TITLE_SCHEMA,
+        reasoning_effort="low",
+    )
+    return result["title"].strip()
 
 
 async def _retrieve_events_for_chapter(

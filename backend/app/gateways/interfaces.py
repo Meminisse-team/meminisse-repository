@@ -243,6 +243,7 @@ class AutobiographyGateway(ABC):
         self,
         autobiography_id: UUID,
         *,
+        title: str | None = None,
         status: AutobiographyStatus | None = None,
         consolidated_content: str | None = None,
         style_bible: dict | None = None,

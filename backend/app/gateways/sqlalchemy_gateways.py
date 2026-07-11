@@ -453,6 +453,7 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
         self,
         autobiography_id: UUID,
         *,
+        title: str | None = None,
         status: AutobiographyStatus | None = None,
         consolidated_content: str | None = None,
         style_bible: dict | None = None,
@@ -464,6 +465,8 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
         obj = await self._session.get(Autobiography, autobiography_id)
         if obj is None:
             raise KeyError(f"autobiography not found: {autobiography_id}")
+        if title is not None:
+            obj.title = title
         if status is not None:
             obj.status = status
         if consolidated_content is not None:

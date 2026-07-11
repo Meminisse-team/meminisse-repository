@@ -293,6 +293,23 @@ class BookSynopsisResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# 11-1. Phase 4 — 책 제목 (표지·PDF 조판에 노출)                                #
+# --------------------------------------------------------------------------- #
+
+
+class BookTitleRequest(BaseModel):
+    style_bible: str = Field(..., examples=["간결하고 담담한 문체. 가족과 성실함을 중시함."])
+    toc: str = Field(..., examples=["1. 어린 시절 (유년기)\n2. 청춘의 방황 (청년기)"])
+    system_prompt_override: str | None = Field(None, description="BOOK_TITLE_SYSTEM_PROMPT 대신 사용할 임시 문구")
+    generation: GenerationOverrides | None = None
+
+
+class BookTitleResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    title: str
+
+
+# --------------------------------------------------------------------------- #
 # 12. Phase 4 — 챕터 시놉시스                                                  #
 # --------------------------------------------------------------------------- #
 

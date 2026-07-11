@@ -62,6 +62,7 @@ _STRUCTURED_RESPONSES = {
             {"chapters": [{"chapter_index": 1, "title": "1장. 대안", "theme_keywords": ["대안"]}]},
         ]
     },
+    "book_title": {"title": "부산의 여름"},
     "fact_reextraction": {"facts": [{"fact_type": "person", "raw_text": "김철수"}]},
     "ner_extraction": {"people": [{"name": "김철수", "relation_to_narrator": "친구"}]},
     "third_party_risk": {
@@ -136,6 +137,7 @@ async def test_full_phase3_4_pipeline_runs_end_to_end() -> None:
 
         autobiography = await autobiography_service.select_toc_candidate(gateways, autobiography.id, 0)
         assert autobiography.book_synopsis
+        assert autobiography.title == "부산의 여름"
 
         chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
         assert len(chapters) == 1
