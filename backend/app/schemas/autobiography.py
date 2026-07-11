@@ -17,6 +17,7 @@ class AutobiographyRead(BaseModel):
     style_bible: dict | None
     book_synopsis: str | None
     final_content: str | None
+    pdf_url: str | None
     created_at: datetime
     updated_at: datetime
 

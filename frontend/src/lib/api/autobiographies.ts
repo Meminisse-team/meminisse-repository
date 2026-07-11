@@ -27,4 +27,8 @@ export const autobiographiesApi = {
   /** 202 — 마찬가지로 비동기. 완료되면 get()의 final_content가 채워진다. */
   finalize: (autobiographyId: string) =>
     apiClient.post<{ detail: string }>(`/api/v1/autobiographies/${autobiographyId}/finalize`),
+  /** 202 — 국판(A5) PDF 조판을 큐잉한다. final_content가 없으면 워커에서 실패한다.
+   * 완료되면 get()의 pdf_url이 채워진다. */
+  generatePdf: (autobiographyId: string) =>
+    apiClient.post<{ detail: string }>(`/api/v1/autobiographies/${autobiographyId}/pdf/generate`),
 };

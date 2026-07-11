@@ -46,6 +46,10 @@ class Autobiography(Base):
     # Phase 4 1단계 산출물: 책 전체 시놉시스. 챕터 순차 생성이 아닌 하향식 집필의 설계도.
     book_synopsis = Column(Text, nullable=True)
     final_content = Column(Text, nullable=True)
+    # Phase 5: Jinja2+WeasyPrint로 조판한 국판(A5) PDF의 S3 URL. final_content가
+    # 채워진 뒤에만 생성 가능하다(app/services/pdf_service.py 참조). POD(주문형 인쇄)
+    # 발주 연계는 범위 밖 — 이 필드는 완성된 PDF 파일 위치까지만 담당한다.
+    pdf_url = Column(String(2048), nullable=True)
     # 최종 자서전 확정 시점에 설정. 이 날짜 이후 Layer 0 원문 로그(chat_logs 등)는
     # 사용자 옵트인이 없는 한 자동 삭제 대상이 된다(개인정보보호법상 최소보유 원칙, 기획안 5절).
     raw_log_retention_until = Column(Date, nullable=True)

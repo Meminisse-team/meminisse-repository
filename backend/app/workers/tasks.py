@@ -24,7 +24,7 @@ from typing import Any
 
 from app.database import engine
 from app.gateways.factory import gateways_context
-from app.services import autobiography_service, event_extraction_service
+from app.services import autobiography_service, event_extraction_service, pdf_service
 from app.workers.celery_app import celery_app
 
 
@@ -79,3 +79,17 @@ def finalize_manuscript(autobiography_id: str) -> None:
 async def _finalize_manuscript_async(autobiography_id: uuid.UUID) -> None:
     async with gateways_context() as gateways:
         await autobiography_service.finalize_manuscript(gateways, autobiography_id)
+
+
+@celery_app.task(name="generate_manuscript_pdf")
+def generate_manuscript_pdf(autobiography_id: str) -> None:
+    """Phase 5 실물 출판: 최종 윤문(final_content) 완료 후 Jinja2+WeasyPrint로 국판
+    PDF를 조판해 S3에 올린다. WeasyPrint 렌더링 자체는 CPU 바운드 동기 작업이라
+    Solar 호출과 달리 네트워크 대기는 짧지만, 이벤트/미디어 조회는 여전히 실제
+    DB·S3 I/O이므로 다른 태스크와 동일하게 워커에 위임한다."""
+    _run(_generate_manuscript_pdf_async(uuid.UUID(autobiography_id)))
+
+
+async def _generate_manuscript_pdf_async(autobiography_id: uuid.UUID) -> None:
+    async with gateways_context() as gateways:
+        await pdf_service.generate_manuscript_pdf(gateways, autobiography_id)

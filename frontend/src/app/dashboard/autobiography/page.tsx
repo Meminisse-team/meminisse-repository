@@ -26,6 +26,7 @@ export default function AutobiographyPage() {
   const [busy, setBusy] = useState(false);
   const [consolidateTriggered, setConsolidateTriggered] = useState(false);
   const [finalizeTriggered, setFinalizeTriggered] = useState(false);
+  const [pdfTriggered, setPdfTriggered] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selecting, setSelecting] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -59,6 +60,7 @@ export default function AutobiographyPage() {
     }
     if (bio.final_content) setFinalizeTriggered(false);
     if (bio.status !== "in_progress") setConsolidateTriggered(false);
+    if (bio.pdf_url) setPdfTriggered(false);
     return bio;
   }, [user]);
 
@@ -78,13 +80,23 @@ export default function AutobiographyPage() {
     const chaptersAllWritten = chapters.length > 0 && chapters.every((c) => c.content !== null);
     const waitingOnFinalize = chaptersAllWritten && finalizeTriggered && !autobiography?.final_content;
     const waitingOnConsolidate = consolidateTriggered && autobiography?.status === "in_progress";
+    const waitingOnPdf = pdfTriggered && !autobiography?.pdf_url;
 
-    if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate) {
+    if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate || waitingOnPdf) {
       startPolling(() => void load());
     } else {
       stopPolling();
     }
-  }, [chapters, autobiography, finalizeTriggered, consolidateTriggered, load, startPolling, stopPolling]);
+  }, [
+    chapters,
+    autobiography,
+    finalizeTriggered,
+    consolidateTriggered,
+    pdfTriggered,
+    load,
+    startPolling,
+    stopPolling,
+  ]);
 
   async function handleConsolidate() {
     if (!user) return;
@@ -166,6 +178,21 @@ export default function AutobiographyPage() {
     }
   }
 
+  async function handleGeneratePdf() {
+    if (!autobiography) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await autobiographiesApi.generatePdf(autobiography.id);
+      setPdfTriggered(true);
+      startPolling(() => void load());
+    } catch {
+      setError("PDF를 만들지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="px-6 pb-10 pt-14">
@@ -193,7 +220,14 @@ export default function AutobiographyPage() {
       {error && <p className="mb-6 text-base text-black/60">{error}</p>}
 
       {autobiography.final_content ? (
-        <FinalManuscript title={autobiography.title} content={autobiography.final_content} />
+        <FinalManuscript
+          title={autobiography.title}
+          content={autobiography.final_content}
+          pdfUrl={autobiography.pdf_url}
+          busy={busy}
+          pdfTriggered={pdfTriggered}
+          onGeneratePdf={handleGeneratePdf}
+        />
       ) : selectedIndex !== null ? (
         <ChapterProgress
           chapters={chapters}
@@ -353,10 +387,49 @@ function ChapterProgress({
   );
 }
 
-function FinalManuscript({ title, content }: { title: string | null; content: string }) {
+function FinalManuscript({
+  title,
+  content,
+  pdfUrl,
+  busy,
+  pdfTriggered,
+  onGeneratePdf,
+}: {
+  title: string | null;
+  content: string;
+  pdfUrl: string | null;
+  busy: boolean;
+  pdfTriggered: boolean;
+  onGeneratePdf: () => void;
+}) {
   return (
     <article className="flex flex-col gap-6">
       <h2 className="font-serif-kr text-xl text-black">{title ?? "제목 없음"}</h2>
+
+      <div className="rounded-2xl border border-black/10 p-6">
+        {pdfUrl ? (
+          <a
+            href={pdfUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="block w-full rounded-lg bg-black px-6 py-3 text-center text-lg font-medium text-white transition-colors hover:bg-black/80"
+          >
+            책 PDF 열어보기
+          </a>
+        ) : (
+          <>
+            <Button onClick={onGeneratePdf} disabled={busy || pdfTriggered} className="w-full">
+              {pdfTriggered ? "책으로 만드는 중..." : busy ? "시작하는 중..." : "책으로 만들기"}
+            </Button>
+            {pdfTriggered && (
+              <p className="mt-3 text-sm text-black/40">
+                국판(A5) 크기로 조판하고 있어요. 이 화면을 열어두면 완료되는 대로 자동으로 갱신돼요.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
       <p className="whitespace-pre-wrap text-base leading-loose text-black/80">{content}</p>
     </article>
   );

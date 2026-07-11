@@ -248,6 +248,7 @@ class AutobiographyRecord:
     style_bible: dict | None = None
     book_synopsis: str | None = None
     final_content: str | None = None
+    pdf_url: str | None = None
 
 
 @dataclass

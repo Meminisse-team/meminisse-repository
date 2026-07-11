@@ -152,6 +152,8 @@ export interface Autobiography {
   book_synopsis: string | null;
   /** finalize 완료 후에만 채워지는 전체 원고(챕터 구분 없는 단일 텍스트). */
   final_content: string | null;
+  /** pdf/generate 완료 후에만 채워지는 조판된 국판(A5) PDF의 S3 URL. */
+  pdf_url: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -126,6 +126,22 @@ async def finalize(
     return {"detail": "Manuscript finalization queued"}
 
 
+@router.post("/{autobiography_id}/pdf/generate", status_code=status.HTTP_202_ACCEPTED)
+async def generate_pdf(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> dict:
+    """실물 출판용 국판(A5) PDF 조판 트리거. final_content(최종 윤문)가 아직이면
+    워커 안에서 ValueError로 실패한다 — 다른 태스크들과 동일하게 사전 조회로
+    막지 않고 202만 반환한다(여기서 매번 finalize 여부를 확인하는 것도 가능하지만,
+    "존재 확인은 API에서, 선행 단계 완료 여부는 서비스 레이어에서"라는 기존
+    write_chapter/finalize의 검증 분담 방식을 그대로 따른다)."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    from app.workers.tasks import generate_manuscript_pdf as generate_pdf_task
+
+    generate_pdf_task.delay(str(autobiography_id))
+    return {"detail": "Manuscript PDF generation queued"}
+
+
 @router.get("/{autobiography_id}/characters", response_model=list[CharacterRead])
 async def list_characters(
     autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep

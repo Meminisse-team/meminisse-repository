@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ title or "제목 없음" }}</title>
+<style>
+  @font-face {
+    font-family: "Manuscript Serif";
+    src: url("{{ font_url }}");
+    font-weight: normal;
+    font-style: normal;
+  }
+
+  /* 국판(A5) + 도련(bleed) 3mm + 제본 안쪽 여백을 바깥보다 넓게(inside > outside). */
+  @page {
+    size: 148mm 210mm;
+    bleed: 3mm;
+    marks: crop;
+    margin: 20mm 15mm 20mm 20mm;
+    @bottom-center {
+      content: counter(page);
+      font-family: "Manuscript Serif", serif;
+      font-size: 9pt;
+      color: #555;
+    }
+  }
+
+  @page :first {
+    @bottom-center { content: ""; }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: "Manuscript Serif", serif;
+    font-size: 11pt;
+    line-height: 1.9;
+    color: #1a1a1a;
+    /* 한글 금칙(줄바꿈이 단어 중간에서 일어나지 않도록) */
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    orphans: 3;
+    widows: 3;
+  }
+
+  .cover {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    break-after: page;
+  }
+  .cover h1 {
+    font-size: 26pt;
+    margin-bottom: 12mm;
+  }
+  .cover .subtitle {
+    font-size: 11pt;
+    color: #555;
+    max-width: 100mm;
+    line-height: 1.8;
+  }
+
+  .toc {
+    break-after: page;
+  }
+  .toc h2 {
+    font-size: 16pt;
+    margin-bottom: 10mm;
+  }
+  .toc ol {
+    list-style: none;
+    padding: 0;
+  }
+  .toc li {
+    display: flex;
+    justify-content: space-between;
+    gap: 4mm;
+    font-size: 11pt;
+    margin-bottom: 4mm;
+    border-bottom: 1px dotted #999;
+  }
+
+  .chapter {
+    break-before: page;
+  }
+  .chapter h2 {
+    font-size: 15pt;
+    margin-bottom: 8mm;
+    text-align: center;
+  }
+  .chapter .photo {
+    display: block;
+    max-width: 100%;
+    max-height: 70mm;
+    margin: 0 auto 6mm auto;
+    object-fit: cover;
+  }
+  .chapter p {
+    margin: 0 0 4mm 0;
+    text-indent: 1em;
+    break-inside: avoid;
+  }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <h1>{{ title or "나의 이야기" }}</h1>
+  {% if book_synopsis %}
+  <p class="subtitle">{{ book_synopsis }}</p>
+  {% endif %}
+</section>
+
+<section class="toc">
+  <h2>목차</h2>
+  <ol>
+    {% for chapter in chapters %}
+    <li><span>{{ chapter.chapter_index }}장. {{ chapter.title or "" }}</span></li>
+    {% endfor %}
+  </ol>
+</section>
+
+{% for chapter in chapters %}
+<section class="chapter">
+  <h2>{{ chapter.chapter_index }}장. {{ chapter.title or "" }}</h2>
+  {% if chapter.photo_url %}
+  <img class="photo" src="{{ chapter.photo_url }}" alt="">
+  {% endif %}
+  {% for paragraph in chapter.paragraphs %}
+  <p>{{ paragraph }}</p>
+  {% endfor %}
+</section>
+{% endfor %}
+
+</body>
+</html>
