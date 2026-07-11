@@ -13,10 +13,15 @@ from __future__ import annotations
 import uuid
 
 from app.agents import prompts
-from app.clients import embeddings, solar
+from app.clients import embeddings, nli, solar
 from app.gateways.dto import EventCreateData, EventRecord, EventRelationCreateData
 from app.gateways.factory import Gateways
 from app.models.enums import EventSourceType
+
+# 이 값을 넘는 모순(contradiction) 확률이 하나의 문장에서라도 나오면 왜곡으로 판정한다.
+# 임계값을 낮게 잡을수록(민감) 재조립 품질 이슈를 더 많이 잡아내지만 오탐도 늘어난다 —
+# 실사용 데이터로 캘리브레이션 전까지의 잠정값.
+_DISTORTION_CONTRADICTION_THRESHOLD = 0.5
 
 
 async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -> list[EventRecord]:
@@ -32,9 +37,10 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     session_prose = prose_response.choices[0].message.content or ""
     await gateways.sessions.set_session_prose(session_id, session_prose)
 
-    if not _passes_distortion_check(original_turns=chat_turns, reassembled_prose=session_prose):
+    if not await _passes_distortion_check(original_turns=chat_turns, reassembled_prose=session_prose):
         # 왜곡 임계값 초과: 자동 재처리 대신 최소 동작으로 세션만 저장하고 이벤트 추출은
-        # 보류한다(진짜 NLI 모델이 붙기 전까지는 항상 통과하므로 이 분기는 도달하지 않는다).
+        # 보류한다. TODO(향후 작업): 지금은 조용히 스킵만 하는데, 실제로는 재조립을
+        # 재시도하거나 최종 검토 화면에 "이 세션은 검증 보류" 플래그를 노출해야 한다.
         await gateways.commit()
         return []
 
@@ -54,14 +60,29 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     return events
 
 
-def _passes_distortion_check(*, original_turns: list[dict[str, str]], reassembled_prose: str) -> bool:
+async def _passes_distortion_check(
+    *, original_turns: list[dict[str, str]], reassembled_prose: str
+) -> bool:
     """
-    TODO(미구현): 공개 한국어 NLI 모델 로컬 추론으로 재조립본-원문 함의 검증을 수행해야 한다
-    (기획안: "왜곡 자동 탐지(NLI 함의 검증)... 모순확률이 임계값 초과 시 자동 재처리/플래그").
-    로컬 모델 서빙 방식(별도 프로세스/온디바이스 추론)은 ML 담당과 협의가 필요해 지금은
-    항상 통과시키는 자리표시자로 둔다. 이 게이트가 실제로 동작하기 전까지 verified=true
-    승격은 재조립 품질에 대한 보증이 아니라는 점에 유의할 것.
+    왜곡 자동 탐지(NLI 함의 검증, 기획안: "재조립본과 원문 간... 모순확률이 임계값
+    초과 시 자동 재처리/플래그"). 재조립본(reassembled_prose)은 사용자 발화만 이어
+    붙인 것이므로(app/agents/prompts.py PROSE_REASSEMBLY_SYSTEM_PROMPT 참조),
+    원문 쪽 비교 대상도 assistant 턴을 제외한 사용자 발화만 모아 premise로 삼는다.
+
+    재조립본을 문장 단위로 쪼개 각 문장이 원문과 모순(contradiction)되는지 개별
+    판정한다 — 문장 하나라도 임계값을 넘는 모순이면 전체를 왜곡으로 판정한다(하나의
+    문장이 지어낸 내용이어도 그 세션 전체의 신뢰도를 의심해야 하므로).
     """
+    original_text = "\n".join(
+        turn["content"] for turn in original_turns if turn.get("role") == "user"
+    )
+    if not original_text.strip() or not reassembled_prose.strip():
+        return True  # 비교할 원문/재조립본이 없으면 판정 자체가 불가능 — 통과 처리
+
+    for sentence in nli.split_sentences(reassembled_prose):
+        result = await nli.classify_entailment(premise=original_text, hypothesis=sentence)
+        if result["contradiction"] > _DISTORTION_CONTRADICTION_THRESHOLD:
+            return False
     return True
 
 
