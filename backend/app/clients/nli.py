@@ -71,3 +71,38 @@ async def classify_entailment(*, premise: str, hypothesis: str) -> dict[str, flo
     예: {"entailment": 0.91, "neutral": 0.08, "contradiction": 0.01}
     """
     return await asyncio.to_thread(_classify_sync, premise, hypothesis)
+
+
+def _classify_batch_sync(premise: str, hypotheses: list[str]) -> list[dict[str, float]]:
+    import torch
+
+    tokenizer, model = _load()
+    inputs = tokenizer(
+        [premise] * len(hypotheses),
+        hypotheses,
+        return_tensors="pt",
+        truncation=True,
+        max_length=_MAX_LENGTH,
+        padding=True,
+    )
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    probs = torch.softmax(logits, dim=-1)
+    return [
+        {model.config.id2label[i]: float(p) for i, p in enumerate(row)} for row in probs
+    ]
+
+
+async def classify_entailment_batch(
+    *, premise: str, hypotheses: list[str]
+) -> list[dict[str, float]]:
+    """classify_entailment을 문장 수만큼 순차 호출하면 문장당 모델 forward pass
+    오버헤드가 그대로 곱해져 느리다(CPU 환경에서 문장 하나에 수 초~10여 초 소요를
+    실측, 2026-07-12 — evals/run_benchmark.py 합성 페르소나 벤치마크 파일럿 중
+    발견). 같은 premise에 대해 여러 hypothesis를 한 배치로 묶어 forward pass
+    한 번으로 처리하면 토큰화·모델 오버헤드가 문장 수가 아니라 배치 1회로
+    상각되어 훨씬 빠르다. event_extraction_service._passes_distortion_check처럼
+    "같은 premise, 여러 문장"을 검증하는 호출부는 이 배치 버전을 써야 한다."""
+    if not hypotheses:
+        return []
+    return await asyncio.to_thread(_classify_batch_sync, premise, hypotheses)

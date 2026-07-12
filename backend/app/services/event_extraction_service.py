@@ -79,11 +79,12 @@ async def _passes_distortion_check(
     if not original_text.strip() or not reassembled_prose.strip():
         return True  # 비교할 원문/재조립본이 없으면 판정 자체가 불가능 — 통과 처리
 
-    for sentence in nli.split_sentences(reassembled_prose):
-        result = await nli.classify_entailment(premise=original_text, hypothesis=sentence)
-        if result["contradiction"] > _DISTORTION_CONTRADICTION_THRESHOLD:
-            return False
-    return True
+    sentences = nli.split_sentences(reassembled_prose)
+    # 문장마다 개별 호출하면 모델 forward pass 오버헤드가 문장 수만큼 곱해져
+    # 느리다(nli.classify_entailment_batch 문서 참조) — 같은 premise(원문)에 여러
+    # hypothesis(문장)를 한 배치로 묶어 한 번에 판정한다.
+    results = await nli.classify_entailment_batch(premise=original_text, hypotheses=sentences)
+    return all(result["contradiction"] <= _DISTORTION_CONTRADICTION_THRESHOLD for result in results)
 
 
 async def _persist_events(

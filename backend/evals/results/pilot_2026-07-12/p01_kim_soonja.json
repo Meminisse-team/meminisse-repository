@@ -1,0 +1,304 @@
+{
+  "persona_id": "p01_kim_soonja",
+  "persona_name": "김순자",
+  "birth_year": 1955,
+  "hometown": "부산",
+  "life_period": "childhood",
+  "life_period_label": "유년기 (1960년대)",
+  "ground_truth": {
+    "life_period": "childhood",
+    "age_at_time": 8,
+    "life_period_label": "유년기 (1960년대)",
+    "place": "부산 자갈치시장 근처 셋방",
+    "time": "1963년 겨울",
+    "event": "아버지의 포목 장사가 부도나 빚쟁이들을 피해 야반도주하듯 이사했다. 어머니가 그날부터 삯바느질로 다섯 식구를 먹여 살렸다.",
+    "emotion": "불안하면서도 어머니에 대한 존경심",
+    "values": "어떤 상황에서도 가족을 포기하지 않는다",
+    "companion": "어머니와 남동생 둘",
+    "gratitude": "밤새 바느질하던 어머니",
+    "regret": "철없이 그때는 어머니 고생을 몰랐던 것",
+    "turning_point": null,
+    "pride": null,
+    "belief": null,
+    "message": null,
+    "withhold_on_first_turn": [
+      "companion",
+      "values"
+    ]
+  },
+  "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "어, 그날은 눈이 많이 내리던 날이었어. 아버지는 포목 장사가 부도나서 빚쟁이들한테 쫓기고, 어머니는 삯바느질을 시작하셨지. 우리 셋은 셋방에서 조용히 짐을 쌓아서 도망갔어. 동생들은 겁에 질려 울던 걸, 어머니가 조용히 달래주셨지."
+    },
+    {
+      "role": "assistant",
+      "content": "그 상황에서 어머니와 아버지가 가족의 안전을 지키기 위해 어떤 중요한 결정을 내려야 한다고 느꼈나요?"
+    },
+    {
+      "role": "user",
+      "content": "어머니가 삯바느질을 시작하시면서, 우리 가족은 셋방에서 조용히 짐을 쌓았지. 아버지는 빚쟁이들이 오지 않을까 봐 밤새 창문을 닫아두셨고, 어머니는 동생들을 다독이시면서 길을 나섰어. 그때는 그냥 다 같이 숨죽이고 움직여야 한다는 생각밖에 없었어."
+    },
+    {
+      "role": "assistant",
+      "content": "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+    }
+  ],
+  "session_prose": "어, 그날은 눈이 많이 내리던 날이었어. 아버지는 포목 장사가 부도나서 빚쟁이들한테 쫓기고, 어머니는 삯바느질을 시작하셨지. 우리 셋은 셋방에서 조용히 짐을 쌓아서 도망갔어. 동생들은 겁에 질려 울던 걸, 어머니가 조용히 달래주셨지.\n\n어머니가 삯바느질을 시작하시면서, 우리 가족은 셋방에서 조용히 짐을 쌓았지. 아버지는 빚쟁이들이 오지 않을까 봐 밤새 창문을 닫아두셨고, 어머니는 동생들을 다독이시면서 길을 나섰어. 그때는 그냥 다 같이 숨죽이고 움직여야 한다는 생각밖에 없었어.",
+  "followup_count_used": 1,
+  "extracted_events": [
+    {
+      "id": "8401efb1-bf2c-495f-8e63-989d7b06a277",
+      "user_id": "fd89785c-1245-45ca-a37c-6779e31a53f2",
+      "source_type": "session_chat",
+      "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "어, 그날은 눈이 많이 내리던 날이었어."
+      },
+      "life_period": null,
+      "occurred_at_label": "눈이 많이 내리던 날",
+      "place": null,
+      "people": "혼자",
+      "one_line_summary": "눈이 많이 내린 날",
+      "prose_paragraph": "어, 그날은 눈이 많이 내리던 날이었어.",
+      "emotion_tag": null,
+      "emotion_intensity": null,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": null,
+        "reason": null,
+        "process": null,
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "narrator"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 1.0
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:04:47.723425+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "468d2fc2-1246-4c4b-89ff-4b5bb1835f49",
+      "user_id": "fd89785c-1245-45ca-a37c-6779e31a53f2",
+      "source_type": "session_chat",
+      "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "아버지는 포목 장사가 부도나서 빚쟁이들한테 쫓기고"
+      },
+      "life_period": null,
+      "occurred_at_label": "눈이 많이 내리던 날",
+      "place": null,
+      "people": "아버지",
+      "one_line_summary": "아버지가 포목 장사가 부도나서 빚쟁이들한테 쫓김",
+      "prose_paragraph": "아버지는 포목 장사가 부도나서 빚쟁이들한테 쫓기고",
+      "emotion_tag": null,
+      "emotion_intensity": null,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": null,
+        "reason": "포목 장사가 부도나서",
+        "process": "빚쟁이들한테 쫓김",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "other_person"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 1.0
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:04:47.723425+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "e144023b-9d98-41df-889c-23cde7b76d61",
+      "user_id": "fd89785c-1245-45ca-a37c-6779e31a53f2",
+      "source_type": "session_chat",
+      "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "어머니는 삯바느질을 시작하셨지."
+      },
+      "life_period": null,
+      "occurred_at_label": "눈이 많이 내리던 날",
+      "place": null,
+      "people": "어머니",
+      "one_line_summary": "어머니가 삯바느질을 시작함",
+      "prose_paragraph": "어머니는 삯바느질을 시작하셨지.",
+      "emotion_tag": null,
+      "emotion_intensity": null,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": null,
+        "reason": "아버지의 부도와 빚 때문에 생계를 유지하기 위함",
+        "process": "삯바느질을 시작",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "other_person"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 1.0
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:04:47.723425+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "1248e6fe-2a87-413c-a17e-490b88409c16",
+      "user_id": "fd89785c-1245-45ca-a37c-6779e31a53f2",
+      "source_type": "session_chat",
+      "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "우리 셋은 셋방에서 조용히 짐을 쌓아서 도망갔어."
+      },
+      "life_period": null,
+      "occurred_at_label": "눈이 많이 내리던 날",
+      "place": "셋방",
+      "people": "동생들",
+      "one_line_summary": "가족이 셋방에서 짐을 쌓고 도망",
+      "prose_paragraph": "우리 셋은 셋방에서 조용히 짐을 쌓아서 도망갔어.",
+      "emotion_tag": null,
+      "emotion_intensity": null,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": null,
+        "reason": "빚쟁이를 피하기 위한 준비",
+        "process": "셋방에서 짐을 쌓고 도망",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "narrator"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 1.0
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:04:47.723425+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "41e29b23-e04a-4abd-80c3-723f570ede00",
+      "user_id": "fd89785c-1245-45ca-a37c-6779e31a53f2",
+      "source_type": "session_chat",
+      "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "동생은 겁에 질려 울던 걸, 어머니가 조용히 달래주셨지."
+      },
+      "life_period": null,
+      "occurred_at_label": "눈이 많이 내리던 날",
+      "place": null,
+      "people": "동생들",
+      "one_line_summary": "어머니가 동생들을 다독이며 길을 나섬",
+      "prose_paragraph": "동생은 겁에 질려 울던 걸, 어머니가 조용히 달래주셨지.",
+      "emotion_tag": null,
+      "emotion_intensity": null,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": null,
+        "reason": "동생을 진정시키고 가족의 안전을 유지하기 위해",
+        "process": "동생을 다독이며 길을 나섬",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "other_person"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 1.0
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:04:47.723425+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "e0a39c78-0da7-4b4d-9ccf-49bcaa82ce5d",
+      "user_id": "fd89785c-1245-45ca-a37c-6779e31a53f2",
+      "source_type": "session_chat",
+      "session_id": "2327c6e7-6d94-4735-99ed-09372d7aa759",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "아버지는 빚쟁이들이 오지 않을까 봐 밤새 창문을 닫아두셨고, 어머니는 동생들을 다독이시면서 길을 나섰어."
+      },
+      "life_period": null,
+      "occurred_at_label": "눈이 많이 내리던 날",
+      "place": null,
+      "people": "아버지, 동생들, 어머니",
+      "one_line_summary": "아버지와 어머니가 각각 탈출 준비를 함",
+      "prose_paragraph": "아버지는 빚쟁이들이 오지 않을까 봐 밤새 창문을 닫아두셨고, 어머니는 동생들을 다독이시면서 길을 나섰어.",
+      "emotion_tag": null,
+      "emotion_intensity": null,
+      "emotion_inferred": true,
+      "labels": {
+        "values_reflected": null,
+        "reason": "빚쟁이의 침입을 방지하고 가족을 안전하게 이동시키기 위해",
+        "process": "아버지는 창문을 밤새 닫음, 어머니는 동생을 다독이며 길을 나섬",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "other_person"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 1.0
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:04:47.723425+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    }
+  ]
+}

@@ -1,0 +1,220 @@
+{
+  "persona_id": "p02_park_youngsoo",
+  "persona_name": "박영수",
+  "birth_year": 1948,
+  "hometown": "전남 목포",
+  "life_period": "youth",
+  "life_period_label": "청년기 (1960년대 말)",
+  "ground_truth": {
+    "life_period": "youth",
+    "age_at_time": 21,
+    "life_period_label": "청년기 (1960년대 말)",
+    "place": "서울 구로공단 방직공장",
+    "time": "1969년",
+    "event": "목포에서 상경해 방직공장 야간조로 일하며, 새벽에 잠깐 눈을 붙이고 낮에는 검정고시 학원엘 다녔다. 손가락이 다 갈라지도록 실을 만졌다.",
+    "emotion": "고달팠지만 배움에 대한 갈망이 컸다",
+    "values": "배움에는 나이도 형편도 상관없다",
+    "companion": "같은 기숙사 동료 두 명",
+    "gratitude": null,
+    "regret": null,
+    "turning_point": "야학 선생님이 '너는 계속 공부해야 할 사람'이라 해준 말",
+    "pride": "결국 검정고시에 붙었을 때",
+    "belief": null,
+    "message": null,
+    "withhold_on_first_turn": [
+      "emotion",
+      "pride"
+    ]
+  },
+  "session_id": "ff06f0c9-fddc-4f43-b993-92aedf352e3f",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "아, 1969년… 그때는 새벽에 구로공단 방직공장에서 야간조를 마치고, 기숙사에서 잠깐 눈을 붙인 뒤에 낮에는 검정고시 학원을 다녔어요. 손가락 끝이 실에 긁혀 피가 날 정도로 힘들었지만, 그 밤에 책을 펴면 마음이 차분해졌거든요. 같이 일하던 동료 두 명이랑 기숙사에서 아침을 먹으며 서로 모르는 문제를 물어보고, 그게 또 힘이 돼 주곤 했어요."
+    },
+    {
+      "role": "assistant",
+      "content": "그 시절에 검정고시 공부를 하면서 가장 중요하게 생각했던 가치관은 무엇인가요?"
+    },
+    {
+      "role": "user",
+      "content": "음… 그때는 ‘배움에는 나이도 형편도 상관없다’는 생각이 제일 컸던 것 같아요. 손가락이 찢어져 피가 흐를 때도, 밤늦게까지 책을 펼쳐 놓고 한 글자라도 더 보려 했어요. 그게 바로 내게는 가장 큰 힘이 됐다고 할 수 있죠."
+    },
+    {
+      "role": "assistant",
+      "content": "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+    }
+  ],
+  "session_prose": "1969년… 그때는 새벽에 구로공단 방직공장에서 야간조를 마치고, 기숙사에서 잠깐 눈을 붙인 뒤에 낮에는 검정고시 학원을 다녔어요. 손가락 끝이 실에 긁혀 피가 날 정도로 힘들었지만, 그 밤에 책을 펴면 마음이 차분해졌거든요. 같이 일하던 동료 두 명이랑 기숙사에서 아침을 먹으며 서로 모르는 문제를 물어보고, 그게 또 힘이 돼 주곤 했어요.  \n\n음… 그때는 ‘배움에는 나이도 형편도 상관없다’는 생각이 제일 컸던 것 같아요. 손가락이 찢어져 피가 흐를 때도, 밤늦게까지 책을 펼쳐 놓고 한 글자라도 더 보려 했어요. 그게 바로 내게는 가장 큰 힘이 됐다고 할 수 있죠.  \n\n말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?",
+  "followup_count_used": 1,
+  "extracted_events": [
+    {
+      "id": "9dce1119-a3a9-4802-b7f2-37278223599a",
+      "user_id": "989a99a6-dd84-46e2-b9b3-ef1cc3fe893e",
+      "source_type": "session_chat",
+      "session_id": "ff06f0c9-fddc-4f43-b993-92aedf352e3f",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "구로공단 방직공장에서 야간조를 마치고, 기숙사에서 잠깐 눈을 붙인 뒤에 낮에는 검정고시 학원을 다녔어요."
+      },
+      "life_period": null,
+      "occurred_at_label": "1969년",
+      "place": "구로공단 방직공장, 기숙사",
+      "people": "혼자",
+      "one_line_summary": "1969년 구로공단 방직공장에서 야간조 근무 후 기숙사에서 휴식하고 낮에 검정고시 학원을 다니며 공부함",
+      "prose_paragraph": "1969년… 그때는 새벽에 구로공단 방직공장에서 야간조를 마치고, 기숙사에서 잠깐 눈을 붙인 뒤에 낮에는 검정고시 학원을 다녔어요. 손가락 끝이 실에 긁혀 피가 날 정도로 힘들었지만, 그 밤에 책을 펴면 마음이 차분해졌거든요. 같이 일하던 동료 두 명이랑 기숙사에서 아침을 먹으며 서로 모르는 문제를 물어보고, 그게 또 힘이 돼 주곤 했어요.",
+      "emotion_tag": "Determination",
+      "emotion_intensity": 4,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": "education",
+        "reason": "검정고시 합격을 목표로 하는 학습 필요성",
+        "process": "야간조 근무 후 기숙사에서 잠시 눈을 붙이고 낮에 검정고시 학원을 다니며 공부함",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": "검정고시 합격에 대한 자부심",
+        "belief": null,
+        "message": null,
+        "event_subject": "narrator"
+      },
+      "confidence": {
+        "place": 0.9,
+        "occurred_at_label": 0.9
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:10:03.463842+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "df128435-9099-4008-8332-7ba49c5b1d4e",
+      "user_id": "989a99a6-dd84-46e2-b9b3-ef1cc3fe893e",
+      "source_type": "session_chat",
+      "session_id": "ff06f0c9-fddc-4f43-b993-92aedf352e3f",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "같이 일하던 동료 두 명이랑 기숙사에서 아침을 먹으며 서로 모르는 문제를 물어보고, 그게 또 힘이 돼 주곤 했어요."
+      },
+      "life_period": null,
+      "occurred_at_label": "1969년 (주간)",
+      "place": "기숙사",
+      "people": "동료 두 명",
+      "one_line_summary": "동료와 기숙사에서 아침 식사를 하며 서로 모르는 검정고시 문제를 물어보며 공부함",
+      "prose_paragraph": "1969년… 그때는 새벽에 구로공단 방직공장에서 야간조를 마치고, 기숙사에서 잠깐 눈을 붙인 뒤에 낮에는 검정고시 학원을 다녔어요. 손가락 끝이 실에 긁혀 피가 날 정도로 힘들었지만, 그 밤에 책을 펴면 마음이 차분해졌거든요. 같이 일하던 동료 두 명이랑 기숙사에서 아침을 먹으며 서로 모르는 문제를 물어보고, 그게 또 힘이 돼 주곤 했어요.",
+      "emotion_tag": "Hope",
+      "emotion_intensity": 3,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": "mutual support",
+        "reason": "동료와의 상호 학습을 통해 학습 동기 부여",
+        "process": "동료와 기숙사에서 아침 식사를 하며 모르는 검정고시 문제를 물어보고 서로 도와가며 공부함",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": null,
+        "pride": "동료와의 협력으로 얻은 자신감",
+        "belief": null,
+        "message": null,
+        "event_subject": "narrator"
+      },
+      "confidence": {
+        "place": 0.8,
+        "occurred_at_label": 0.9
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:10:03.463842+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "88a9ed6d-e051-4650-9d5b-25efa8520c71",
+      "user_id": "989a99a6-dd84-46e2-b9b3-ef1cc3fe893e",
+      "source_type": "session_chat",
+      "session_id": "ff06f0c9-fddc-4f43-b993-92aedf352e3f",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "‘배움에는 나이도 형편도 상관없다’는 생각이 제일 컸던 것 같아요."
+      },
+      "life_period": null,
+      "occurred_at_label": "1969년",
+      "place": null,
+      "people": "혼자",
+      "one_line_summary": "‘배움에는 나이도 형편도 상관없다’는 신념을 갖고 어려운 상황에서도 공부를 지속함",
+      "prose_paragraph": "음… 그때는 ‘배움에는 나이도 형편도 상관없다’는 생각이 제일 컸던 것 같아요. 손가락이 찢어져 피가 흐를 때도, 밤늦게까지 책을 펼쳐 놓고 한 글자라도 더 보려 했어요. 그게 바로 내게는 가장 큰 힘이 됐다고 할 수 있죠.",
+      "emotion_tag": "Belief",
+      "emotion_intensity": 5,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": "lifelong learning",
+        "reason": "학습이 삶의 전환점이 되도록 하려는 결심과 동기",
+        "process": "손가락이 찢어져 피가 흐를 정도로 힘든 상황에서도 밤늦게까지 책을 펼쳐 한 글자라도 더 보려 함",
+        "gratitude": null,
+        "regret": null,
+        "turning_point": "이 신념이 앞으로의 학습을 지속하게 만든 전환점",
+        "pride": "어려운 상황에서도 포기하지 않은 자부심",
+        "belief": "배움에는 나이도 형편도 상관없다",
+        "message": null,
+        "event_subject": "narrator"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 0.9
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:10:03.463842+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    },
+    {
+      "id": "f7f712d1-1d19-499f-aee5-b3802c562dc1",
+      "user_id": "989a99a6-dd84-46e2-b9b3-ef1cc3fe893e",
+      "source_type": "session_chat",
+      "session_id": "ff06f0c9-fddc-4f43-b993-92aedf352e3f",
+      "media_asset_id": null,
+      "source_span": {
+        "quoted_text": "말씀해주셔서 감사해요."
+      },
+      "life_period": null,
+      "occurred_at_label": "현재 (인터뷰 중)",
+      "place": null,
+      "people": "인터뷰어",
+      "one_line_summary": "인터뷰어에게 감사 인사 전달",
+      "prose_paragraph": "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?",
+      "emotion_tag": "Gratitude",
+      "emotion_intensity": 5,
+      "emotion_inferred": false,
+      "labels": {
+        "values_reflected": "appreciation",
+        "reason": "인터뷰어가 시간을 내어 들어준 데 대한 고마움",
+        "process": "인터뷰어에게 감사의 말을 전함",
+        "gratitude": "말씀해주셔서 감사해요",
+        "regret": null,
+        "turning_point": null,
+        "pride": null,
+        "belief": null,
+        "message": null,
+        "event_subject": "narrator"
+      },
+      "confidence": {
+        "place": 1.0,
+        "occurred_at_label": 0.9
+      },
+      "verified": true,
+      "is_must_include": false,
+      "created_at": "2026-07-12T11:10:03.463842+00:00",
+      "duplicate_of_event_id": null,
+      "importance_score": null,
+      "importance_signals": null,
+      "life_milestone_category": null
+    }
+  ]
+}
