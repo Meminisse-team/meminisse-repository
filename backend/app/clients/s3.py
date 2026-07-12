@@ -46,3 +46,11 @@ async def generate_presigned_get_url(key: str, *, expires_in: int = 3600) -> str
         Params={"Bucket": settings.AWS_S3_BUCKET, "Key": key},
         ExpiresIn=expires_in,
     )
+
+
+async def download_bytes(key: str) -> bytes:
+    def _get() -> bytes:
+        response = _client().get_object(Bucket=settings.AWS_S3_BUCKET, Key=key)
+        return response["Body"].read()
+
+    return await asyncio.to_thread(_get)

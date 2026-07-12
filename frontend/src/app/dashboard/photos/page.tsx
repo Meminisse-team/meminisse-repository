@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { RippleRings } from "@/components/ui/RippleRings";
 import { ApiError } from "@/lib/api/client";
 import { mediaApi } from "@/lib/api/media";
 import type { MediaAsset } from "@/types/api";
@@ -11,10 +12,13 @@ const MAX_PHOTOS = 20;
 export default function PhotosPage() {
   const [photos, setPhotos] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reachedLimit = photos.length >= MAX_PHOTOS;
+  const uploading = uploadProgress !== null;
 
   useEffect(() => {
     mediaApi
@@ -26,11 +30,18 @@ export default function PhotosPage() {
 
   async function handleFileSelected(files: FileList | null) {
     if (!files || files.length === 0 || reachedLimit) return;
-    setUploading(true);
+    // 한 번에 여러 장을 골라도 한 장씩만 올라가던 문제 수정 — 남은 등록 가능 수만큼만
+    // 잘라서, 순서대로(동시에 X) 업로드한다. 진행 상황(done/total)을 화면에 보여준다.
+    const remaining = MAX_PHOTOS - photos.length;
+    const selected = Array.from(files).slice(0, remaining);
     setError(null);
+    setUploadProgress({ done: 0, total: selected.length });
     try {
-      const uploaded = await mediaApi.upload({ file: files[0] });
-      setPhotos((prev) => [uploaded, ...prev]);
+      for (const file of selected) {
+        const uploaded = await mediaApi.upload({ file });
+        setPhotos((prev) => [uploaded, ...prev]);
+        setUploadProgress((prev) => (prev ? { done: prev.done + 1, total: prev.total } : prev));
+      }
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -38,7 +49,7 @@ export default function PhotosPage() {
           : "알 수 없는 오류가 발생했어요.",
       );
     } finally {
-      setUploading(false);
+      setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
@@ -60,9 +71,9 @@ export default function PhotosPage() {
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {photos.map((photo) => (
-          // eslint-disable-next-line @next/next/no-img-element -- S3 원본 도메인이 next/image
-          // remotePatterns에 아직 등록돼 있지 않아, 스캐폴딩 단계에서는 일반 img로 둔다.
           <div key={photo.id} className="flex flex-col gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element -- S3 원본 도메인이 next/image
+            remotePatterns에 아직 등록돼 있지 않아, 스캐폴딩 단계에서는 일반 img로 둔다. */}
             <img
               src={photo.s3_url}
               alt={photo.user_comment ?? "등록된 사진"}
@@ -79,6 +90,7 @@ export default function PhotosPage() {
         ref={fileInputRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         onChange={(e) => void handleFileSelected(e.target.files)}
       />
@@ -86,13 +98,18 @@ export default function PhotosPage() {
         type="button"
         disabled={reachedLimit || uploading}
         onClick={() => fileInputRef.current?.click()}
-        className="mt-8 w-full rounded-2xl border border-dashed border-black/25 py-5 text-base text-black/60 transition-colors hover:border-black/50 hover:text-black disabled:cursor-not-allowed disabled:opacity-40"
+        className="relative mt-8 w-full rounded-2xl border border-dashed border-black/25 py-5 text-base text-black/60 transition-colors hover:border-black/50 hover:text-black disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {reachedLimit
-          ? "최대 20장까지 등록할 수 있어요"
-          : uploading
-            ? "올리는 중..."
-            : "+ 사진 추가 등록"}
+        <span aria-hidden className="pointer-events-none absolute inset-0">
+          <RippleRings className="text-black/15" />
+        </span>
+        <span className="relative z-10">
+          {reachedLimit
+            ? "최대 20장까지 등록할 수 있어요"
+            : uploadProgress
+              ? `올리는 중... (${uploadProgress.done}/${uploadProgress.total})`
+              : "+ 사진 추가 등록 (여러 장 선택 가능)"}
+        </span>
       </button>
     </main>
   );

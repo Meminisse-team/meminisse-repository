@@ -17,3 +17,6 @@ class S3ObjectStorageGateway(ObjectStorageGateway):
 
     async def get_presigned_url(self, key: str, *, expires_in: int = 3600) -> str:
         return await s3.generate_presigned_get_url(key, expires_in=expires_in)
+
+    async def get_object(self, key: str) -> bytes:
+        return await s3.download_bytes(key)

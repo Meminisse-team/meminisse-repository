@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { interviewsApi } from "@/lib/api/interviews";
+import { RippleRings } from "@/components/ui/RippleRings";
+import { stripMarkdown } from "@/lib/format/stripMarkdown";
 import type { ChatMessage } from "@/types/api";
 
 interface ChatOverlayProps {
@@ -118,7 +120,7 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
                 m.role === "user" ? "bg-black text-white" : "bg-black/5 text-black"
               }`}
             >
-              {m.content}
+              {stripMarkdown(m.content)}
             </p>
           </div>
         ))}
@@ -136,9 +138,12 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
         <button
           type="submit"
           disabled={!input.trim() || sending}
-          className="shrink-0 whitespace-nowrap rounded-full bg-black px-5 py-3 text-base text-white disabled:opacity-40"
+          className="relative shrink-0 whitespace-nowrap rounded-full bg-black px-5 py-3 text-base text-white disabled:opacity-40"
         >
-          보내기
+          <span aria-hidden className="pointer-events-none absolute inset-0">
+            <RippleRings className="text-black/25" />
+          </span>
+          <span className="relative z-10">보내기</span>
         </button>
       </form>
     </div>

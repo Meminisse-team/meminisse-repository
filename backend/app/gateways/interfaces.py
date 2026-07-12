@@ -63,6 +63,12 @@ class ObjectStorageGateway(ABC):
     async def get_presigned_url(self, key: str, *, expires_in: int = 3600) -> str:
         """제한 시간 동안 유효한 접근 URL을 발급한다."""
 
+    @abstractmethod
+    async def get_object(self, key: str) -> bytes:
+        """저장된 객체의 원본 바이트를 그대로 읽어온다. Celery 워커가 업로드 요청 때
+        받았던 파일을 다시 필요로 할 때 쓴다(예: 사진 분석을 비동기로 미룰 때) —
+        큰 바이트 페이로드를 브로커(Redis) 메시지에 그대로 실어 보내지 않기 위함."""
+
 
 class UserGateway(ABC):
     @abstractmethod
@@ -223,6 +229,11 @@ class EventGateway(ABC):
 class MediaAssetGateway(ABC):
     @abstractmethod
     async def create(self, data: MediaAssetCreateData) -> MediaAssetRecord: ...
+
+    @abstractmethod
+    async def get_by_id(self, media_asset_id: UUID) -> MediaAssetRecord | None:
+        """비동기 사진 분석 태스크(analyze_media_asset)가 워커에서 원본을 다시
+        조회할 때 쓴다."""
 
     @abstractmethod
     async def update_analysis(

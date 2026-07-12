@@ -63,6 +63,11 @@ class MockObjectStorage(ObjectStorageGateway):
             raise KeyError(f"object not found in mock store: {key}")
         return f"mock://objects/{key}?expires_in={expires_in}"
 
+    async def get_object(self, key: str) -> bytes:
+        if key not in self._store.objects:
+            raise KeyError(f"object not found in mock store: {key}")
+        return self._store.objects[key]
+
 
 class MockUserGateway(UserGateway):
     def __init__(self, store: MockStore) -> None:
@@ -380,6 +385,9 @@ class MockMediaAssetGateway(MediaAssetGateway):
         )
         self._store.media_assets[asset.id] = asset
         return asset
+
+    async def get_by_id(self, media_asset_id: uuid.UUID) -> MediaAssetRecord | None:
+        return self._store.media_assets.get(media_asset_id)
 
     async def update_analysis(
         self,

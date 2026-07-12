@@ -24,7 +24,7 @@ from typing import Any
 
 from app.database import engine
 from app.gateways.factory import gateways_context
-from app.services import autobiography_service, event_extraction_service, pdf_service
+from app.services import autobiography_service, event_extraction_service, media_service, pdf_service
 from app.workers.celery_app import celery_app
 
 
@@ -93,3 +93,15 @@ def generate_manuscript_pdf(autobiography_id: str) -> None:
 async def _generate_manuscript_pdf_async(autobiography_id: uuid.UUID) -> None:
     async with gateways_context() as gateways:
         await pdf_service.generate_manuscript_pdf(gateways, autobiography_id)
+
+
+@celery_app.task(name="analyze_media_asset")
+def analyze_media_asset(media_asset_id: str) -> None:
+    """Phase 1 사진 듀얼 트랙 분석(Document Parse 동기 API 호출 포함). 업로드 요청
+    경로에서 분리한 이유는 media_service.upload_media_asset 상단 docstring 참조."""
+    _run(_analyze_media_asset_async(uuid.UUID(media_asset_id)))
+
+
+async def _analyze_media_asset_async(media_asset_id: uuid.UUID) -> None:
+    async with gateways_context() as gateways:
+        await media_service.analyze_media_asset(gateways, media_asset_id)

@@ -430,6 +430,10 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
         await self._session.flush()
         return _to_media_asset_record(obj)
 
+    async def get_by_id(self, media_asset_id: UUID) -> MediaAssetRecord | None:
+        obj = await self._session.get(MediaAsset, media_asset_id)
+        return _to_media_asset_record(obj) if obj else None
+
     async def update_analysis(
         self,
         media_asset_id: UUID,
