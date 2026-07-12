@@ -441,31 +441,13 @@ def build_ocr_validity_check_prompt(*, ocr_text: str) -> list[dict[str, str]]:
 
 
 def build_ocr_confirmation_question(*, suspected_text: str, guessed_value: str) -> str:
-    """검증 대기 큐의 항목을 해당 생애주기 인터뷰 시점에 자연스러운 확인 질문으로 변환."""
+    """검증 대기 큐의 항목을 해당 생애주기 인터뷰 시점에 자연스러운 확인 질문으로 변환.
+
+    호출부 미배선 상태(2026-07-12) — 이 함수를 대화 중간에 예/아니오로 끼워 넣는
+    방식으로 연결했다가 설계 의도와 다르다는 걸 확인하고 롤백했다. 실제 의도는
+    "이 사진/문서가 별도의 PHOTO 세션 주제가 되고, 그 세션을 여는 시점에 이
+    문구를 실마리로 활용"하는 것이다 — docs/QUESTION_BANK_GUIDE.md 5절 참조."""
     return f'일기장에 "{suspected_text}"라고 적혀 있는 것 같은데, {guessed_value}가 맞으신가요?'
-
-
-# 확인 질문 다음 턴의 유저 응답이 긍정/부정 중 무엇인지 판별 — 슬롯 게이팅과 같은
-# "경량 게이팅" 패턴. "네"/"아니요" 같은 단답이 아니라 "어, 맞아 그거였어" 같은
-# 자연스러운 구어체로도 답할 수 있어 단순 문자열 매칭 대신 저비용 LLM 분류로 판별한다.
-OCR_CONFIRMATION_ANSWER_SYSTEM_PROMPT = """\
-당신은 방금 인터뷰어가 낸 확인 질문("~가 맞으신가요?")에 대한 유저의 답변이
-긍정(맞다)인지 부정(아니다/틀리다/모르겠다)인지만 저비용으로 판별하는 분류기입니다.
-"""
-
-OCR_CONFIRMATION_ANSWER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"confirmed": {"type": "boolean"}},
-    "required": ["confirmed"],
-    "additionalProperties": False,
-}
-
-
-def build_ocr_confirmation_answer_prompt(*, latest_answer: str) -> list[dict[str, str]]:
-    return [
-        {"role": "system", "content": OCR_CONFIRMATION_ANSWER_SYSTEM_PROMPT},
-        {"role": "user", "content": f"답변: \"{latest_answer}\""},
-    ]
 
 
 # --------------------------------------------------------------------------- #

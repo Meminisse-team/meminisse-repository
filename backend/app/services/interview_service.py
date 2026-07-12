@@ -20,7 +20,6 @@ from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, SessionCreat
 from app.gateways.factory import Gateways
 from app.models.enums import MessageRole, SessionType, UserStage
 from app.schemas.interview import SessionCreate
-from app.services import event_extraction_service
 
 
 class NoRemainingQuestionsError(Exception):
@@ -93,10 +92,6 @@ async def add_user_turn(
         # 2층: 위기 신호 — 심화 질문 전면 차단, 세션을 부드럽게 마무리.
         assistant_content = prompts.TIER2_CRISIS_RESPONSE
         await gateways.sessions.complete(session.id)
-    elif session.pending_ocr_confirmation_event_id is not None:
-        # 직전 턴에서 낸 OCR 확인 질문("~가 맞으신가요?")에 대한 답 — 슬롯 게이팅
-        # 대상이 아니라 이 하나의 사건 승격 여부를 결정하는 데만 쓰인다.
-        assistant_content = await _resolve_ocr_confirmation_turn(gateways, session, content)
     elif await _detect_strong_negative_emotion(content):
         # 1층: 위기까지는 아니지만 심화 질문은 피해야 할 만큼 강한 부정적 감정 —
         # 슬롯/꼬리질문 진행 없이 완충 응답만 돌려주고 세션은 계속 열어 둔다(2층과
@@ -117,29 +112,10 @@ async def add_user_turn(
             new_followup_count = session.followup_count + 1
         else:
             new_followup_count = session.followup_count
-            # 이 사건에 대해서는 더 물을 게 없다 — 세션을 완료 처리하기 전에, 예전
-            # 사진/일기장 업로드에서 OCR 오인식 의심으로 격리된(verified=false) 사건이
-            # 있으면 그걸 먼저 확인 질문으로 낸다(TODO였던 승격 경로, 2026-07-12 연결).
-            # 확인이 끝날 때까지는 이 세션을 완료 처리하지 않는다 — 완료+다음 질문
-            # 배정은 확인 응답을 받은 다음 턴에 이 분기로 다시 돌아와 정상 처리된다.
-            pending = await event_extraction_service.list_pending_ocr_confirmations(
-                gateways, session.user_id
-            )
-            if pending:
-                target = pending[0]
-                assistant_content = prompts.build_ocr_confirmation_question(
-                    suspected_text=(target.source_span or {}).get(
-                        "quoted_text", target.one_line_summary
-                    ),
-                    guessed_value=target.one_line_summary,
-                )
-                await gateways.sessions.set_pending_ocr_confirmation(session.id, target.id)
-                should_complete = False
-            else:
-                should_complete = session.session_type == SessionType.FIXED_QUESTION
-                # PHOTO 세션은 사진 핀셋 배치 오케스트레이션이 아직 정해지지 않아
-                # 범위 밖이다(docs/QUESTION_BANK_GUIDE.md 5절) — 기존 안내 문구를 유지한다.
-                assistant_content = "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+            should_complete = session.session_type == SessionType.FIXED_QUESTION
+            # PHOTO 세션은 사진 핀셋 배치 오케스트레이션이 아직 정해지지 않아
+            # 범위 밖이다(docs/QUESTION_BANK_GUIDE.md 5절) — 기존 안내 문구를 유지한다.
+            assistant_content = "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
 
         await gateways.sessions.update_slots(
             session.id, slots_filled=updated_slots, followup_count=new_followup_count
@@ -166,32 +142,6 @@ async def add_user_turn(
     updated_session = await gateways.sessions.get_by_id(session.id)
     assert updated_session is not None
     return user_turn, assistant_turn, updated_session
-
-
-async def _resolve_ocr_confirmation_turn(
-    gateways: Gateways, session: InterviewSessionRecord, content: str
-) -> str:
-    confirmed = await _classify_ocr_confirmation_answer(content)
-    await event_extraction_service.resolve_ocr_confirmation(
-        gateways, session.pending_ocr_confirmation_event_id, confirmed=confirmed
-    )
-    await gateways.sessions.set_pending_ocr_confirmation(session.id, None)
-    return (
-        "확인해주셔서 감사해요! 편하게 다른 이야기도 들려주세요."
-        if confirmed
-        else "아, 제가 잘못 짚었나 봐요. 편하게 다른 이야기 들려주세요."
-    )
-
-
-async def _classify_ocr_confirmation_answer(content: str) -> bool:
-    messages = prompts.build_ocr_confirmation_answer_prompt(latest_answer=content)
-    result = await solar.structured_completion(
-        messages,
-        schema_name="ocr_confirmation_answer",
-        json_schema=prompts.OCR_CONFIRMATION_ANSWER_SCHEMA,
-        reasoning_effort="low",
-    )
-    return bool(result.get("confirmed", False))
 
 
 async def _detect_strong_negative_emotion(content: str) -> bool:

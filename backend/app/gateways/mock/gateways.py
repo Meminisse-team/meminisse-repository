@@ -45,7 +45,6 @@ from app.models.enums import (
     AutobiographyStatus,
     ConsentType,
     DraftStatus,
-    EventSourceType,
     MessageRole,
     RiskClassification,
     SessionStatus,
@@ -169,11 +168,6 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
 
     async def set_session_prose(self, session_id: uuid.UUID, prose: str) -> None:
         self._require_session(session_id).session_prose = prose
-
-    async def set_pending_ocr_confirmation(
-        self, session_id: uuid.UUID, event_id: uuid.UUID | None
-    ) -> None:
-        self._require_session(session_id).pending_ocr_confirmation_event_id = event_id
 
     async def complete(self, session_id: uuid.UUID) -> None:
         session = self._require_session(session_id)
@@ -366,25 +360,6 @@ class MockEventGateway(EventGateway):
             event.importance_score = update.importance_score
             event.importance_signals = update.importance_signals
             event.life_milestone_category = update.life_milestone_category
-
-    async def list_pending_document_confirmation(self, user_id: uuid.UUID) -> list[EventRecord]:
-        pending = [
-            e
-            for e in self._store.events.values()
-            if e.user_id == user_id
-            and e.source_type == EventSourceType.DOCUMENT
-            and not e.verified
-        ]
-        pending.sort(key=lambda e: e.created_at)
-        return pending
-
-    async def set_verified(self, event_id: uuid.UUID, *, verified: bool) -> EventRecord:
-        event = self._require_event(event_id)
-        event.verified = verified
-        return event
-
-    async def delete(self, event_id: uuid.UUID) -> None:
-        self._store.events.pop(event_id, None)
 
     def _require_event(self, event_id: uuid.UUID) -> EventRecord:
         event = self._store.events.get(event_id)

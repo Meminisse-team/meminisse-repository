@@ -4,10 +4,11 @@ Phase 2 후처리 (세션 종료 즉시, Celery 비동기): 산문 재조립 →
 
 SESSION_CHAT 출처 이벤트는 사용자가 인터뷰에서 직접 발화한 내용이므로, Document Parse
 경로(OCR 오인식 확인 질문을 거쳐야 승격되는 DOCUMENT 출처와 달리) 재조립본이 왜곡 탐지를
-통과하면 곧바로 verified=true로 저장한다. DOCUMENT 출처 이벤트의 verified 승격은 이
-파일 하단의 list_pending_ocr_confirmations/resolve_ocr_confirmation이 담당하며,
-app/services/interview_service.py의 인터뷰 턴에서 실제로 확인 질문을 내고 응답을
-반영한다(2026-07-12 연결 — 그전까지는 verified=false로 격리된 채 승격 경로가 없었다).
+통과하면 곧바로 verified=true로 저장한다. DOCUMENT 출처 이벤트의 verified 승격은
+media_service/추후 확인-질문 인터뷰 턴에서 처리한다(이 서비스의 책임이 아님) — 실제
+의도는 그 사진/문서가 별도의 PHOTO 세션 주제가 되는 것이라(대화 중간에 예/아니오로
+끼워 넣는 방식이 아니라), 사진 세션 오케스트레이션이 먼저 필요하다
+(docs/QUESTION_BANK_GUIDE.md 5절 참조, 2026-07-12 — 잘못된 방식으로 연결했다가 롤백).
 """
 
 from __future__ import annotations
@@ -157,28 +158,3 @@ async def _persist_relations(
     ]
     if valid_relations:
         await gateways.events.create_relations(valid_relations)
-
-
-async def list_pending_ocr_confirmations(gateways: Gateways, user_id: uuid.UUID) -> list[EventRecord]:
-    """interview_service.add_user_turn이 다음에 물어볼 확인 질문 대상을 고를 때 쓴다."""
-    return await gateways.events.list_pending_document_confirmation(user_id)
-
-
-async def resolve_ocr_confirmation(
-    gateways: Gateways, event_id: uuid.UUID, *, confirmed: bool
-) -> None:
-    """OCR 확인 질문에 대한 유저 응답을 반영한다. 확인(confirmed=True)이면 다른
-    DOCUMENT 이벤트와 동일하게 verified=true로 승격하고 임베딩을 계산해 RAG 검색
-    대상에 포함시킨다(media_service._persist_events의 검증 경로와 동일). 부인
-    (confirmed=False)이면 OCR 오인식으로 보고 폐기한다 — verified=false로 남겨두면
-    다음에도 계속 같은 걸 물어보게 되므로, 격리 큐에서 완전히 빼내는 유일한 방법은
-    삭제뿐이다."""
-    if not confirmed:
-        await gateways.events.delete(event_id)
-        await gateways.commit()
-        return
-
-    event = await gateways.events.set_verified(event_id, verified=True)
-    vectors = await embeddings.embed_passages([event.prose_paragraph])
-    await gateways.events.bulk_update_embeddings([(event.id, vectors[0])])
-    await gateways.commit()

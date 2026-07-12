@@ -99,7 +99,6 @@ class InterviewSessionRecord:
     session_prose: str | None
     started_at: datetime
     completed_at: datetime | None
-    pending_ocr_confirmation_event_id: UUID | None = None
     chat_logs: list[ChatLogRecord] = field(default_factory=list)
 
 

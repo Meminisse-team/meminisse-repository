@@ -63,12 +63,6 @@ class InterviewSession(Base):
     # 문장 병합·재배열 없이 어미/추임새만 정돈. NLI 왜곡 탐지의 대조 대상이며,
     # 이후 Solar가 이 산문을 사건 단위로 분할해 Event.prose_paragraph로 쪼갠다.
     session_prose = Column(Text, nullable=True)
-    # OCR 확인 질문(prompts.build_ocr_confirmation_question)을 이번 턴에 냈다면 그
-    # 대상 Event. 다음 유저 발화는 슬롯 게이팅이 아니라 이 확인에 대한 답으로 해석된다
-    # (interview_service.add_user_turn 참조). 응답 처리 후 다시 null로 되돌아간다.
-    pending_ocr_confirmation_event_id = Column(
-        UUID(as_uuid=True), ForeignKey("events.id", ondelete="SET NULL"), nullable=True
-    )
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

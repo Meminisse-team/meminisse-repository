@@ -807,6 +807,7 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
 | PDF 조판이 `final_content`가 아닌 개별 챕터 `content`를 사용 | `pdf_service.render_manuscript_html` | 윤문(finalize) 단계에서 다듬어진 문장이 PDF에는 반영되지 않는다(페이지 나눔을 챕터 경계와 정확히 맞추기 위한 의도적 선택) — 필요하면 `final_content`를 챕터 경계 마커와 함께 파싱해 대체하는 방식으로 바꿀 수 있다 |
 | POD(주문형 인쇄) 발주 연계 미구현 | `pdf_service.py` 전체 | 완성된 PDF를 S3에 올려 URL을 반환하는 데까지만 담당한다. 실제 인쇄 발주(수량 선택, 결제, 배송)는 외부 업체 API 계약이 필요해 범위 밖으로 남겼다 |
 | 1층(완충) 세이프가드 트리거가 샌드박스에만 존재 | `app/api/v1/sandbox.py` `safeguard-check` | 실제 서비스는 2층(위기 대응)만 자동으로 걸리고, 1층은 강한 부정적 감정이어도 그냥 지나간다(2026-07-12 해소 — 아래 참조) |
+| 사진(PHOTO) 세션 오케스트레이션 미구현 — OCR 확인 질문 포함 | `docs/QUESTION_BANK_GUIDE.md` 5절 | `session_type=PHOTO`는 스키마에 있지만 어디서도 생성되지 않는다. 사진의 생애주기가 확정되면 그 시기 고정 질문 완료 직후, 불명확하면 전체 고정 질문 종료 후 사진마다 독립 세션으로 제시되어야 한다(설계 확정, 2026-07-12) — 아직 미구현. `Document`(OCR 오인식 의심) 이벤트의 verified 승격도 이 사진 세션 안에서 자연스러운 대화로 처리되는 것이 의도이며, 별도의 예/아니오 확인 질문을 대화 중간에 끼워 넣는 방식은 **아니다**(2026-07-12 그렇게 잘못 구현했다가 롤백) |
 | 계정 = 로그인 하나로 단순화됨(2026-07-09 인증 추가분) | `app/api/deps.py`, `users.py` | 자녀가 부모를 대신해 온보딩/동의하는 기획안의 "동의 주체 분리" 시나리오가, 현재는 자녀가 부모 계정에 직접 로그인해 대신 조작하는 것으로만 구현 가능하다 — 자녀 전용 별도 계정으로 부모 계정에 위임 접근하는 "가족 초대" 흐름은 미구현 |
 
 **해소된 항목(기록 목적으로 이전 버전 남김)**: "세션 히스토리 조회 엔드포인트 없음"은
@@ -816,16 +817,13 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
 데이터를 실제 데이터로 교체하기 위해 `GET /interview-sessions`, `GET /media-assets`,
 `GET /events` 3개 목록 조회 엔드포인트를 새로 추가했다(각각 2·3·4절 참조).
 
-2026-07-12(P4 컴플라이언스 마감)에 4건 추가 해소:
+2026-07-12(P4 컴플라이언스 마감)에 3건 추가 해소(OCR 확인 질문은 아래 "알려진 한계"
+표 참조 — 잘못된 방식으로 구현했다가 롤백하고 올바른 설계만 문서화했다):
 - **1층/3층 세이프가드 미연결** → `interview_service._detect_strong_negative_emotion`
   (1층 트리거)과 `GET /legal/disclosures`(3층 고지, 온보딩 동의 화면에 노출) 연결.
 - **등장인물 실명 동의가 인물 단위가 아닌 사용자 단위** → `consent_records.character_id`
-  마이그레이션(006)으로 인물 단위 게이트로 전환(1절 `disclosure_realname` 표 참조).
+  마이그레이션(007)으로 인물 단위 게이트로 전환(1절 `disclosure_realname` 표 참조).
 - **`current_stage` 미갱신** → 첫 인터뷰 세션 생성 시 `interview`, Phase 3 완료 시
   `publishing`, 최종 윤문 완료 시 `published`로 자동 전환(같은 시점에
   `AutobiographyStatus.PUBLISHED`도 처음으로 실제 설정됨 — 이전엔 enum 값만 있고
   아무 데서도 쓰이지 않던 죽은 값이었다).
-- **OCR 확인 질문이 인터뷰 턴에 미연결** → 슬롯이 다 채워져 "다음 이야기로" 자리표시자를
-  내보내기 직전에, 이 유저의 미확인(`verified=false`) `DOCUMENT` 이벤트가 있으면
-  확인 질문을 먼저 낸다(`InterviewSession.pending_ocr_confirmation_event_id`로 세션
-  단위 추적). 다음 발화가 긍정이면 승격+임베딩, 부정이면 폐기.

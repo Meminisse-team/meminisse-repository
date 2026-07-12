@@ -128,13 +128,6 @@ class InterviewSessionGateway(ABC):
         """Layer 2: 세션 종료 후 재조립된 1인칭 산문을 기록한다."""
 
     @abstractmethod
-    async def set_pending_ocr_confirmation(
-        self, session_id: UUID, event_id: UUID | None
-    ) -> None:
-        """이번 턴에 OCR 확인 질문을 냈다면 그 대상 event_id를, 응답을 처리하고 나면
-        None을 넘겨 초기화한다."""
-
-    @abstractmethod
     async def complete(self, session_id: UUID) -> None:
         """status=COMPLETED, completed_at=now로 전이한다."""
 
@@ -236,22 +229,6 @@ class EventGateway(ABC):
 
     @abstractmethod
     async def bulk_update_importance(self, updates: Sequence[EventImportanceUpdate]) -> None: ...
-
-    @abstractmethod
-    async def list_pending_document_confirmation(self, user_id: UUID) -> list[EventRecord]:
-        """source_type=DOCUMENT AND verified=False인 이벤트(OCR 1차 검증에서 오인식
-        의심으로 격리된 것들). 인터뷰 턴에서 확인 질문으로 제시할 대상 큐 —
-        created_at 오름차순(먼저 스테이징된 것부터 확인)."""
-
-    @abstractmethod
-    async def set_verified(self, event_id: UUID, *, verified: bool) -> EventRecord:
-        """OCR 확인 질문에 대한 유저 응답 결과를 반영한다. 승격(verified=True)
-        이후의 임베딩 계산은 이 메서드의 책임이 아니다 — 호출부가 bulk_update_
-        embeddings로 별도 반영한다."""
-
-    @abstractmethod
-    async def delete(self, event_id: UUID) -> None:
-        """OCR 확인 질문에서 유저가 부인한(오인식이었다고 답한) 이벤트를 폐기한다."""
 
 
 class MediaAssetGateway(ABC):

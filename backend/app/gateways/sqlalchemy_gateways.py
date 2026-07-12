@@ -72,7 +72,7 @@ from app.models import (
     SessionType,
     User,
 )
-from app.models.enums import EventSourceType, MediaAnalysisTrack, UserStage
+from app.models.enums import MediaAnalysisTrack, UserStage
 
 
 class SqlAlchemyUserGateway(UserGateway):
@@ -176,13 +176,6 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
     async def set_session_prose(self, session_id: UUID, prose: str) -> None:
         session_obj = await self._require_session(session_id)
         session_obj.session_prose = prose
-        await self._session.flush()
-
-    async def set_pending_ocr_confirmation(
-        self, session_id: UUID, event_id: UUID | None
-    ) -> None:
-        session_obj = await self._require_session(session_id)
-        session_obj.pending_ocr_confirmation_event_id = event_id
         await self._session.flush()
 
     async def complete(self, session_id: UUID) -> None:
@@ -420,32 +413,6 @@ class SqlAlchemyEventGateway(EventGateway):
             obj.importance_signals = update.importance_signals
             obj.life_milestone_category = update.life_milestone_category
         await self._session.flush()
-
-    async def list_pending_document_confirmation(self, user_id: UUID) -> list[EventRecord]:
-        result = await self._session.execute(
-            select(Event)
-            .where(
-                Event.user_id == user_id,
-                Event.source_type == EventSourceType.DOCUMENT,
-                Event.verified.is_(False),
-            )
-            .order_by(Event.created_at.asc(), Event.id.asc())
-        )
-        return [_to_event_record(obj) for obj in result.scalars().all()]
-
-    async def set_verified(self, event_id: UUID, *, verified: bool) -> EventRecord:
-        obj = await self._session.get(Event, event_id)
-        if obj is None:
-            raise KeyError(f"event not found: {event_id}")
-        obj.verified = verified
-        await self._session.flush()
-        return _to_event_record(obj)
-
-    async def delete(self, event_id: UUID) -> None:
-        obj = await self._session.get(Event, event_id)
-        if obj is not None:
-            await self._session.delete(obj)
-            await self._session.flush()
 
 
 class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
@@ -807,7 +774,6 @@ def _to_session_record(
         session_prose=session_obj.session_prose,
         started_at=session_obj.started_at,
         completed_at=session_obj.completed_at,
-        pending_ocr_confirmation_event_id=session_obj.pending_ocr_confirmation_event_id,
         chat_logs=[_to_chat_log_record(c) for c in sorted(chat_logs, key=lambda c: c.turn_index)],
     )
 
