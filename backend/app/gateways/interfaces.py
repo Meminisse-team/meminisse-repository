@@ -74,6 +74,18 @@ class UserGateway(ABC):
     @abstractmethod
     async def get_by_email(self, email: str) -> UserRecord | None: ...
 
+    @abstractmethod
+    async def update(
+        self,
+        user_id: UUID,
+        *,
+        name: str | None = None,
+        birth_year: int | None = None,
+        hometown: str | None = None,
+    ) -> UserRecord:
+        """None인 인자는 "건드리지 않는다"는 뜻이다(부분 갱신). 소셜 로그인 온보딩
+        완성 단계(PATCH /users/{id})와 일반 프로필 수정에 함께 쓰인다."""
+
 
 class InterviewSessionGateway(ABC):
     """

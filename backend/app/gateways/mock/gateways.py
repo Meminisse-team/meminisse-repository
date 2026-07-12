@@ -86,6 +86,25 @@ class MockUserGateway(UserGateway):
     async def get_by_email(self, email: str) -> UserRecord | None:
         return next((u for u in self._store.users.values() if u.email == email), None)
 
+    async def update(
+        self,
+        user_id: uuid.UUID,
+        *,
+        name: str | None = None,
+        birth_year: int | None = None,
+        hometown: str | None = None,
+    ) -> UserRecord:
+        user = self._store.users.get(user_id)
+        if user is None:
+            raise KeyError(f"user not found in mock store: {user_id}")
+        if name is not None:
+            user.name = name
+        if birth_year is not None:
+            user.birth_year = birth_year
+        if hometown is not None:
+            user.hometown = hometown
+        return user
+
 
 class MockInterviewSessionGateway(InterviewSessionGateway):
     def __init__(self, store: MockStore) -> None:

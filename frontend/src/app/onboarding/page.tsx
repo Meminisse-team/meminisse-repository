@@ -9,15 +9,25 @@ import { Typewriter } from "@/components/ui/Typewriter";
 import { authApi } from "@/lib/api/auth";
 import { usersApi } from "@/lib/api/users";
 import { ApiError } from "@/lib/api/client";
+import { oauthPendingProfile } from "@/lib/auth/oauthPendingProfile";
 import { session } from "@/lib/auth/session";
 import { signupDraft, type SignupDraft } from "@/lib/auth/signupDraft";
 
 const TOTAL_STEPS = 4;
 const CONSENT_NOTICE_VERSION = "v1";
 
+/** 이메일/비밀번호 가입과 소셜 로그인 둘 다 이 화면을 함께 쓴다 — 물어볼 내용
+ * (생년/고향/동의)은 같지만 "계정을 언제, 어떻게 만드는지"가 다르다:
+ * - 이메일/비밀번호: 계정이 아직 없다. 이 화면 끝에서 POST /users로 한 번에 생성.
+ * - 소셜 로그인: 이미 로그인된 상태다(auth/callback에서 oauth-sync 완료). 이름도
+ *   이미 알고 있으니 다시 안 묻고, 끝에서 PATCH /users/{id}로 채우기만 한다. */
+type OnboardingSource =
+  | { kind: "password"; draft: SignupDraft }
+  | { kind: "oauth"; name: string; userId: string };
+
 export default function OnboardingPage() {
   const router = useRouter();
-  const [draft, setDraft] = useState<SignupDraft | null>(null);
+  const [source, setSource] = useState<OnboardingSource | null>(null);
   const [step, setStep] = useState(0);
   const [birthYear, setBirthYear] = useState("");
   const [hometown, setHometown] = useState("");
@@ -26,43 +36,61 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const found = signupDraft.get();
-    if (!found) {
-      router.replace("/");
+    const draft = signupDraft.get();
+    if (draft) {
+      setSource({ kind: "password", draft });
       return;
     }
-    setDraft(found);
+    const pending = oauthPendingProfile.get();
+    const userId = session.getUserId();
+    if (pending && userId) {
+      setSource({ kind: "oauth", name: pending.name, userId });
+      return;
+    }
+    router.replace("/");
   }, [router]);
 
-  if (!draft) return null;
+  if (!source) return null;
+  const displayName = source.kind === "password" ? source.draft.name : source.name;
 
   async function handleFinish() {
-    if (!draft) return;
+    if (!source) return;
     setError(null);
     setSubmitting(true);
     try {
-      const user = await usersApi.create({
-        email: draft.email,
-        password: draft.password,
-        name: draft.name,
-        birth_year: birthYear ? Number(birthYear) : undefined,
-        hometown: hometown || undefined,
-      });
+      let userId: string;
+      if (source.kind === "password") {
+        const user = await usersApi.create({
+          email: source.draft.email,
+          password: source.draft.password,
+          name: source.draft.name,
+          birth_year: birthYear ? Number(birthYear) : undefined,
+          hometown: hometown || undefined,
+        });
+        const { access_token, refresh_token } = await authApi.login({
+          email: source.draft.email,
+          password: source.draft.password,
+        });
+        session.setTokens(access_token, refresh_token);
+        session.setUserId(user.id);
+        userId = user.id;
+      } else {
+        // 이미 로그인돼 있다 — 생년/고향만 채운다(값을 안 넣은 필드는 그대로 유지).
+        await usersApi.updateProfile(source.userId, {
+          birth_year: birthYear ? Number(birthYear) : undefined,
+          hometown: hometown || undefined,
+        });
+        userId = source.userId;
+      }
 
-      const { access_token, refresh_token } = await authApi.login({
-        email: draft.email,
-        password: draft.password,
-      });
-      session.setTokens(access_token, refresh_token);
-      session.setUserId(user.id);
-
-      await usersApi.createConsent(user.id, {
+      await usersApi.createConsent(userId, {
         consent_type: "data_collection",
         notice_version: CONSENT_NOTICE_VERSION,
         granted_by: "self",
       });
 
       signupDraft.clear();
+      oauthPendingProfile.clear();
       router.push("/dashboard");
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -88,7 +116,7 @@ export default function OnboardingPage() {
         {step === 0 && (
           <Typewriter
             key="step0"
-            text={`${draft.name}님, 만나서 반가워요.\n당신에 대해 조금 더 알려주시겠어요?`}
+            text={`${displayName}님, 만나서 반가워요.\n당신에 대해 조금 더 알려주시겠어요?`}
             className="font-serif-kr text-2xl leading-relaxed text-black sm:text-3xl"
           />
         )}

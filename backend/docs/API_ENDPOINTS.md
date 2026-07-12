@@ -114,6 +114,33 @@ Supabase는 리프레시 토큰을 1회용으로 순환시키므로 이전 `refr
 `UserRead`와 동일(1절 참조). 프론트엔드가 "현재 로그인 상태인지, 누구로 로그인했는지"를
 앱 시작 시점에 확인하는 용도로 쓰면 된다.
 
+### `POST /api/v1/auth/oauth-sync` — 소셜 로그인(카카오/구글) 동기화 (인증 필요)
+
+**소셜 로그인은 이 프로젝트가 계정 생성을 트리거하지 않는다** — 프론트가 브라우저를
+`{SUPABASE_URL}/auth/v1/authorize?provider=kakao|google&redirect_to=...`로 직접
+이동시키면, Supabase가 제공자와의 OAuth 핸드셰이크를 전담하고 `auth.users` 계정을
+그 자리에서 즉시 만든 뒤 세션 토큰과 함께 `redirect_to`(`/auth/callback`)로 돌려보낸다.
+이 시점엔 `auth.users`는 있지만 이 프로젝트의 `public.users` 프로필은 아직 없을 수
+있다 — 이 엔드포인트가 그 간극을 메운다.
+
+`GET /auth/me`와 달리 **프로필이 없어도 401을 던지지 않는다**(그게 정상 상태이므로).
+토큰의 `sub`(auth.users.id)로 프로필을 조회해, 없으면 토큰의 `email`/`user_metadata`
+(제공자별로 `name`/`full_name`/`nickname`/`preferred_username` 순으로 시도, 전부
+없으면 이메일 로컬파트)만으로 최소 프로필을 만든다 — `admin_create_user`는 호출하지
+않는다(Supabase가 이미 만들었으므로 중복 생성 시도 자체가 의미 없음).
+
+**요청 바디**: 없음(Authorization 헤더의 토큰만 사용).
+
+**응답 `200 OK` (`OAuthSyncResponse`)**: `user`(`UserRead`), `is_new`(bool — 방금
+프로필이 생성된 최초 로그인이면 `true`). 프론트는 `is_new`로 분기한다: `true`면
+생년/고향/동의가 아직 없으니 온보딩(이름 입력은 건너뛰고 그 뒤 스텝만)으로 보내고,
+`false`면 바로 대시보드로 보낸다.
+
+**주의**: 이메일/비밀번호 가입과 달리 생년/고향을 계정 생성과 동시에 받을 방법이
+없다(제공자 동의 화면에서 승인하는 순간 계정이 생겨버려 이 프로젝트가 그 타이밍에
+관여할 수 없음) — 로그인 직후 별도로 `PATCH /users/{user_id}`(1절 참조)를 호출해
+채운다.
+
 ### 인증이 걸린 나머지 엔드포인트에서 실패하는 방식
 
 - `Authorization` 헤더 자체가 없으면 `403 Forbidden`(FastAPI `HTTPBearer`의 기본 동작).
@@ -166,6 +193,23 @@ Supabase는 리프레시 토큰을 1회용으로 순환시키므로 이전 `refr
 
 `user_id`로 프로필을 조회한다. 로그인한 본인이 아니면 `403`, 존재하지 않으면 `404`.
 응답 스키마는 위 `UserRead`와 동일.
+
+---
+
+### `PATCH /api/v1/users/{user_id}` — 프로필 부분 수정 (인증 필요, 본인만)
+
+주 용도는 소셜 로그인 온보딩(프로필 완성 단계) — 계정 생성 시점에 받지 못한 생년/고향을
+로그인 직후 채운다(위 "0. Authentication"의 `POST /auth/oauth-sync` 참조). 다만 일반
+프로필 수정에도 그대로 쓸 수 있게 범용으로 설계했다.
+
+**요청 바디 (`UserProfileUpdate`)**: `name`/`birth_year`/`hometown` 전부 선택 필드.
+**보낸 필드만 갱신되고, 생략한 필드는 기존 값이 그대로 유지된다**(`null`을 명시적으로
+보내도 "지운다"는 뜻이 아니라 "안 보냄"과 동일하게 취급됨 — 이 프로젝트에서 프로필
+필드를 의도적으로 비우는 시나리오가 없다는 전제).
+
+**응답 `200 OK`**: 갱신된 `UserRead`.
+
+**오류**: 본인 소유가 아니면 `403`.
 
 ---
 

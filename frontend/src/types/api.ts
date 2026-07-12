@@ -34,6 +34,16 @@ export interface User {
   current_stage: UserStage;
 }
 
+/** POST /api/v1/auth/oauth-sync 응답. is_new=true면 방금 프로필이 생성된
+ * 첫 로그인이라는 뜻 — 프론트가 이 값으로 온보딩(프로필 완성) 진입 여부를
+ * 결정한다(backend/app/schemas/user.py:OAuthSyncResponse). */
+export interface OAuthSyncResponse {
+  user: User;
+  is_new: boolean;
+}
+
+export type OAuthProvider = "kakao" | "google";
+
 /** POST /api/v1/auth/login, /api/v1/auth/refresh 응답. Supabase Auth가 발급한 세션을
  * 그대로 전달한다(backend/app/schemas/auth.py:TokenResponse). */
 export interface TokenResponse {

@@ -99,6 +99,26 @@ class SqlAlchemyUserGateway(UserGateway):
         user = result.scalar_one_or_none()
         return _to_user_record(user) if user else None
 
+    async def update(
+        self,
+        user_id: UUID,
+        *,
+        name: str | None = None,
+        birth_year: int | None = None,
+        hometown: str | None = None,
+    ) -> UserRecord:
+        user = await self._session.get(User, user_id)
+        if user is None:
+            raise KeyError(f"user not found: {user_id}")
+        if name is not None:
+            user.name = name
+        if birth_year is not None:
+            user.birth_year = birth_year
+        if hometown is not None:
+            user.hometown = hometown
+        await self._session.flush()
+        return _to_user_record(user)
+
 
 class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
     def __init__(self, session: AsyncSession) -> None:

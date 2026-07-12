@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUserDep, GatewaysDep, require_self
 from app.schemas.consent import ConsentCreate, ConsentRead
-from app.schemas.user import UserCreate, UserRead
+from app.schemas.user import UserCreate, UserProfileUpdate, UserRead
 from app.services import consent_service, user_service
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -33,6 +33,26 @@ async def get_user(user_id: uuid.UUID, gateways: GatewaysDep, current_user: Curr
     user = await user_service.get_user(gateways, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "사용자를 찾을 수 없습니다.")
+    return UserRead.model_validate(user)
+
+
+@router.patch("/{user_id}", response_model=UserRead)
+async def update_user(
+    user_id: uuid.UUID,
+    payload: UserProfileUpdate,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> UserRead:
+    """소셜 로그인 온보딩(프로필 완성 단계)이 생년/고향을 채우는 주 용도지만, 일반
+    프로필 수정에도 그대로 쓸 수 있게 범용으로 뒀다. 보낸 필드만 갱신된다."""
+    require_self(current_user, user_id)
+    user = await user_service.update_profile(
+        gateways,
+        user_id,
+        name=payload.name,
+        birth_year=payload.birth_year,
+        hometown=payload.hometown,
+    )
     return UserRead.model_validate(user)
 
 

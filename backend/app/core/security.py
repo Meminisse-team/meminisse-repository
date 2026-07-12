@@ -42,18 +42,26 @@ def _jwk_client() -> jwt.PyJWKClient:
     return jwt.PyJWKClient(f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json")
 
 
-def decode_access_token(token: str) -> uuid.UUID:
+def decode_access_token_payload(token: str) -> dict:
+    """서명·만료를 검증한 뒤 JWT 클레임 전체를 반환한다. 소셜 로그인(OAuth) 첫
+    로그인 시 프로필 자동 생성(app/services/user_service.py:sync_oauth_user)에
+    이메일/표시 이름(user_metadata)이 필요해서 sub만 꺼내던 기존 함수 아래에
+    분리했다 — 검증 로직 자체는 그대로 재사용한다."""
     try:
         alg = jwt.get_unverified_header(token).get("alg")
         if alg in _HS_ALGORITHMS:
-            payload = jwt.decode(
+            return jwt.decode(
                 token, settings.SUPABASE_JWT_SECRET, algorithms=[alg], audience=_EXPECTED_AUDIENCE
             )
-        else:
-            signing_key = _jwk_client().get_signing_key_from_jwt(token)
-            payload = jwt.decode(
-                token, signing_key.key, algorithms=[alg], audience=_EXPECTED_AUDIENCE
-            )
+        signing_key = _jwk_client().get_signing_key_from_jwt(token)
+        return jwt.decode(token, signing_key.key, algorithms=[alg], audience=_EXPECTED_AUDIENCE)
+    except jwt.PyJWTError as exc:
+        raise InvalidTokenError(str(exc)) from exc
+
+
+def decode_access_token(token: str) -> uuid.UUID:
+    try:
+        payload = decode_access_token_payload(token)
         return uuid.UUID(payload["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError) as exc:
+    except (InvalidTokenError, KeyError, ValueError) as exc:
         raise InvalidTokenError(str(exc)) from exc
