@@ -33,7 +33,13 @@ async def _get_own_session_or_404(
 async def create_session(
     payload: SessionCreate, gateways: GatewaysDep, current_user: CurrentUserDep
 ) -> SessionRead:
-    session = await interview_service.create_session(gateways, current_user.id, payload)
+    try:
+        session = await interview_service.create_session(gateways, current_user.id, payload)
+    except interview_service.NoRemainingQuestionsError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "배정할 다음 고정 질문이 없습니다. 이미 모든 질문에 답변하셨습니다.",
+        )
     return SessionRead.model_validate(session)
 
 

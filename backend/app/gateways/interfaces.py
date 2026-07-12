@@ -39,6 +39,7 @@ from app.gateways.dto import (
     InterviewSessionRecord,
     MediaAssetCreateData,
     MediaAssetRecord,
+    QuestionRecord,
     SessionCreateData,
     UserCreateData,
     UserRecord,
@@ -357,3 +358,19 @@ class ConsentGateway(ABC):
 
     @abstractmethod
     async def list_by_user(self, user_id: UUID) -> list[ConsentGrant]: ...
+
+
+class QuestionGateway(ABC):
+    """고정 인터뷰 질문 큐(Question 테이블, app/data/question_bank.py 시드) 접근.
+
+    생애주기를 넘나들며 자유롭게 고르지 않는다 — sequence_order 전역 순서
+    (유년기→청년기→장년기→노년기)를 그대로 따라 한 유저에게 다음 질문 하나를
+    순서대로 내어준다. life_period는 표시·관리용 메타데이터일 뿐 선택 기준이
+    아니다."""
+
+    @abstractmethod
+    async def get_next_unasked(self, user_id: UUID) -> QuestionRecord | None:
+        """이 유저에게 아직 배정되지 않은 활성 질문 중 sequence_order가 가장 빠른
+        것. "배정됨"의 판정 기준은 session_type=FIXED_QUESTION이고 status가
+        OPEN이 아닌(즉 완료·건너뜀으로 실제로 다뤄진) 세션들의 question_id
+        집합이다. 더 배정할 질문이 없으면(질문 큐를 전부 마쳤으면) None."""

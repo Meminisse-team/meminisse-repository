@@ -336,3 +336,18 @@ class ConsentGrantCreateData:
     consent_type: ConsentType
     notice_version: str
     granted_by: ConsentGrantedBy
+
+
+# --------------------------------------------------------------------------- #
+# 고정 인터뷰 질문 큐 (app/data/question_bank.py 시드 데이터의 조회 계약)          #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class QuestionRecord:
+    id: UUID
+    sequence_order: int
+    title: str
+    content: str
+    life_period: LifePeriod
+    is_active: bool

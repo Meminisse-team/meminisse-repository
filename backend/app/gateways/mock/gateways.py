@@ -23,6 +23,7 @@ from app.gateways.dto import (
     InterviewSessionRecord,
     MediaAssetCreateData,
     MediaAssetRecord,
+    QuestionRecord,
     SessionCreateData,
     UserCreateData,
     UserRecord,
@@ -36,6 +37,7 @@ from app.gateways.interfaces import (
     InterviewSessionGateway,
     MediaAssetGateway,
     ObjectStorageGateway,
+    QuestionGateway,
     UserGateway,
 )
 from app.gateways.mock.store import MockStore
@@ -46,6 +48,7 @@ from app.models.enums import (
     MessageRole,
     RiskClassification,
     SessionStatus,
+    SessionType,
     UserStage,
 )
 
@@ -650,6 +653,29 @@ class MockConsentGateway(ConsentGateway):
         grants.sort(key=lambda g: g.granted_at)
         grants.reverse()
         return grants
+
+
+class MockQuestionGateway(QuestionGateway):
+    def __init__(self, store: MockStore) -> None:
+        self._store = store
+
+    async def get_next_unasked(self, user_id: uuid.UUID) -> QuestionRecord | None:
+        assigned_question_ids = {
+            s.question_id
+            for s in self._store.sessions.values()
+            if s.user_id == user_id
+            and s.session_type == SessionType.FIXED_QUESTION
+            and s.status != SessionStatus.OPEN
+            and s.question_id is not None
+        }
+        candidates = [
+            q
+            for q in self._store.questions.values()
+            if q.is_active and q.id not in assigned_question_ids
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda q: q.sequence_order)
 
 
 def _dot_product(a: list[float], b: list[float]) -> float:
