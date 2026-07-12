@@ -189,10 +189,17 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
     async def list_by_user(self, user_id: UUID) -> list[InterviewSessionRecord]:
         # chat_logs는 의도적으로 eager load하지 않는다 — 목록 조회에서 전체 대화까지
         # 함께 내려주면 페이로드가 불필요하게 커진다(interfaces.py 계약 참조).
+        # id를 보조 정렬 키로 추가한다 — started_at만으로 정렬하면 짧은 시간 안에
+        # 여러 세션이 만들어질 때(빠른 연속 요청, 테스트 등) 동일한 타임스탬프를
+        # 가진 행들의 순서가 SQL 표준상 정의되지 않아 쿼리마다 달라질 수 있다
+        # (Mock 게이트웨이에서 동일한 근본 원인으로 실제 목록 순서 테스트가
+        # 간헐적으로 실패하는 걸 재현·확인, 2026-07-13). id는 UUID(v4)라 생성
+        # 순서를 보장하진 않지만, 최소한 매 실행마다 같은(결정적인) 순서를
+        # 반환하도록 동률을 깨는 역할은 한다.
         result = await self._session.execute(
             select(InterviewSession)
             .where(InterviewSession.user_id == user_id)
-            .order_by(InterviewSession.started_at.desc())
+            .order_by(InterviewSession.started_at.desc(), InterviewSession.id.desc())
         )
         return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
 
@@ -322,6 +329,7 @@ class SqlAlchemyEventGateway(EventGateway):
         return [_to_event_record(obj) for obj in result.scalars().all()]
 
     async def list_for_timeline(self, user_id: UUID) -> list[EventRecord]:
+        # id 보조 정렬 키: SqlAlchemyInterviewSessionGateway.list_by_user 주석 참조.
         stmt = (
             select(Event)
             .where(
@@ -329,7 +337,7 @@ class SqlAlchemyEventGateway(EventGateway):
                 Event.verified.is_(True),
                 Event.duplicate_of_event_id.is_(None),
             )
-            .order_by(Event.created_at.desc())
+            .order_by(Event.created_at.desc(), Event.id.desc())
         )
         result = await self._session.execute(stmt)
         return [_to_event_record(obj) for obj in result.scalars().all()]
@@ -437,10 +445,11 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
         await self._session.flush()
 
     async def list_by_user(self, user_id: UUID) -> list[MediaAssetRecord]:
+        # id 보조 정렬 키: SqlAlchemyInterviewSessionGateway.list_by_user 주석 참조.
         stmt = (
             select(MediaAsset)
             .where(MediaAsset.user_id == user_id)
-            .order_by(MediaAsset.created_at.desc())
+            .order_by(MediaAsset.created_at.desc(), MediaAsset.id.desc())
         )
         result = await self._session.execute(stmt)
         return [_to_media_asset_record(obj) for obj in result.scalars().all()]
@@ -673,10 +682,11 @@ class SqlAlchemyConsentGateway(ConsentGateway):
         return result.scalars().first() is not None
 
     async def list_by_user(self, user_id: UUID) -> list[ConsentGrant]:
+        # id 보조 정렬 키: SqlAlchemyInterviewSessionGateway.list_by_user 주석 참조.
         result = await self._session.execute(
             select(ConsentRecord)
             .where(ConsentRecord.user_id == user_id)
-            .order_by(ConsentRecord.granted_at.desc())
+            .order_by(ConsentRecord.granted_at.desc(), ConsentRecord.id.desc())
         )
         return [_to_consent_grant(obj) for obj in result.scalars().all()]
 

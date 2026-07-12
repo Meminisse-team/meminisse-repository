@@ -172,7 +172,17 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
 
     async def list_by_user(self, user_id: uuid.UUID) -> list[InterviewSessionRecord]:
         sessions = [s for s in self._store.sessions.values() if s.user_id == user_id]
-        sessions.sort(key=lambda s: s.started_at, reverse=True)
+        # sort(key=..., reverse=True) 대신 "오름차순 정렬 + reverse()" 조합을 쓴다 —
+        # 둘 다 안정 정렬(stable)이지만 결과가 다르다. started_at이 완전히 동일한
+        # 레코드가 여럿이면(테스트처럼 매우 빠르게 연속 생성될 때 실제로 발생 —
+        # Windows의 datetime.now() 해상도가 요청보다 거칠 수 있다), reverse=True는
+        # 동일 키 그룹 안에서 "원본(삽입) 순서를 그대로" 유지해 가장 먼저 만든 게
+        # 앞에 남는다 — "최신순" 계약과 반대가 되어 실제로 목록 순서 테스트가
+        # 간헐적으로 실패했다(2026-07-13, test_list_sessions_only_returns_own_
+        # sessions_newest_first 재현). 오름차순 정렬 뒤 뒤집으면 동일 키 그룹도
+        # "나중에 생성된 게 먼저"로 결정적으로 뒤집힌다.
+        sessions.sort(key=lambda s: s.started_at)
+        sessions.reverse()
         return sessions
 
     def _require_session(self, session_id: uuid.UUID) -> InterviewSessionRecord:
@@ -281,7 +291,11 @@ class MockEventGateway(EventGateway):
             for event in self._store.events.values()
             if event.user_id == user_id and event.verified and event.duplicate_of_event_id is None
         ]
-        events.sort(key=lambda e: e.created_at, reverse=True)
+        # "오름차순 정렬 + reverse()" 이유: MockInterviewSessionGateway.list_by_user
+        # 주석 참조 — sort(reverse=True)는 동일 created_at일 때 삽입 순서를 그대로
+        # 유지해 "최신순" 계약이 깨질 수 있다.
+        events.sort(key=lambda e: e.created_at)
+        events.reverse()
         return events
 
     async def list_mergeable(self, user_id: uuid.UUID) -> list[EventRecord]:
@@ -382,7 +396,9 @@ class MockMediaAssetGateway(MediaAssetGateway):
 
     async def list_by_user(self, user_id: uuid.UUID) -> list[MediaAssetRecord]:
         assets = [a for a in self._store.media_assets.values() if a.user_id == user_id]
-        assets.sort(key=lambda a: a.created_at, reverse=True)
+        # "오름차순 정렬 + reverse()" 이유: MockInterviewSessionGateway.list_by_user 참조.
+        assets.sort(key=lambda a: a.created_at)
+        assets.reverse()
         return assets
 
 
@@ -622,7 +638,9 @@ class MockConsentGateway(ConsentGateway):
 
     async def list_by_user(self, user_id: uuid.UUID) -> list[ConsentGrant]:
         grants = [g for g in self._store.consents.values() if g.user_id == user_id]
-        grants.sort(key=lambda g: g.granted_at, reverse=True)
+        # "오름차순 정렬 + reverse()" 이유: MockInterviewSessionGateway.list_by_user 참조.
+        grants.sort(key=lambda g: g.granted_at)
+        grants.reverse()
         return grants
 
 
