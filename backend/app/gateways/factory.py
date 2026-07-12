@@ -35,6 +35,7 @@ from app.gateways.interfaces import (
     InterviewSessionGateway,
     MediaAssetGateway,
     ObjectStorageGateway,
+    QuestionGateway,
     UserGateway,
 )
 
@@ -50,6 +51,7 @@ class Gateways:
     characters: CharacterGateway
     consents: ConsentGateway
     storage: ObjectStorageGateway
+    questions: QuestionGateway
     _commit: Callable[[], Coroutine[Any, Any, None]]
 
     async def commit(self) -> None:
@@ -70,6 +72,7 @@ def _build_mock_gateways() -> Gateways:
         MockInterviewSessionGateway,
         MockMediaAssetGateway,
         MockObjectStorage,
+        MockQuestionGateway,
         MockUserGateway,
     )
     from app.gateways.mock.store import default_store
@@ -84,6 +87,7 @@ def _build_mock_gateways() -> Gateways:
         characters=MockCharacterGateway(default_store),
         consents=MockConsentGateway(default_store),
         storage=MockObjectStorage(default_store),
+        questions=MockQuestionGateway(default_store),
         _commit=_noop_commit,
     )
 
@@ -98,6 +102,7 @@ def _build_postgres_gateways(session) -> Gateways:  # noqa: ANN001 (AsyncSession
         SqlAlchemyEventGateway,
         SqlAlchemyInterviewSessionGateway,
         SqlAlchemyMediaAssetGateway,
+        SqlAlchemyQuestionGateway,
         SqlAlchemyUserGateway,
     )
 
@@ -111,6 +116,7 @@ def _build_postgres_gateways(session) -> Gateways:  # noqa: ANN001 (AsyncSession
         characters=SqlAlchemyCharacterGateway(session),
         consents=SqlAlchemyConsentGateway(session),
         storage=S3ObjectStorageGateway(),
+        questions=SqlAlchemyQuestionGateway(session),
         _commit=session.commit,
     )
 

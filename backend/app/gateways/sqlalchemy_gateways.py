@@ -35,6 +35,7 @@ from app.gateways.dto import (
     InterviewSessionRecord,
     MediaAssetCreateData,
     MediaAssetRecord,
+    QuestionRecord,
     SessionCreateData,
     UserCreateData,
     UserRecord,
@@ -47,6 +48,7 @@ from app.gateways.interfaces import (
     EventGateway,
     InterviewSessionGateway,
     MediaAssetGateway,
+    QuestionGateway,
     UserGateway,
 )
 from app.models import (
@@ -64,9 +66,10 @@ from app.models import (
     InterviewSession,
     MediaAsset,
     MessageRole,
-    Question,  # noqa: F401  (모델 등록 보장을 위한 임포트 — mapper configure에 필요)
+    Question,
     RiskClassification,
     SessionStatus,
+    SessionType,
     User,
 )
 from app.models.enums import EventSourceType, MediaAnalysisTrack, UserStage
@@ -746,6 +749,29 @@ class SqlAlchemyConsentGateway(ConsentGateway):
         return [_to_consent_grant(obj) for obj in result.scalars().all()]
 
 
+class SqlAlchemyQuestionGateway(QuestionGateway):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_next_unasked(self, user_id: UUID) -> QuestionRecord | None:
+        already_assigned = select(InterviewSession.question_id).where(
+            InterviewSession.user_id == user_id,
+            InterviewSession.session_type == SessionType.FIXED_QUESTION,
+            InterviewSession.status != SessionStatus.OPEN,
+            InterviewSession.question_id.is_not(None),
+        )
+        stmt = (
+            select(Question)
+            .where(Question.is_active.is_(True))
+            .where(Question.id.not_in(already_assigned))
+            .order_by(Question.sequence_order.asc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        question = result.scalar_one_or_none()
+        return _to_question_record(question) if question else None
+
+
 # --------------------------------------------------------------------------- #
 # ORM -> DTO 변환                                                              #
 # --------------------------------------------------------------------------- #
@@ -857,4 +883,11 @@ def _to_consent_grant(consent: ConsentRecord) -> ConsentGrant:
         notice_version=consent.notice_version, granted_by=consent.granted_by,
         granted_at=consent.granted_at, revoked_at=consent.revoked_at,
         character_id=consent.character_id,
+    )
+
+
+def _to_question_record(question: Question) -> QuestionRecord:
+    return QuestionRecord(
+        id=question.id, sequence_order=question.sequence_order, title=question.title,
+        content=question.content, life_period=question.life_period, is_active=question.is_active,
     )

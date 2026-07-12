@@ -18,21 +18,39 @@ from app.agents import prompts
 from app.clients import solar
 from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, SessionCreateData
 from app.gateways.factory import Gateways
-from app.models.enums import MessageRole, UserStage
+from app.models.enums import MessageRole, SessionType, UserStage
 from app.schemas.interview import SessionCreate
 from app.services import event_extraction_service
+
+
+class NoRemainingQuestionsError(Exception):
+    """FIXED_QUESTION 세션을 question_id 없이(=다음 질문을 자동으로 배정받도록)
+    생성하려 했는데, 이 유저에게 더 배정할 활성 질문이 없는 경우(고정 질문 큐를
+    전부 마침). 라우터가 이를 못 잡으면 500으로 새어나간다(app/api/v1/interviews.py 참조)."""
 
 
 async def create_session(
     gateways: Gateways, user_id: uuid.UUID, payload: SessionCreate
 ) -> InterviewSessionRecord:
     """user_id는 라우터가 인증된 current_user.id로부터 넘긴다(SessionCreate 스키마에는
-    더 이상 user_id 필드가 없다 — app/schemas/interview.py 참조)."""
+    더 이상 user_id 필드가 없다 — app/schemas/interview.py 참조).
+
+    FIXED_QUESTION 세션인데 question_id가 안 넘어왔으면(프론트가 "다음 질문"을
+    직접 고르지 않고 큐에 맡기는 일반적인 경로) QuestionGateway로 다음 질문을
+    자동 배정한다 — 세션 종료 시점이 아니라 시작 시점에 고르는 이유는
+    docs/QUESTION_BANK_GUIDE.md 4절 참조."""
+    question_id = payload.question_id
+    if question_id is None and payload.session_type == SessionType.FIXED_QUESTION:
+        next_question = await gateways.questions.get_next_unasked(user_id)
+        if next_question is None:
+            raise NoRemainingQuestionsError()
+        question_id = next_question.id
+
     session = await gateways.sessions.create(
         SessionCreateData(
             user_id=user_id,
             session_type=payload.session_type,
-            question_id=payload.question_id,
+            question_id=question_id,
             linked_media_asset_id=payload.linked_media_asset_id,
             initial_slots_filled={key: False for key in prompts.ALL_SLOTS},
         )
@@ -89,6 +107,7 @@ async def add_user_turn(
         updated_slots = {**session.slots_filled, **{slot: True for slot in newly_filled}}
         missing_required = [key for key in prompts.REQUIRED_SLOTS if not updated_slots.get(key)]
 
+        should_complete = False
         if missing_required and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT:
             assistant_content = await _generate_followup_question(
                 event_summary=content,
@@ -97,10 +116,12 @@ async def add_user_turn(
             )
             new_followup_count = session.followup_count + 1
         else:
-            # 이 사건에 대해서는 더 물을 게 없다 — 넘어가기 전에, 예전 사진/일기장
-            # 업로드에서 OCR 오인식 의심으로 격리된(verified=false) 사건이 있으면
-            # 그걸 먼저 확인 질문으로 낸다(TODO였던 승격 경로, 2026-07-12 연결).
-            # 없으면 기존 자리표시자 문구 그대로.
+            new_followup_count = session.followup_count
+            # 이 사건에 대해서는 더 물을 게 없다 — 세션을 완료 처리하기 전에, 예전
+            # 사진/일기장 업로드에서 OCR 오인식 의심으로 격리된(verified=false) 사건이
+            # 있으면 그걸 먼저 확인 질문으로 낸다(TODO였던 승격 경로, 2026-07-12 연결).
+            # 확인이 끝날 때까지는 이 세션을 완료 처리하지 않는다 — 완료+다음 질문
+            # 배정은 확인 응답을 받은 다음 턴에 이 분기로 다시 돌아와 정상 처리된다.
             pending = await event_extraction_service.list_pending_ocr_confirmations(
                 gateways, session.user_id
             )
@@ -113,13 +134,29 @@ async def add_user_turn(
                     guessed_value=target.one_line_summary,
                 )
                 await gateways.sessions.set_pending_ocr_confirmation(session.id, target.id)
+                should_complete = False
             else:
+                should_complete = session.session_type == SessionType.FIXED_QUESTION
+                # PHOTO 세션은 사진 핀셋 배치 오케스트레이션이 아직 정해지지 않아
+                # 범위 밖이다(docs/QUESTION_BANK_GUIDE.md 5절) — 기존 안내 문구를 유지한다.
                 assistant_content = "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
-            new_followup_count = session.followup_count
 
         await gateways.sessions.update_slots(
             session.id, slots_filled=updated_slots, followup_count=new_followup_count
         )
+
+        if should_complete:
+            # "한 세션 = 질문 하나" 관례(InterviewSession 모델 docstring)에 따라,
+            # 이 세션의 질문에 대한 슬롯이 충분히 채워졌으면 세션을 바로 완료 처리하고
+            # (Phase 2 후처리 큐잉까지 포함 — complete_session 참조) 다음 질문을 미리
+            # 보여준다. 프론트는 이 응답을 받은 뒤 새 세션을 만들어 이어가면 된다.
+            await complete_session(gateways, session)
+            next_question = await gateways.questions.get_next_unasked(session.user_id)
+            assistant_content = (
+                f"말씀해주셔서 감사해요. 다음 질문으로 넘어가 볼까요?\n\n{next_question.content}"
+                if next_question is not None
+                else "말씀해주셔서 감사해요. 준비된 질문에 모두 답변해 주셨어요. 정말 수고 많으셨습니다."
+            )
 
     assistant_turn = await gateways.sessions.add_chat_log(
         session.id, role=MessageRole.ASSISTANT, content=assistant_content
