@@ -184,12 +184,27 @@ async def test_retain_real_name_requires_disclosure_consent() -> None:
         with pytest.raises(PermissionError):
             await character_service.retain_real_name(gateways, character.id, notice_version="v1")
 
+        # 인물 단위 동의(character_id 미지정)는 이 인물을 풀어주지 않는다 — 같은
+        # 자서전의 다른 인물에 대한 동의로 이 인물의 실명까지 유지되는 걸 막는 게
+        # consent_records.character_id 세분화의 목적이므로(character_service.
+        # retain_real_name 주석 참조), 사용자 단위로만 동의를 남기면 여전히 막혀야 한다.
         await consent_service.record_consent(
             gateways,
             user.id,
             consent_type=ConsentType.DISCLOSURE_REALNAME,
             notice_version="v1",
             granted_by=ConsentGrantedBy.SELF,
+        )
+        with pytest.raises(PermissionError):
+            await character_service.retain_real_name(gateways, character.id, notice_version="v1")
+
+        await consent_service.record_consent(
+            gateways,
+            user.id,
+            consent_type=ConsentType.DISCLOSURE_REALNAME,
+            notice_version="v1",
+            granted_by=ConsentGrantedBy.SELF,
+            character_id=character.id,
         )
         character = await character_service.retain_real_name(gateways, character.id, notice_version="v1")
         assert character.real_name_retained is True

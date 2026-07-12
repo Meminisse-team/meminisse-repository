@@ -49,6 +49,7 @@ from app.models.enums import (
     MediaAnalysisTrack,
     MessageRole,
     RiskClassification,
+    UserStage,
 )
 
 
@@ -88,9 +89,12 @@ class UserGateway(ABC):
         name: str | None = None,
         birth_year: int | None = None,
         hometown: str | None = None,
+        current_stage: UserStage | None = None,
     ) -> UserRecord:
         """None인 인자는 "건드리지 않는다"는 뜻이다(부분 갱신). 소셜 로그인 온보딩
-        완성 단계(PATCH /users/{id})와 일반 프로필 수정에 함께 쓰인다."""
+        완성 단계(PATCH /users/{id})와 일반 프로필 수정, 그리고 서비스 레이어가
+        진행 단계 전환 시점(첫 인터뷰 세션 생성/Phase 3 완료/최종 윤문 완료)에
+        current_stage만 갱신할 때도 함께 쓰인다."""
 
 
 class InterviewSessionGateway(ABC):
@@ -121,6 +125,13 @@ class InterviewSessionGateway(ABC):
     @abstractmethod
     async def set_session_prose(self, session_id: UUID, prose: str) -> None:
         """Layer 2: 세션 종료 후 재조립된 1인칭 산문을 기록한다."""
+
+    @abstractmethod
+    async def set_pending_ocr_confirmation(
+        self, session_id: UUID, event_id: UUID | None
+    ) -> None:
+        """이번 턴에 OCR 확인 질문을 냈다면 그 대상 event_id를, 응답을 처리하고 나면
+        None을 넘겨 초기화한다."""
 
     @abstractmethod
     async def complete(self, session_id: UUID) -> None:
@@ -224,6 +235,22 @@ class EventGateway(ABC):
 
     @abstractmethod
     async def bulk_update_importance(self, updates: Sequence[EventImportanceUpdate]) -> None: ...
+
+    @abstractmethod
+    async def list_pending_document_confirmation(self, user_id: UUID) -> list[EventRecord]:
+        """source_type=DOCUMENT AND verified=False인 이벤트(OCR 1차 검증에서 오인식
+        의심으로 격리된 것들). 인터뷰 턴에서 확인 질문으로 제시할 대상 큐 —
+        created_at 오름차순(먼저 스테이징된 것부터 확인)."""
+
+    @abstractmethod
+    async def set_verified(self, event_id: UUID, *, verified: bool) -> EventRecord:
+        """OCR 확인 질문에 대한 유저 응답 결과를 반영한다. 승격(verified=True)
+        이후의 임베딩 계산은 이 메서드의 책임이 아니다 — 호출부가 bulk_update_
+        embeddings로 별도 반영한다."""
+
+    @abstractmethod
+    async def delete(self, event_id: UUID) -> None:
+        """OCR 확인 질문에서 유저가 부인한(오인식이었다고 답한) 이벤트를 폐기한다."""
 
 
 class MediaAssetGateway(ABC):
@@ -353,7 +380,16 @@ class ConsentGateway(ABC):
 
     @abstractmethod
     async def has_active(self, user_id: UUID, consent_type: ConsentType) -> bool:
-        """revoked_at IS NULL인 레코드가 하나라도 있는지."""
+        """revoked_at IS NULL인 레코드가 하나라도 있는지(사용자 단위 동의 — character_id
+        가 null인 레코드만 본다). DATA_COLLECTION 등 인물과 무관한 동의 종류에 쓴다."""
+
+    @abstractmethod
+    async def has_active_for_character(
+        self, user_id: UUID, character_id: UUID, consent_type: ConsentType
+    ) -> bool:
+        """revoked_at IS NULL이고 character_id가 정확히 이 인물인 레코드가 있는지.
+        DISCLOSURE_REALNAME(인물 단위 실명 유지 동의) 게이트 전용 — 인물 A에 대한
+        동의가 인물 B의 실명 유지에 쓰이지 않도록 has_active와 분리했다."""
 
     @abstractmethod
     async def list_by_user(self, user_id: UUID) -> list[ConsentGrant]: ...

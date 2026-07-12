@@ -23,6 +23,11 @@ class ConsentRecord(Base):
     user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # DISCLOSURE_REALNAME 동의를 특정 인물에 묶는다. DATA_COLLECTION 등 사용자 단위
+    # 동의는 null로 둔다 — "인물 단위" 동의가 필요한 건 실명 유지뿐이기 때문이다.
+    character_id = Column(
+        UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     consent_type = Column(str_enum(ConsentType, name="consenttype"), nullable=False)
     notice_version = Column(String(50), nullable=False)
     granted_by = Column(str_enum(ConsentGrantedBy, name="consentgrantedby"), nullable=False)
@@ -31,3 +36,4 @@ class ConsentRecord(Base):
     revoked_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", back_populates="consent_records")
+    character = relationship("Character")

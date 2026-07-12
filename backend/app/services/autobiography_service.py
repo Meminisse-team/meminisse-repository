@@ -33,7 +33,7 @@ from app.gateways.dto import (
     EventRecord,
 )
 from app.gateways.factory import Gateways
-from app.models.enums import AutobiographyStatus, DraftStatus, LifeMilestoneCategory
+from app.models.enums import AutobiographyStatus, DraftStatus, LifeMilestoneCategory, UserStage
 from app.services import character_service
 
 # Phase 3 이벤트 병합: 이 값보다 코사인 거리가 가까운(=유사한) 쌍만 LLM 병합 판정에
@@ -108,6 +108,10 @@ async def consolidate_autobiography(gateways: Gateways, user_id: uuid.UUID) -> A
         consolidated_content=consolidated_content,
         style_bible=style_bible,
     )
+    # User.current_stage: 목차 생성·챕터 조립(Phase 4)이 이제부터 시작되므로
+    # "publishing" 단계로 전환한다(어디서도 갱신되지 않던 버그, 2026-07-12 발견 —
+    # interview_service.create_session의 동일한 수정 참조).
+    await gateways.users.update(user_id, current_stage=UserStage.PUBLISHING)
     await gateways.commit()
     return autobiography
 
@@ -645,6 +649,13 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
     for chapter in chapters:
         await gateways.chapters.mark_finalized(chapter.id)
 
-    autobiography = await gateways.autobiographies.update(autobiography_id, final_content=final_content)
+    # AutobiographyStatus.PUBLISHED는 지금까지 enum 값만 정의돼 있고 실제로는
+    # 어디서도 설정되지 않던 죽은 값이었다(2026-07-12 발견) — 최종 윤문(이 함수)이
+    # 끝나 열람 가능한 완성본이 나오는 시점이 "최종 출판 완료"의 자연스러운 기준이다
+    # (PDF 조판·POD는 그 이후의 별도 내보내기 단계).
+    autobiography = await gateways.autobiographies.update(
+        autobiography_id, final_content=final_content, status=AutobiographyStatus.PUBLISHED
+    )
+    await gateways.users.update(autobiography.user_id, current_stage=UserStage.PUBLISHED)
     await gateways.commit()
     return autobiography

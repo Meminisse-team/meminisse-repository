@@ -99,6 +99,7 @@ class InterviewSessionRecord:
     session_prose: str | None
     started_at: datetime
     completed_at: datetime | None
+    pending_ocr_confirmation_event_id: UUID | None = None
     chat_logs: list[ChatLogRecord] = field(default_factory=list)
 
 
@@ -328,6 +329,7 @@ class ConsentGrant:
     granted_by: ConsentGrantedBy
     granted_at: datetime
     revoked_at: datetime | None
+    character_id: UUID | None = None
 
 
 @dataclass
@@ -336,3 +338,4 @@ class ConsentGrantCreateData:
     consent_type: ConsentType
     notice_version: str
     granted_by: ConsentGrantedBy
+    character_id: UUID | None = None

@@ -15,6 +15,9 @@ export interface CreateConsentInput {
   consent_type: ConsentType;
   notice_version: string;
   granted_by: ConsentGrantedBy;
+  /** DISCLOSURE_REALNAME(인물 단위 실명 유지 동의)일 때만 채운다 — 그 외 동의는
+   * 사용자 단위라 비워 둔다(backend/app/schemas/consent.py 참조). */
+  character_id?: string;
 }
 
 export interface UpdateProfileInput {

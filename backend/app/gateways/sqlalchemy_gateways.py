@@ -69,7 +69,7 @@ from app.models import (
     SessionStatus,
     User,
 )
-from app.models.enums import MediaAnalysisTrack
+from app.models.enums import EventSourceType, MediaAnalysisTrack, UserStage
 
 
 class SqlAlchemyUserGateway(UserGateway):
@@ -106,6 +106,7 @@ class SqlAlchemyUserGateway(UserGateway):
         name: str | None = None,
         birth_year: int | None = None,
         hometown: str | None = None,
+        current_stage: UserStage | None = None,
     ) -> UserRecord:
         user = await self._session.get(User, user_id)
         if user is None:
@@ -116,6 +117,8 @@ class SqlAlchemyUserGateway(UserGateway):
             user.birth_year = birth_year
         if hometown is not None:
             user.hometown = hometown
+        if current_stage is not None:
+            user.current_stage = current_stage
         await self._session.flush()
         return _to_user_record(user)
 
@@ -170,6 +173,13 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
     async def set_session_prose(self, session_id: UUID, prose: str) -> None:
         session_obj = await self._require_session(session_id)
         session_obj.session_prose = prose
+        await self._session.flush()
+
+    async def set_pending_ocr_confirmation(
+        self, session_id: UUID, event_id: UUID | None
+    ) -> None:
+        session_obj = await self._require_session(session_id)
+        session_obj.pending_ocr_confirmation_event_id = event_id
         await self._session.flush()
 
     async def complete(self, session_id: UUID) -> None:
@@ -407,6 +417,32 @@ class SqlAlchemyEventGateway(EventGateway):
             obj.importance_signals = update.importance_signals
             obj.life_milestone_category = update.life_milestone_category
         await self._session.flush()
+
+    async def list_pending_document_confirmation(self, user_id: UUID) -> list[EventRecord]:
+        result = await self._session.execute(
+            select(Event)
+            .where(
+                Event.user_id == user_id,
+                Event.source_type == EventSourceType.DOCUMENT,
+                Event.verified.is_(False),
+            )
+            .order_by(Event.created_at.asc(), Event.id.asc())
+        )
+        return [_to_event_record(obj) for obj in result.scalars().all()]
+
+    async def set_verified(self, event_id: UUID, *, verified: bool) -> EventRecord:
+        obj = await self._session.get(Event, event_id)
+        if obj is None:
+            raise KeyError(f"event not found: {event_id}")
+        obj.verified = verified
+        await self._session.flush()
+        return _to_event_record(obj)
+
+    async def delete(self, event_id: UUID) -> None:
+        obj = await self._session.get(Event, event_id)
+        if obj is not None:
+            await self._session.delete(obj)
+            await self._session.flush()
 
 
 class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
@@ -670,6 +706,7 @@ class SqlAlchemyConsentGateway(ConsentGateway):
             consent_type=data.consent_type,
             notice_version=data.notice_version,
             granted_by=data.granted_by,
+            character_id=data.character_id,
         )
         self._session.add(obj)
         await self._session.flush()
@@ -679,6 +716,20 @@ class SqlAlchemyConsentGateway(ConsentGateway):
         result = await self._session.execute(
             select(ConsentRecord).where(
                 ConsentRecord.user_id == user_id,
+                ConsentRecord.consent_type == consent_type,
+                ConsentRecord.character_id.is_(None),
+                ConsentRecord.revoked_at.is_(None),
+            )
+        )
+        return result.scalars().first() is not None
+
+    async def has_active_for_character(
+        self, user_id: UUID, character_id: UUID, consent_type: ConsentType
+    ) -> bool:
+        result = await self._session.execute(
+            select(ConsentRecord).where(
+                ConsentRecord.user_id == user_id,
+                ConsentRecord.character_id == character_id,
                 ConsentRecord.consent_type == consent_type,
                 ConsentRecord.revoked_at.is_(None),
             )
@@ -730,6 +781,7 @@ def _to_session_record(
         session_prose=session_obj.session_prose,
         started_at=session_obj.started_at,
         completed_at=session_obj.completed_at,
+        pending_ocr_confirmation_event_id=session_obj.pending_ocr_confirmation_event_id,
         chat_logs=[_to_chat_log_record(c) for c in sorted(chat_logs, key=lambda c: c.turn_index)],
     )
 
@@ -804,4 +856,5 @@ def _to_consent_grant(consent: ConsentRecord) -> ConsentGrant:
         id=consent.id, user_id=consent.user_id, consent_type=consent.consent_type,
         notice_version=consent.notice_version, granted_by=consent.granted_by,
         granted_at=consent.granted_at, revoked_at=consent.revoked_at,
+        character_id=consent.character_id,
     )

@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps import CurrentUserDep, GatewaysDep, require_self
 from app.schemas.consent import ConsentCreate, ConsentRead
 from app.schemas.user import UserCreate, UserProfileUpdate, UserRead
-from app.services import consent_service, user_service
+from app.services import autobiography_service, character_service, consent_service, user_service
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -71,12 +71,27 @@ async def create_consent(
     "가족 구성원 초대" 같은 별도 설계가 필요하다(이번 작업 범위 밖).
     """
     require_self(current_user, user_id)
+    if payload.character_id is not None:
+        # 인물 단위 동의(DISCLOSURE_REALNAME)는 그 인물이 실제로 본인 소유 자서전에
+        # 속하는지 검증한다 — 검증 없이는 다른 사용자의 character_id를 넣어 자기
+        # 동의 기록에 남의 인물을 엮을 수 있었다(media.py의 session_id 검증과 동일한
+        # 교차 테넌트 오염 방지 패턴).
+        character = await character_service.get_character(gateways, payload.character_id)
+        if character is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "등장인물을 찾을 수 없습니다.")
+        autobiography = await autobiography_service.get_autobiography_by_id(
+            gateways, character.autobiography_id
+        )
+        if autobiography.user_id != user_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "등장인물을 찾을 수 없습니다.")
+
     record = await consent_service.record_consent(
         gateways,
         user_id,
         consent_type=payload.consent_type,
         notice_version=payload.notice_version,
         granted_by=payload.granted_by,
+        character_id=payload.character_id,
     )
     return ConsentRead.model_validate(record)
 

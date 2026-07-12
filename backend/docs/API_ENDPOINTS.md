@@ -227,18 +227,19 @@ Supabase는 리프레시 토큰을 1회용으로 순환시키므로 이전 `refr
 | `consent_type` | `enum` | ✅ | 아래 표 참조 |
 | `notice_version` | `string` | ✅ | 사용자가 실제로 확인한 고지문의 버전 문자열(자유 형식, 예: `"v1.2"`). 나중에 "그 시점에 어떤 문구였는지" 추적하는 근거가 된다. |
 | `granted_by` | `enum` | ✅ | `self`(정보주체 본인) \| `guardian`(보호자/자녀 대리) |
+| `character_id` | `UUID` \| `null` | ❌ | `disclosure_realname`일 때만 채운다(아래 참조). 그 외 동의 종류는 사용자 단위라 비워 둔다. |
 
 `consent_type` 값과 용도:
 
 | 값 | 언제 호출하나 | 관련 엔드포인트 |
 | --- | --- | --- |
 | `data_collection` | 온보딩 첫 세션에서 정보주체 본인의 데이터 수집·이용 동의를 받을 때 | — |
-| `disclosure_realname` | 등장인물 실명 유지 고지문에 동의할 때 | 이 동의가 **선행되어야만** `POST /autobiographies/{id}/characters/{id}/retain-real-name`이 성공한다(없으면 409). |
+| `disclosure_realname` | 등장인물 실명 유지 고지문에 동의할 때. **인물 단위**다(2026-07-12 변경) — `character_id`를 반드시 함께 보내야 하며, 그 인물이 본인 소유 자서전에 속하는지 서버가 검증한다(아니면 404). | 이 동의가 **그 인물에 대해** 선행되어야만 `POST /autobiographies/{id}/characters/{id}/retain-real-name`이 성공한다(없으면 409) — 같은 자서전의 다른 인물에 대한 동의로는 풀리지 않는다. |
 | `retention_extension` | 원문 로그(Layer 0) 보관 기간 연장에 옵트인할 때 | — (현재 자동 삭제 배치 자체는 미구현이며, 이 동의는 기록만 되고 아직 삭제 로직에서 소비되지 않는다) |
 
-**응답 `201 Created` (`ConsentRead`)**: `id, user_id, consent_type, notice_version, granted_by, granted_at, revoked_at(null)`
+**응답 `201 Created` (`ConsentRead`)**: `id, user_id, consent_type, notice_version, granted_by, granted_at, revoked_at(null), character_id`
 
-**오류**: `user_id`가 존재하지 않으면 `404 Not Found`.
+**오류**: `user_id`가 존재하지 않으면 `404 Not Found`. `character_id`를 보냈는데 존재하지 않거나 본인 소유가 아니면 `404 Not Found`.
 
 ---
 
@@ -728,21 +729,17 @@ real_name_retained, disclosure_notice_version, disclosure_acknowledged_at, creat
 **요청 바디 (`RetainRealNameRequest`)**: `notice_version: string` — 사용자가 확인한 법적
 책임 고지문의 버전(주의의무 이행 증빙으로 저장됨).
 
-**전제 조건**: 이 인물이 속한 `autobiography`의 소유자(`user_id`)가 `ConsentType
-.disclosure_realname` 동의를 **먼저** 기록해두어야 한다(`POST /users/{id}/consents`로).
-
-> **알려진 한계**: 기획안은 "인물 단위" 법적 책임 고지 동의를 요구하지만, 현재 동의
-> 게이트는 인물 단위가 아니라 **"이 사용자가 실명 유지 고지에 최소 1회 동의했는가"**로
-> 완화되어 있다(`ConsentRecord`가 아직 인물별로 세분화되어 있지 않음 — DB 스키마 확장
-> 필요). 즉 한 인물에 대해 동의하면, 같은 사용자의 다른 인물에 대해서도 이 게이트를
-> 통과할 수 있다.
+**전제 조건**: **이 인물 본인**에게 묶인 `ConsentType.disclosure_realname` 동의를
+**먼저** 기록해두어야 한다(`POST /users/{id}/consents`를 `character_id`와 함께 호출,
+2026-07-12부터 인물 단위 — 이전에는 사용자 단위로 완화되어 있어 한 인물에 대해
+동의하면 같은 사용자의 다른 인물에 대해서도 통과되는 허점이 있었다).
 
 **응답 (`CharacterRead`)**: `real_name_retained=true`로 갱신된 레코드.
 
 **오류**:
 - `character_id`가 해당 `autobiography_id`에 속하지 않거나 없으면 `404`.
-- 유효한 `disclosure_realname` 동의가 없으면 `409 Conflict`
-  (`"인물 '...' 실명 유지 전 DISCLOSURE_REALNAME 동의가 필요합니다."`)
+- 이 인물에 대한 유효한 `disclosure_realname` 동의가 없으면 `409 Conflict`
+  (`"인물 '...' 실명 유지 전 이 인물에 대한 DISCLOSURE_REALNAME 동의가 필요합니다."`)
 
 ---
 
@@ -752,6 +749,20 @@ real_name_retained, disclosure_notice_version, disclosure_acknowledged_at, creat
 
 `{"status": "ok"}` 고정 응답. DB/S3/Upstage 어느 것도 건드리지 않는 순수 liveness
 체크(프로세스가 살아있는지만 확인. 의존 서비스 정상 여부는 보장하지 않음).
+
+---
+
+## 6.5. Legal — `/api/v1/legal`
+
+### `GET /api/v1/legal/disclosures` — 3층 고지 문구 (인증 불필요)
+
+기획안 4절 "다층 감정 세이프가드" 3층: 비의료 서비스임을 온보딩/약관에 명시하기 위한
+정적 문구(`app/agents/prompts.py`의 `NON_MEDICAL_SERVICE_DISCLOSURE`)를 그대로
+반환한다. 인증이 필요 없는 이유는 가입 전 온보딩 동의 화면에서부터 노출돼야 하기
+때문이다(2026-07-12 추가 — 그전까지는 이 문구가 상수로만 존재하고 어디에도 노출되지
+않았다).
+
+**응답 `200 OK`**: `{"non_medical_service": "메미닛세는 의료기기·디지털 치료기기가..."}`
 
 ---
 
@@ -795,9 +806,7 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
 | Phase 4/5 202 엔드포인트의 실패가 HTTP로 전달 안 됨 | `chapters/{id}/write`, `finalize`, `pdf/generate` | 선행 조건(`book_synopsis`/전 챕터 집필 완료/`final_content`) 미충족 시 Celery 태스크 내부에서만 실패, 클라이언트는 폴링으로만 간접 확인 가능. (자서전 자체가 없거나 남의 것인 경우는 인증 작업 때 사전 조회로 막아 즉시 404를 받도록 고쳤다 — 이 항목은 그 이후 단계, 즉 "존재는 하지만 아직 준비가 안 된" 경우에만 해당) |
 | PDF 조판이 `final_content`가 아닌 개별 챕터 `content`를 사용 | `pdf_service.render_manuscript_html` | 윤문(finalize) 단계에서 다듬어진 문장이 PDF에는 반영되지 않는다(페이지 나눔을 챕터 경계와 정확히 맞추기 위한 의도적 선택) — 필요하면 `final_content`를 챕터 경계 마커와 함께 파싱해 대체하는 방식으로 바꿀 수 있다 |
 | POD(주문형 인쇄) 발주 연계 미구현 | `pdf_service.py` 전체 | 완성된 PDF를 S3에 올려 URL을 반환하는 데까지만 담당한다. 실제 인쇄 발주(수량 선택, 결제, 배송)는 외부 업체 API 계약이 필요해 범위 밖으로 남겼다 |
-| 등장인물 실명 동의가 인물 단위가 아닌 사용자 단위 | `character_service.retain_real_name` | 한 인물에 대한 동의로 같은 사용자의 다른 인물도 게이트 통과 가능 |
-| `current_stage` 미갱신 | `User` 모델 전반 | 항상 `onboarding`으로 고정, 다른 값으로 전환하는 로직 없음 |
-| OCR 확인 질문이 인터뷰 턴에 미연결 | `media_service` 모듈 docstring 명시 | `verified=false`로 격리된 문서 유래 이벤트가 승격될 경로가 없음 |
+| 1층(완충) 세이프가드 트리거가 샌드박스에만 존재 | `app/api/v1/sandbox.py` `safeguard-check` | 실제 서비스는 2층(위기 대응)만 자동으로 걸리고, 1층은 강한 부정적 감정이어도 그냥 지나간다(2026-07-12 해소 — 아래 참조) |
 | 계정 = 로그인 하나로 단순화됨(2026-07-09 인증 추가분) | `app/api/deps.py`, `users.py` | 자녀가 부모를 대신해 온보딩/동의하는 기획안의 "동의 주체 분리" 시나리오가, 현재는 자녀가 부모 계정에 직접 로그인해 대신 조작하는 것으로만 구현 가능하다 — 자녀 전용 별도 계정으로 부모 계정에 위임 접근하는 "가족 초대" 흐름은 미구현 |
 
 **해소된 항목(기록 목적으로 이전 버전 남김)**: "세션 히스토리 조회 엔드포인트 없음"은
@@ -806,3 +815,17 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
 검증을 추가하며 해소됐다. 같은 날 프론트엔드(사진첩/나의 이야기/오늘의 대화)의 더미
 데이터를 실제 데이터로 교체하기 위해 `GET /interview-sessions`, `GET /media-assets`,
 `GET /events` 3개 목록 조회 엔드포인트를 새로 추가했다(각각 2·3·4절 참조).
+
+2026-07-12(P4 컴플라이언스 마감)에 4건 추가 해소:
+- **1층/3층 세이프가드 미연결** → `interview_service._detect_strong_negative_emotion`
+  (1층 트리거)과 `GET /legal/disclosures`(3층 고지, 온보딩 동의 화면에 노출) 연결.
+- **등장인물 실명 동의가 인물 단위가 아닌 사용자 단위** → `consent_records.character_id`
+  마이그레이션(006)으로 인물 단위 게이트로 전환(1절 `disclosure_realname` 표 참조).
+- **`current_stage` 미갱신** → 첫 인터뷰 세션 생성 시 `interview`, Phase 3 완료 시
+  `publishing`, 최종 윤문 완료 시 `published`로 자동 전환(같은 시점에
+  `AutobiographyStatus.PUBLISHED`도 처음으로 실제 설정됨 — 이전엔 enum 값만 있고
+  아무 데서도 쓰이지 않던 죽은 값이었다).
+- **OCR 확인 질문이 인터뷰 턴에 미연결** → 슬롯이 다 채워져 "다음 이야기로" 자리표시자를
+  내보내기 직전에, 이 유저의 미확인(`verified=false`) `DOCUMENT` 이벤트가 있으면
+  확인 질문을 먼저 낸다(`InterviewSession.pending_ocr_confirmation_event_id`로 세션
+  단위 추적). 다음 발화가 긍정이면 승격+임베딩, 부정이면 폐기.

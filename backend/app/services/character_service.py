@@ -83,14 +83,11 @@ async def retain_real_name(
     gateways: Gateways, character_id: uuid.UUID, *, notice_version: str
 ) -> CharacterRecord:
     """
-    실명 유지 opt-in. 전수 가명화 기본값을 뒤집는 유일한 경로이므로, 인물 단위 법적
-    책임 고지에 대한 유효한 동의(ConsentRecord)가 선행되어야 한다.
-
-    한계: 현재 ConsentRecord는 user_id + consent_type 단위로만 기록되고 인물 단위로
-    세분화되어 있지 않다(기획안이 요구하는 "인물 단위" 동의를 완전히 구현하려면
-    consent_records.character_id 같은 FK 추가가 필요 — 별도 스키마 변경 대상이며
-    이번 서비스 레이어 작업 범위 밖이다). 따라서 여기서는 "이 사용자가 실명 유지
-    고지에 최소 1회 동의했는가"라는 완화된 게이트로 동작한다.
+    실명 유지 opt-in. 전수 가명화 기본값을 뒤집는 유일한 경로이므로, 이 인물 본인에게
+    묶인 유효한 실명 유지 동의(ConsentRecord.character_id)가 선행되어야 한다 — 같은
+    자서전의 다른 인물 A에 대한 동의로 인물 B의 실명까지 유지되는 것을 막기 위해
+    사용자 단위가 아니라 인물 단위로 게이트를 건다(consent_records.character_id,
+    2026-07-12 마이그레이션 006).
     """
     character = await gateways.characters.get(character_id)
     if character is None:
@@ -100,10 +97,13 @@ async def retain_real_name(
     if autobiography is None:
         raise ValueError(f"Autobiography {character.autobiography_id} not found")
 
-    has_consent = await gateways.consents.has_active(autobiography.user_id, ConsentType.DISCLOSURE_REALNAME)
+    has_consent = await gateways.consents.has_active_for_character(
+        autobiography.user_id, character_id, ConsentType.DISCLOSURE_REALNAME
+    )
     if not has_consent:
         raise PermissionError(
-            f"인물 '{character.display_name}' 실명 유지 전 DISCLOSURE_REALNAME 동의가 필요합니다."
+            f"인물 '{character.display_name}' 실명 유지 전 이 인물에 대한 "
+            "DISCLOSURE_REALNAME 동의가 필요합니다."
         )
 
     character = await gateways.characters.retain_real_name(character_id, notice_version=notice_version)

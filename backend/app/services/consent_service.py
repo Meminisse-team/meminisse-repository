@@ -23,6 +23,7 @@ async def record_consent(
     consent_type: ConsentType,
     notice_version: str,
     granted_by: ConsentGrantedBy,
+    character_id: uuid.UUID | None = None,
 ) -> ConsentGrant:
     record = await gateways.consents.create(
         ConsentGrantCreateData(
@@ -30,6 +31,7 @@ async def record_consent(
             consent_type=consent_type,
             notice_version=notice_version,
             granted_by=granted_by,
+            character_id=character_id,
         )
     )
     await gateways.commit()

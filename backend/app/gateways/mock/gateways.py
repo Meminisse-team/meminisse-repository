@@ -43,6 +43,7 @@ from app.models.enums import (
     AutobiographyStatus,
     ConsentType,
     DraftStatus,
+    EventSourceType,
     MessageRole,
     RiskClassification,
     SessionStatus,
@@ -98,6 +99,7 @@ class MockUserGateway(UserGateway):
         name: str | None = None,
         birth_year: int | None = None,
         hometown: str | None = None,
+        current_stage: UserStage | None = None,
     ) -> UserRecord:
         user = self._store.users.get(user_id)
         if user is None:
@@ -108,6 +110,8 @@ class MockUserGateway(UserGateway):
             user.birth_year = birth_year
         if hometown is not None:
             user.hometown = hometown
+        if current_stage is not None:
+            user.current_stage = current_stage
         return user
 
 
@@ -162,6 +166,11 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
 
     async def set_session_prose(self, session_id: uuid.UUID, prose: str) -> None:
         self._require_session(session_id).session_prose = prose
+
+    async def set_pending_ocr_confirmation(
+        self, session_id: uuid.UUID, event_id: uuid.UUID | None
+    ) -> None:
+        self._require_session(session_id).pending_ocr_confirmation_event_id = event_id
 
     async def complete(self, session_id: uuid.UUID) -> None:
         session = self._require_session(session_id)
@@ -354,6 +363,25 @@ class MockEventGateway(EventGateway):
             event.importance_score = update.importance_score
             event.importance_signals = update.importance_signals
             event.life_milestone_category = update.life_milestone_category
+
+    async def list_pending_document_confirmation(self, user_id: uuid.UUID) -> list[EventRecord]:
+        pending = [
+            e
+            for e in self._store.events.values()
+            if e.user_id == user_id
+            and e.source_type == EventSourceType.DOCUMENT
+            and not e.verified
+        ]
+        pending.sort(key=lambda e: e.created_at)
+        return pending
+
+    async def set_verified(self, event_id: uuid.UUID, *, verified: bool) -> EventRecord:
+        event = self._require_event(event_id)
+        event.verified = verified
+        return event
+
+    async def delete(self, event_id: uuid.UUID) -> None:
+        self._store.events.pop(event_id, None)
 
     def _require_event(self, event_id: uuid.UUID) -> EventRecord:
         event = self._store.events.get(event_id)
@@ -634,13 +662,28 @@ class MockConsentGateway(ConsentGateway):
             granted_by=data.granted_by,
             granted_at=datetime.now(timezone.utc),
             revoked_at=None,
+            character_id=data.character_id,
         )
         self._store.consents[grant.id] = grant
         return grant
 
     async def has_active(self, user_id: uuid.UUID, consent_type: ConsentType) -> bool:
         return any(
-            grant.user_id == user_id and grant.consent_type == consent_type and grant.revoked_at is None
+            grant.user_id == user_id
+            and grant.consent_type == consent_type
+            and grant.character_id is None
+            and grant.revoked_at is None
+            for grant in self._store.consents.values()
+        )
+
+    async def has_active_for_character(
+        self, user_id: uuid.UUID, character_id: uuid.UUID, consent_type: ConsentType
+    ) -> bool:
+        return any(
+            grant.user_id == user_id
+            and grant.character_id == character_id
+            and grant.consent_type == consent_type
+            and grant.revoked_at is None
             for grant in self._store.consents.values()
         )
 

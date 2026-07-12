@@ -9,6 +9,7 @@ import { Typewriter } from "@/components/ui/Typewriter";
 import { authApi } from "@/lib/api/auth";
 import { usersApi } from "@/lib/api/users";
 import { ApiError } from "@/lib/api/client";
+import { legalApi } from "@/lib/api/legal";
 import { oauthPendingProfile } from "@/lib/auth/oauthPendingProfile";
 import { session } from "@/lib/auth/session";
 import { signupDraft, type SignupDraft } from "@/lib/auth/signupDraft";
@@ -34,6 +35,17 @@ export default function OnboardingPage() {
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nonMedicalDisclosure, setNonMedicalDisclosure] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 3층 고지(기획안 4절: 비의료 서비스임을 온보딩에 명시) — 동의 화면에서 항상
+    // 보여야 하므로 이 화면 진입 시점에 미리 받아둔다. 실패해도 온보딩 자체를
+    // 막을 이유는 없어 조용히 무시한다(문구가 안 보이는 것 이상의 영향 없음).
+    legalApi
+      .getDisclosures()
+      .then((d) => setNonMedicalDisclosure(d.non_medical_service))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const draft = signupDraft.get();
@@ -169,6 +181,11 @@ export default function OnboardingPage() {
               대화 내용과 사진을 자서전 제작 목적으로 수집·이용하는 데 동의합니다.
               (수집된 원문은 최종본 확정 후 일정 기간이 지나면 삭제돼요.)
             </label>
+            {nonMedicalDisclosure && (
+              <p className="mt-6 max-w-md whitespace-pre-line text-sm leading-relaxed text-black/50">
+                {nonMedicalDisclosure}
+              </p>
+            )}
           </>
         )}
 

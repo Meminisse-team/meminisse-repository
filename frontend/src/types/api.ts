@@ -61,6 +61,7 @@ export interface ConsentRecord {
   granted_by: ConsentGrantedBy;
   granted_at: string;
   revoked_at: string | null;
+  character_id: string | null;
 }
 
 export interface InterviewSession {

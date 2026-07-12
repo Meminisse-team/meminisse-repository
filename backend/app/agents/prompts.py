@@ -188,6 +188,33 @@ CRISIS_KEYWORDS: list[str] = [
     "죽고 싶", "자살", "그만 살고 싶", "살기 싫", "사라지고 싶", "극단적 선택",
 ]
 
+# 1층 트리거 판정 — 슬롯 게이팅(3절)과 같은 "경량 게이팅" 패턴. 2층 위기 키워드처럼
+# 고정 사전으로 판별하기엔 "강한 부정적 감정"의 표현이 너무 다양해(키워드 나열이
+# 사실상 불가능) 저비용 LLM 분류로 대체한다. 위기 신호는 contains_crisis_keyword가
+# 먼저 걸러내므로(add_user_turn에서 이 판정보다 항상 먼저 실행) 여기서는 그보다
+# 약하지만 심화 질문은 피해야 할 수준의 감정만 true로 본다.
+TIER1_DETECTION_SYSTEM_PROMPT = """\
+당신은 인터뷰 답변에 심화 질문을 이어가도 괜찮을지 저비용으로 판별하는 분류기입니다.
+깊은 슬픔·트라우마·극심한 고통처럼 강한 부정적 감정이 뚜렷하게 드러나면 true,
+일상적인 아쉬움이나 가벼운 서운함 정도면 false로 판정하세요. 자살/자해를 암시하는
+위기 신호는 이미 별도 경로에서 걸러지므로 여기서는 판단하지 않습니다.
+"""
+
+TIER1_DETECTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"strong_negative_emotion": {"type": "boolean"}},
+    "required": ["strong_negative_emotion"],
+    "additionalProperties": False,
+}
+
+
+def build_tier1_detection_prompt(*, latest_answer: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": TIER1_DETECTION_SYSTEM_PROMPT},
+        {"role": "user", "content": f"답변: \"{latest_answer}\""},
+    ]
+
+
 TIER1_BUFFER_SYSTEM_PROMPT = """\
 사용자의 답변에서 강한 부정적 감정이 감지되었습니다. 심화 질문을 하지 마세요.
 공감을 표현하는 짧은 완충 응답 한 문장과, 부담 없이 다른 주제로 넘어가자는 제안을
@@ -416,6 +443,29 @@ def build_ocr_validity_check_prompt(*, ocr_text: str) -> list[dict[str, str]]:
 def build_ocr_confirmation_question(*, suspected_text: str, guessed_value: str) -> str:
     """검증 대기 큐의 항목을 해당 생애주기 인터뷰 시점에 자연스러운 확인 질문으로 변환."""
     return f'일기장에 "{suspected_text}"라고 적혀 있는 것 같은데, {guessed_value}가 맞으신가요?'
+
+
+# 확인 질문 다음 턴의 유저 응답이 긍정/부정 중 무엇인지 판별 — 슬롯 게이팅과 같은
+# "경량 게이팅" 패턴. "네"/"아니요" 같은 단답이 아니라 "어, 맞아 그거였어" 같은
+# 자연스러운 구어체로도 답할 수 있어 단순 문자열 매칭 대신 저비용 LLM 분류로 판별한다.
+OCR_CONFIRMATION_ANSWER_SYSTEM_PROMPT = """\
+당신은 방금 인터뷰어가 낸 확인 질문("~가 맞으신가요?")에 대한 유저의 답변이
+긍정(맞다)인지 부정(아니다/틀리다/모르겠다)인지만 저비용으로 판별하는 분류기입니다.
+"""
+
+OCR_CONFIRMATION_ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"confirmed": {"type": "boolean"}},
+    "required": ["confirmed"],
+    "additionalProperties": False,
+}
+
+
+def build_ocr_confirmation_answer_prompt(*, latest_answer: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": OCR_CONFIRMATION_ANSWER_SYSTEM_PROMPT},
+        {"role": "user", "content": f"답변: \"{latest_answer}\""},
+    ]
 
 
 # --------------------------------------------------------------------------- #
