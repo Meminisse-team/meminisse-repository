@@ -29,4 +29,8 @@ Thumbs.db
 # Alembic 자동생성 임시파일
 alembic/versions/*.pyc
 
+# DeepEval(backend/evals/, P3 정량 평가체계)이 로컬 실행 시 만드는 텔레메트리/캐시
+# 파일 — 평가 결과 자체(backend/evals/results/)와는 별개로, 이건 순수 도구 부산물이다.
+backend/.deepeval/
+
 # frontend/.gitignore가 node_modules, .next 등 Next.js 산출물을 별도로 관리한다.

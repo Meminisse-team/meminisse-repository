@@ -14,8 +14,16 @@ alembic==1.14.0
 pgvector==0.3.6
 
 # Config
-pydantic-settings==2.6.1
-python-dotenv==1.0.1
+# 2026-07-13: evals/ 폴더의 DeepEval 라벨추출 정확도 평가(README.md 2절)가
+# deepeval>=4.1.0을 끌어오면서 pydantic-settings>=2.10.1, python-dotenv>=1.1.1을
+# 요구해 이 두 핀도 함께 올렸다 — 앱 자체(FastAPI/설정 로딩) 동작에는 영향
+# 없음을 전체 테스트 스위트로 확인했다. deepeval이 자체 pytest 플러그인을
+# 자동 등록해 conftest.py의 GATEWAY_BACKEND=mock 기본값 강제보다 먼저 끼어드는
+# 문제가 있었는데, 이건 버전이 아니라 그 플러그인 자체가 원인이라 pytest.ini에서
+# `-p no:deepeval`로 비활성화해 해결했다(evals/ 스크립트에서는 라이브러리로만
+# 쓰고 pytest 통합 기능은 쓰지 않으므로 비활성화해도 무방).
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
 
 # AI — Solar LLM + Upstage Embeddings (라벨 추출 / 산문 재조립 / 목차·챕터 집필 / RAG 임베딩)
 # 둘 다 OpenAI SDK와 호환되므로 AsyncOpenAI(base_url="https://api.upstage.ai/v1")로 직통 호출
@@ -68,3 +76,8 @@ pypdf==6.14.2
 # Dev / test
 pytest==8.3.4
 pytest-asyncio==0.24.0
+
+# P3 정량 평가체계(evals/, README.md 2·3절) — 라벨추출 정확도(슬롯 단위
+# precision/recall)와 G-Eval 서사일관성을 Solar를 judge LLM으로 삼아 측정한다.
+# 프로덕션 코드(app/)는 이 패키지에 의존하지 않는다 — evals/ 전용.
+deepeval==4.1.0

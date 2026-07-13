@@ -1,0 +1,253 @@
+{
+  "results_dir": "C:\\Users\\dbfl0\\OneDrive\\Desktop\\세종대\\4-여름\\Upstage 학술제\\meminisse-repository\\backend\\evals\\results\\pilot_2026-07-12",
+  "persona_count": 2,
+  "per_slot_summary": {
+    "event": {
+      "recall": 1.0,
+      "precision": 0.5,
+      "recall_hits": 2,
+      "recall_total": 2,
+      "precision_hits": 1,
+      "precision_total": 2
+    },
+    "place": {
+      "recall": 1.0,
+      "precision": 0.5,
+      "recall_hits": 2,
+      "recall_total": 2,
+      "precision_hits": 1,
+      "precision_total": 2
+    },
+    "time": {
+      "recall": 1.0,
+      "precision": 0.5,
+      "recall_hits": 2,
+      "recall_total": 2,
+      "precision_hits": 1,
+      "precision_total": 2
+    },
+    "emotion": {
+      "recall": 0.5,
+      "precision": 1.0,
+      "recall_hits": 1,
+      "recall_total": 2,
+      "precision_hits": 1,
+      "precision_total": 1
+    },
+    "values": {
+      "recall": 0.5,
+      "precision": 1.0,
+      "recall_hits": 1,
+      "recall_total": 2,
+      "precision_hits": 1,
+      "precision_total": 1
+    },
+    "companion": {
+      "recall": 1.0,
+      "precision": 0.0,
+      "recall_hits": 2,
+      "recall_total": 2,
+      "precision_hits": 0,
+      "precision_total": 2
+    },
+    "gratitude": {
+      "recall": 0.0,
+      "precision": null,
+      "recall_hits": 0,
+      "recall_total": 1,
+      "precision_hits": 0,
+      "precision_total": 0
+    },
+    "regret": {
+      "recall": 0.0,
+      "precision": null,
+      "recall_hits": 0,
+      "recall_total": 1,
+      "precision_hits": 0,
+      "precision_total": 0
+    },
+    "turning_point": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "recall_hits": 1,
+      "recall_total": 1,
+      "precision_hits": 1,
+      "precision_total": 1
+    },
+    "pride": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "recall_hits": 1,
+      "recall_total": 1,
+      "precision_hits": 1,
+      "precision_total": 1
+    }
+  },
+  "per_persona_detail": {
+    "p01_kim_soonja": {
+      "event": {
+        "ground_truth": "아버지의 포목 장사가 부도나 빚쟁이들을 피해 야반도주하듯 이사했다. 어머니가 그날부터 삯바느질로 다섯 식구를 먹여 살렸다.",
+        "extracted_values": [
+          "어, 그날은 눈이 많이 내리던 날이었어. 아버지는 포목 장사가 부도나서 빚쟁이들한테 쫓기고, 어머니는 삯바느질을 시작하셨지. 우리 셋은 셋방에서 조용히 짐을 쌓아서 도망갔어. 동생들은 겁에 질려 울던 걸, 어머니가 조용히 달래주셨지.\n\n어머니가 삯바느질을 시작하시면서, 우리 가족은 셋방에서 조용히 짐을 쌓았지. 아버지는 빚쟁이들이 오지 않을까 봐 밤새 창문을 닫아두셨고, 어머니는 동생들을 다독이시면서 길을 나섰어. 그때는 그냥 다 같이 숨죽이고 움직여야 한다는 생각밖에 없었어."
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "정답에 포함된 '포목 장사 부도', '빚쟁이 피해 야반도주', '어머니 삯바느질로 다섯 식구 생계 유지' 내용이 추출된 값들에 패러프레이즈 형태로 모두 포함되어 있으며, 추출된 내용들도 정답의 맥락과 일치하는 자연스러운 서술입니다."
+      },
+      "place": {
+        "ground_truth": "부산 자갈치시장 근처 셋방",
+        "extracted_values": [
+          "셋방"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "추출된 '셋방'은 정답 '부산 자갈치시장 근처 셋방'의 핵심 의미인 '셋방'을 패러프레이즈 형태로 담고 있으며, 정답 맥락과 자연스럽게 연결됩니다. 추가 정보가 없으므로 모순이나 부적절한 내용이 없습니다."
+      },
+      "time": {
+        "ground_truth": "1963년 겨울",
+        "extracted_values": [
+          "눈이 많이 내리던 날",
+          "눈이 많이 내리던 날",
+          "눈이 많이 내리던 날",
+          "눈이 많이 내리던 날",
+          "눈이 많이 내리던 날",
+          "눈이 많이 내리던 날"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "정답인 '1963년 겨울'은 추출된 값인 '눈이 많이 내리던 날'과 시간적 맥락에서 연결되어 있으며, '눈이 많이 내리는 날'은 겨울을 자연스럽게 패러프레이즈한 표현이다. 모든 추출된 값이 정답과 모순되지 않고 일관된 내용을 담고 있다."
+      },
+      "emotion": {
+        "ground_truth": "불안하면서도 어머니에 대한 존경심",
+        "extracted_values": [],
+        "ground_truth_captured": false,
+        "all_extracted_values_grounded": true,
+        "reasoning": "정답인 '감정: 불안하면서도 어머니에 대한 존경심'이 추출된 값들에 포함되어 있지 않아 ground_truth_captured는 false이며, 추출된 값이 전혀 없어 모순되는 내용이 없으므로 all_extracted_values_grounded는 true입니다."
+      },
+      "values": {
+        "ground_truth": "어떤 상황에서도 가족을 포기하지 않는다",
+        "extracted_values": [],
+        "ground_truth_captured": false,
+        "all_extracted_values_grounded": true,
+        "reasoning": "추출된 값이 없기 때문에 ground_truth_captured는 false이며, 추출된 값이 없으므로 모순 여부도 평가할 수 없어 all_extracted_values_grounded는 true로 처리됩니다."
+      },
+      "companion": {
+        "ground_truth": "어머니와 남동생 둘",
+        "extracted_values": [
+          "혼자",
+          "아버지",
+          "어머니",
+          "동생들",
+          "동생들",
+          "아버지, 동생들, 어머니"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": false,
+        "reasoning": "정답 '어머니와 남동생 둘'은 추출된 값들 중 '어머니', '동생들'에 패러프레이즈 형태로 포함되어 있어 ground_truth_captured는 true입니다. 하지만 '혼자', '아버지', '아버지, 동생들, 어머니' 등 정답과 모순되거나 무관한 내용이 포함되어 있어 all_extracted_values_grounded는 false입니다."
+      },
+      "gratitude": {
+        "ground_truth": "밤새 바느질하던 어머니",
+        "extracted_values": [],
+        "ground_truth_captured": false,
+        "all_extracted_values_grounded": true,
+        "reasoning": "추출된 값이 없으므로(추출된 값 없음) ground_truth_captured는 false이며, 모순되는 값이 없어 all_extracted_values_grounded는 true입니다."
+      },
+      "regret": {
+        "ground_truth": "철없이 그때는 어머니 고생을 몰랐던 것",
+        "extracted_values": [],
+        "ground_truth_captured": false,
+        "all_extracted_values_grounded": true,
+        "reasoning": "추출된 값이 없으므로 정답의 의미가 담길 수 없으며, 추출된 값 자체가 없어 정답과 모순될 내용이 존재하지 않는다."
+      }
+    },
+    "p02_park_youngsoo": {
+      "event": {
+        "ground_truth": "목포에서 상경해 방직공장 야간조로 일하며, 새벽에 잠깐 눈을 붙이고 낮에는 검정고시 학원엘 다녔다. 손가락이 다 갈라지도록 실을 만졌다.",
+        "extracted_values": [
+          "1969년… 그때는 새벽에 구로공단 방직공장에서 야간조를 마치고, 기숙사에서 잠깐 눈을 붙인 뒤에 낮에는 검정고시 학원을 다녔어요. 손가락 끝이 실에 긁혀 피가 날 정도로 힘들었지만, 그 밤에 책을 펴면 마음이 차분해졌거든요. 같이 일하던 동료 두 명이랑 기숙사에서 아침을 먹으며 서로 모르는 문제를 물어보고, 그게 또 힘이 돼 주곤 했어요.  \n\n음… 그때는 ‘배움에는 나이도 형편도 상관없다’는 생각이 제일 컸던 것 같아요. 손가락이 찢어져 피가 흐를 때도, 밤늦게까지 책을 펼쳐 놓고 한 글자라도 더 보려 했어요. 그게 바로 내게는 가장 큰 힘이 됐다고 할 수 있죠.  \n\n말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": false,
+        "reasoning": "추출된 값들은 정답의 핵심 내용(방직공장 야간조, 검정고시 학원, 손가락 상처)을 포함하지만, '구로공단', '기숙사 아침 식사', '동료와의 문제 공유' 등 정답에 없는 추가 정보가 포함되어 있어 all_extracted_values_grounded가 false입니다. 그러나 핵심 내용은 모두 포함되어 있으므로 ground_truth_captured는 true입니다."
+      },
+      "place": {
+        "ground_truth": "서울 구로공단 방직공장",
+        "extracted_values": [
+          "구로공단 방직공장, 기숙사",
+          "기숙사"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": false,
+        "reasoning": "정답 '서울 구로공단 방직공장'은 추출된 값들 중 '구로공단 방직공장, 기숙사'에 실질적으로 담겨 있으나, '기숙사' 단독으로는 정답을 포함하지 않고, 또 '구로공단 방직공장, 기숙사'는 정답에 없던 '기숙사'를 추가했기 때문에 all_extracted_values_grounded는 false입니다."
+      },
+      "time": {
+        "ground_truth": "1969년",
+        "extracted_values": [
+          "1969년",
+          "1969년 (주간)",
+          "1969년",
+          "현재 (인터뷰 중)"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": false,
+        "reasoning": "'1969년'은 정확히 일치하지만 '1969년 (주간)'과 '현재 (인터뷰 중)'은 정답과 모순되거나 관련이 없어 all_extracted_values_grounded가 false입니다."
+      },
+      "emotion": {
+        "ground_truth": "고달팠지만 배움에 대한 갈망이 컸다",
+        "extracted_values": [
+          "Determination",
+          "Hope",
+          "Belief",
+          "Gratitude"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "\"Determination\"(의지), \"Hope\"(희망), \"Belief\"(믿음), \"Gratitude\"(감사)는 모두 \"배움에 대한 갈망\"이라는 감정과 관련된 긍정적인 심리적 상태를 나타내며, 정답에 담긴 의미를 보완하거나 구체화하는 방식으로 해석될 수 있습니다."
+      },
+      "values": {
+        "ground_truth": "배움에는 나이도 형편도 상관없다",
+        "extracted_values": [
+          "education",
+          "mutual support",
+          "lifelong learning",
+          "appreciation"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "The extracted values 'education', 'mutual support', 'lifelong learning', and 'appreciation' all align with the core meaning of the ground truth 'there is no age or financial condition in learning', particularly with 'lifelong learning' directly corresponding to the idea of learning without age restrictions."
+      },
+      "companion": {
+        "ground_truth": "같은 기숙사 동료 두 명",
+        "extracted_values": [
+          "혼자",
+          "동료 두 명",
+          "혼자",
+          "인터뷰어"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": false,
+        "reasoning": "정답 '같은 기숙사 동료 두 명'은 '동료 두 명'으로 패러프레이즈되어 추출되었으나, '혼자'와 '인터뷰어'는 정답과 모순되거나 관련 없는 내용이므로 모든 추출 값이 정답 맥락과 자연스럽지 않다."
+      },
+      "turning_point": {
+        "ground_truth": "야학 선생님이 '너는 계속 공부해야 할 사람'이라 해준 말",
+        "extracted_values": [
+          "이 신념이 앞으로의 학습을 지속하게 만든 전환점"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "추출된 값 '이 신념이 앞으로의 학습을 지속하게 만든 전환점'은 정답 '야학 선생님이 \"너는 계속 공부해야 할 사람\"이라 해준 말'과 동일한 의미를 담고 있으며, 정답의 맥락에서 자연스럽게 도출될 수 있는 패러프레이즈입니다. 모순되는 내용이 없고, 정답과 일관됩니다."
+      },
+      "pride": {
+        "ground_truth": "결국 검정고시에 붙었을 때",
+        "extracted_values": [
+          "검정고시 합격에 대한 자부심",
+          "동료와의 협력으로 얻은 자신감",
+          "어려운 상황에서도 포기하지 않은 자부심"
+        ],
+        "ground_truth_captured": true,
+        "all_extracted_values_grounded": true,
+        "reasoning": "추출된 값 중 '검정고시 합격에 대한 자부심'은 정답과 동일한 맥락(검정고시 합격)을 공유하며, 나머지 값들도 어려운 상황에서의 인내와 성취와 관련된 맥락 내에서 자연스럽게 도출될 수 있는 내용입니다."
+      }
+    }
+  }
+}
