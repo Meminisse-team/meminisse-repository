@@ -13,19 +13,89 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 
 from app.agents import prompts
 from app.clients import solar
-from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, SessionCreateData
+from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, MediaAssetRecord, QuestionRecord, SessionCreateData
 from app.gateways.factory import Gateways
-from app.models.enums import MessageRole, SessionType, UserStage
+from app.models.enums import LifePeriod, MessageRole, SessionType, UserStage
 from app.schemas.interview import SessionCreate
+
+# 유년기→청년기→장년기→노년기 — enum 선언 순서 그대로가 정본이다(app/models/enums.py).
+_LIFE_PERIOD_ORDER = list(LifePeriod)
 
 
 class NoRemainingQuestionsError(Exception):
-    """FIXED_QUESTION 세션을 question_id 없이(=다음 질문을 자동으로 배정받도록)
-    생성하려 했는데, 이 유저에게 더 배정할 활성 질문이 없는 경우(고정 질문 큐를
-    전부 마침). 라우터가 이를 못 잡으면 500으로 새어나간다(app/api/v1/interviews.py 참조)."""
+    """FIXED_QUESTION 세션을 question_id 없이(=다음 항목을 자동으로 배정받도록)
+    생성하려 했는데, 이 유저에게 더 배정할 고정 질문도 사진 세션도 없는 경우
+    (전체 큐를 다 마침). 라우터가 이를 못 잡으면 500으로 새어나간다
+    (app/api/v1/interviews.py 참조)."""
+
+
+@dataclass
+class _NextInterviewItem:
+    """다음으로 진행할 세션 하나 — 고정 질문 또는 사진(docs/QUESTION_BANK_GUIDE.md 5절)."""
+
+    session_type: SessionType
+    question: QuestionRecord | None = None
+    media_asset: MediaAssetRecord | None = None
+
+
+async def _resolve_next_item(gateways: Gateways, user_id: uuid.UUID) -> _NextInterviewItem | None:
+    """다음으로 보여줄 세션 하나를 고른다 — 고정 질문 큐와 사진 큐를 합쳐, 생애주기
+    경계마다(그 시기 고정 질문을 모두 마친 직후) 그 시기 사진을 먼저 끼워 넣고,
+    고정 질문을 전부 마치면 남은 시기별·시기 불명 사진을 순서대로 제시한다.
+
+    상태를 별도로 저장하지 않는다 — "그 사진에 이미 PHOTO 세션이 있는지", "이
+    생애주기 질문이 이미 하나라도 배정된 적 있는지"만으로 판정하므로 몇 번을 다시
+    호출해도 같은 답을 준다(멱등) — 세션 완료 직후 미리보기 문구를 만들 때와
+    실제로 다음 세션을 만들 때 둘 다 이 함수 하나로 처리할 수 있는 이유.
+
+    "뒤늦게 업로드된 사진" 처리: 사진은 언제든 업로드할 수 있으므로, 이미 질문이
+    끝난 지 한참 지난 생애주기의 사진이 나중에 들어올 수 있다. 이 경우 그 시기
+    경계는 이미 지나갔으므로 지금 진행 중인 대화에 뒤늦게 끼어들지 않고, 시기
+    불명 사진과 함께 전체 완료 후 몰아보기로 미룬다 — 그래서 아래 경계 확인은
+    "next_question이 그 생애주기의 첫 질문이라 아직 한 번도 배정된 적 없을 때"
+    (=지금 막 그 경계를 넘은 시점)에만 하고, 이미 그 생애주기 질문을 하나라도
+    시작했으면(설령 next_question이 그 생애주기 중이라도) 건너뛴다."""
+    next_question = await gateways.questions.get_next_unasked(user_id)
+
+    if next_question is not None:
+        idx = _LIFE_PERIOD_ORDER.index(next_question.life_period)
+        if idx > 0:
+            already_started = await gateways.questions.has_assigned_question_in_period(
+                user_id, next_question.life_period
+            )
+            if not already_started:
+                # 지금 막 이 생애주기로 넘어온 참이다 — 바로 앞 생애주기의 사진이
+                # 아직 남아있으면 다음 고정 질문보다 먼저 보여준다.
+                preceding_period = _LIFE_PERIOD_ORDER[idx - 1]
+                photos = await gateways.media_assets.list_uninterviewed(
+                    user_id, life_period=preceding_period
+                )
+                if photos:
+                    return _NextInterviewItem(session_type=SessionType.PHOTO, media_asset=photos[0])
+        return _NextInterviewItem(session_type=SessionType.FIXED_QUESTION, question=next_question)
+
+    # 고정 질문을 모두 마쳤다 — 생애주기별로 혹시 남은 사진, 그다음 시기 불명 사진.
+    for period in _LIFE_PERIOD_ORDER:
+        photos = await gateways.media_assets.list_uninterviewed(user_id, life_period=period)
+        if photos:
+            return _NextInterviewItem(session_type=SessionType.PHOTO, media_asset=photos[0])
+    photos = await gateways.media_assets.list_uninterviewed(user_id, life_period=None)
+    if photos:
+        return _NextInterviewItem(session_type=SessionType.PHOTO, media_asset=photos[0])
+
+    return None
+
+
+async def _photo_session_opening_text(gateways: Gateways, media_asset: MediaAssetRecord) -> str:
+    pending_event = await gateways.events.get_pending_document_confirmation(media_asset.id)
+    ocr_hint = (
+        (pending_event.source_span or {}).get("quoted_text") if pending_event is not None else None
+    )
+    return prompts.build_photo_session_opening(ocr_suspected_text=ocr_hint)
 
 
 async def create_session(
@@ -34,23 +104,37 @@ async def create_session(
     """user_id는 라우터가 인증된 current_user.id로부터 넘긴다(SessionCreate 스키마에는
     더 이상 user_id 필드가 없다 — app/schemas/interview.py 참조).
 
-    FIXED_QUESTION 세션인데 question_id가 안 넘어왔으면(프론트가 "다음 질문"을
-    직접 고르지 않고 큐에 맡기는 일반적인 경로) QuestionGateway로 다음 질문을
-    자동 배정한다 — 세션 종료 시점이 아니라 시작 시점에 고르는 이유는
+    FIXED_QUESTION 세션인데 question_id도 linked_media_asset_id도 안 넘어왔으면
+    (프론트가 직접 고르지 않고 큐에 맡기는 일반적인 경로) _resolve_next_item으로
+    다음 항목(고정 질문 또는 사진)을 자동 배정한다 — session_type이 그 결과에 따라
+    PHOTO로 바뀔 수도 있다. 세션 종료 시점이 아니라 시작 시점에 고르는 이유는
     docs/QUESTION_BANK_GUIDE.md 4절 참조."""
+    session_type = payload.session_type
     question_id = payload.question_id
-    if question_id is None and payload.session_type == SessionType.FIXED_QUESTION:
-        next_question = await gateways.questions.get_next_unasked(user_id)
-        if next_question is None:
+    linked_media_asset_id = payload.linked_media_asset_id
+
+    if (
+        question_id is None
+        and linked_media_asset_id is None
+        and session_type == SessionType.FIXED_QUESTION
+    ):
+        next_item = await _resolve_next_item(gateways, user_id)
+        if next_item is None:
             raise NoRemainingQuestionsError()
-        question_id = next_question.id
+        session_type = next_item.session_type
+        if next_item.session_type == SessionType.FIXED_QUESTION:
+            assert next_item.question is not None
+            question_id = next_item.question.id
+        else:
+            assert next_item.media_asset is not None
+            linked_media_asset_id = next_item.media_asset.id
 
     session = await gateways.sessions.create(
         SessionCreateData(
             user_id=user_id,
-            session_type=payload.session_type,
+            session_type=session_type,
             question_id=question_id,
-            linked_media_asset_id=payload.linked_media_asset_id,
+            linked_media_asset_id=linked_media_asset_id,
             initial_slots_filled={key: False for key in prompts.ALL_SLOTS},
         )
     )
@@ -112,9 +196,10 @@ async def add_user_turn(
             new_followup_count = session.followup_count + 1
         else:
             new_followup_count = session.followup_count
-            should_complete = session.session_type == SessionType.FIXED_QUESTION
-            # PHOTO 세션은 사진 핀셋 배치 오케스트레이션이 아직 정해지지 않아
-            # 범위 밖이다(docs/QUESTION_BANK_GUIDE.md 5절) — 기존 안내 문구를 유지한다.
+            # PHOTO 세션도 FIXED_QUESTION과 동일하게 슬롯이 다 채워지면 완료 처리하고
+            # 다음 항목을 제시한다(docs/QUESTION_BANK_GUIDE.md 5절 — "이후 대화는
+            # 일반 인터뷰와 동일하게 진행된다").
+            should_complete = session.session_type in (SessionType.FIXED_QUESTION, SessionType.PHOTO)
             assistant_content = "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
 
         await gateways.sessions.update_slots(
@@ -122,17 +207,35 @@ async def add_user_turn(
         )
 
         if should_complete:
+            if session.session_type == SessionType.PHOTO and session.linked_media_asset_id is not None:
+                # 이 사진 세션의 대화로 정식 이벤트가 곧 추출될 것이므로(Phase 2
+                # 후처리), 애초에 이 세션을 촉발한 OCR 스테이징 이벤트(오인식 의심,
+                # verified=false)는 역할을 다했다 — 정리한다.
+                pending_event = await gateways.events.get_pending_document_confirmation(
+                    session.linked_media_asset_id
+                )
+                if pending_event is not None:
+                    await gateways.events.delete(pending_event.id)
+
             # "한 세션 = 질문 하나" 관례(InterviewSession 모델 docstring)에 따라,
-            # 이 세션의 질문에 대한 슬롯이 충분히 채워졌으면 세션을 바로 완료 처리하고
-            # (Phase 2 후처리 큐잉까지 포함 — complete_session 참조) 다음 질문을 미리
-            # 보여준다. 프론트는 이 응답을 받은 뒤 새 세션을 만들어 이어가면 된다.
+            # 이 세션의 슬롯이 충분히 채워졌으면 바로 완료 처리하고(Phase 2 후처리
+            # 큐잉까지 포함 — complete_session 참조) 다음 항목을 미리 보여준다.
+            # 프론트는 이 응답을 받은 뒤 새 세션을 만들어 이어가면 된다.
             await complete_session(gateways, session)
-            next_question = await gateways.questions.get_next_unasked(session.user_id)
-            assistant_content = (
-                f"말씀해주셔서 감사해요. 다음 질문으로 넘어가 볼까요?\n\n{next_question.content}"
-                if next_question is not None
-                else "말씀해주셔서 감사해요. 준비된 질문에 모두 답변해 주셨어요. 정말 수고 많으셨습니다."
-            )
+            next_item = await _resolve_next_item(gateways, session.user_id)
+            if next_item is None:
+                assistant_content = (
+                    "말씀해주셔서 감사해요. 준비된 질문에 모두 답변해 주셨어요. 정말 수고 많으셨습니다."
+                )
+            elif next_item.session_type == SessionType.FIXED_QUESTION:
+                assert next_item.question is not None
+                assistant_content = (
+                    f"말씀해주셔서 감사해요. 다음 질문으로 넘어가 볼까요?\n\n{next_item.question.content}"
+                )
+            else:
+                assert next_item.media_asset is not None
+                opening = await _photo_session_opening_text(gateways, next_item.media_asset)
+                assistant_content = f"말씀해주셔서 감사해요. 이번엔 사진 속 이야기를 들어볼까요?\n\n{opening}"
 
     assistant_turn = await gateways.sessions.add_chat_log(
         session.id, role=MessageRole.ASSISTANT, content=assistant_content

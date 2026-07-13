@@ -47,6 +47,7 @@ from app.gateways.dto import (
 from app.models.enums import (
     AutobiographyStatus,
     ConsentType,
+    LifePeriod,
     MediaAnalysisTrack,
     MessageRole,
     RiskClassification,
@@ -230,6 +231,18 @@ class EventGateway(ABC):
     @abstractmethod
     async def bulk_update_importance(self, updates: Sequence[EventImportanceUpdate]) -> None: ...
 
+    @abstractmethod
+    async def get_pending_document_confirmation(self, media_asset_id: UUID) -> EventRecord | None:
+        """이 사진/문서에서 OCR 1차 검증이 오인식 의심으로 격리한(source_type=
+        DOCUMENT, verified=False) 이벤트가 있으면 반환한다. PHOTO 세션을 열 때
+        시작 질문에 실마리로 녹여 넣는 데 쓴다(docs/QUESTION_BANK_GUIDE.md 5절) —
+        여러 개면 가장 먼저 스테이징된 것(created_at 오름차순 첫 번째)."""
+
+    @abstractmethod
+    async def delete(self, event_id: UUID) -> None:
+        """PHOTO 세션의 대화에서 이미 정식 추출된 이벤트로 대체된, 격리 상태였던
+        OCR 스테이징 이벤트를 정리한다."""
+
 
 class MediaAssetGateway(ABC):
     @abstractmethod
@@ -247,13 +260,32 @@ class MediaAssetGateway(ABC):
         *,
         analysis_track: MediaAnalysisTrack,
         pre_extracted_labels: dict | None,
+        life_period_mapped: LifePeriod | None = None,
     ) -> None:
-        """Phase 1 듀얼 트랙 분석 결과(Document Parse 산출물)를 기록한다."""
+        """Phase 1 듀얼 트랙 분석 결과(Document Parse 산출물)를 기록한다.
+        life_period_mapped는 None이면 "건드리지 않는다"는 뜻이다(다른 게이트웨이의
+        부분 갱신 관례와 동일) — OCR 텍스트에서 시기를 추정해냈을 때만 값을 넘긴다
+        (media_service._guess_life_period_from_ocr_text, docs/QUESTION_BANK_
+        GUIDE.md 5절). 사용자가 이미 age_at_time을 입력해 이 필드가 채워져
+        있으면 애초에 이 추정 자체를 시도하지 않으므로, 사용자 입력을 덮어쓸
+        일은 없다."""
 
     @abstractmethod
     async def list_by_user(self, user_id: UUID) -> list[MediaAssetRecord]:
         """이 유저가 업로드한 미디어 전체를 created_at 내림차순(최근 업로드가
         먼저)으로 반환한다(GET /media-assets, 사진첩 탭)."""
+
+    @abstractmethod
+    async def list_uninterviewed(
+        self, user_id: UUID, *, life_period: LifePeriod | None
+    ) -> list[MediaAssetRecord]:
+        """사진(asset_type=IMAGE) 세션 오케스트레이션 대상 큐(docs/QUESTION_BANK_
+        GUIDE.md 5절). life_period가 주어지면 그 생애주기로 매핑된(life_period_
+        mapped) 사진 중, None이면 매핑이 안 된(life_period_mapped IS NULL) 사진
+        중, 아직 PHOTO 세션이 하나도 없는 것들을 created_at 오름차순으로 반환한다.
+        "세션이 아직 없다"는 InterviewSession(session_type=PHOTO,
+        linked_media_asset_id=이 사진)의 존재 여부로 판정한다(상태 무관 — 이미
+        만들어진 적 있으면 완료/진행 중이든 다시 큐에 올리지 않는다)."""
 
 
 class AutobiographyGateway(ABC):
@@ -387,3 +419,14 @@ class QuestionGateway(ABC):
         것. "배정됨"의 판정 기준은 session_type=FIXED_QUESTION이고 status가
         OPEN이 아닌(즉 완료·건너뜀으로 실제로 다뤄진) 세션들의 question_id
         집합이다. 더 배정할 질문이 없으면(질문 큐를 전부 마쳤으면) None."""
+
+    @abstractmethod
+    async def has_assigned_question_in_period(
+        self, user_id: UUID, life_period: LifePeriod
+    ) -> bool:
+        """이 유저에게 이 생애주기의 질문이 하나라도 배정된(세션이 만들어진) 적
+        있는지 — status 무관, session_type=FIXED_QUESTION인 세션의 question_id가
+        이 생애주기에 속하는지만 본다. "이 생애주기 경계를 이미 지나왔는지" 판정에
+        쓴다(docs/QUESTION_BANK_GUIDE.md 5절 "뒤늦게 업로드된 사진" 처리) — 사진이
+        그 경계가 지난 뒤에 뒤늦게 업로드되면 더 이상 그 경계에서 끼어들지 않고
+        전체 완료 후 몰아보기로 미뤄야 하므로."""

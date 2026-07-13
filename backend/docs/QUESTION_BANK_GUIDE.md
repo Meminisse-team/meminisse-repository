@@ -6,64 +6,105 @@
 (`alembic/versions/006_seed_questions.py`, `app/data/question_bank.py`),
 `QuestionGateway`(`get_next_unasked` — `sequence_order` 전역 순서로 다음 미배정
 질문 하나), `interview_service.create_session`(question_id 미지정 시 자동 배정),
-`add_user_turn`(세션의 슬롯이 다 채워지면 자동 완료 + 다음 질문 제시, 큐를 다
-마치면 `POST /interview-sessions`가 `409`)까지 전부 실제로 동작한다. 이 문서의
-과거 버전(1~4절)에 있던 "아직 구현 안 됨" 안내는 더 이상 유효하지 않다.
+`add_user_turn`(세션의 슬롯이 다 채워지면 자동 완료 + 다음 항목 제시)까지 전부
+실제로 동작한다.
 
-## 5. 사진(PHOTO) 세션 오케스트레이션 — 아직 미구현, 설계만 확정
+## 5. 사진(PHOTO) 세션 오케스트레이션 — 구현 완료 (2026-07-12)
 
-**중요**: 2026-07-12에 이 부분을 "기존 대화 중간에 사진/문서 OCR 내용을 예/아니오로
-확인하는 질문 하나 끼워 넣기"로 잘못 구현했다가 롤백했다. 실제 의도는 그게 아니라
-아래 설계다 — 다음에 이 작업을 다시 시작할 때는 반드시 이 설계를 따를 것.
+**참고**: 이 부분은 처음에 "기존 대화 중간에 사진/문서 OCR 내용을 예/아니오로
+확인하는 질문 하나 끼워 넣기"로 잘못 구현했다가 롤백한 이력이 있다. 아래가 최종
+구현이다.
 
 ### 핵심 개념: 사진 = 별도의 독립된 인터뷰 세션 주제
 
-고정 질문(`FIXED_QUESTION`)과 사진(`PHOTO`)은 서로 다른 세션이다. 사진에 대한
-이야기를 다른 세션의 대화 중간에 끼워 넣지 않는다 — **그 사진 자체가 하나의
-질문 주제가 되어 독립된 `PHOTO` 세션**(`InterviewSession.session_type=PHOTO`,
-`linked_media_asset_id=그 사진`)으로 열린다. 그 세션을 여는 화면에는 사진을
-띄우고 "이 사진에 대해 더 자세히 이야기를 들려주시겠어요?" 같은 시작 질문을
-보여준 뒤, 이후 대화는 일반 인터뷰(슬롯 게이팅·꼬리질문)와 동일하게 진행된다.
+고정 질문(`FIXED_QUESTION`)과 사진(`PHOTO`)은 서로 다른 세션이다. `interview_
+service._resolve_next_item`(고정 질문 큐와 사진 큐를 합쳐 다음 항목 하나를
+고르는 함수)이 사진 차례라고 판단하면, 그 사진 자체가 독립된 `PHOTO` 세션
+(`InterviewSession.session_type=PHOTO`, `linked_media_asset_id=그 사진`)으로
+열린다. 시작 질문은 `prompts.build_photo_session_opening`이 만들며, 이후 대화는
+일반 인터뷰와 동일하게 슬롯 게이팅·꼬리질문·자동 완료가 적용된다.
 
-### 스케줄링 규칙
+### 스케줄링 규칙 (구현: `interview_service._resolve_next_item`)
 
-사진이 언제 세션으로 제시되는지는 그 사진의 "시기"를 알 수 있는지에 달렸다.
-`MediaAsset.life_period_mapped`(사용자가 입력한 `age_at_time`으로 이미 계산됨,
-`media_service.map_age_to_life_period` 참조 — OCR로 시기를 추정하는 로직은
-아직 없음, 필요하면 이때 함께 추가)가:
+`MediaAssetGateway.list_uninterviewed(user_id, life_period=...)`로 "아직 PHOTO
+세션이 없는 사진"을 조회한다. `life_period`가:
 
-- **채워져 있으면(시기가 확정됨)**: 그 생애주기의 고정 질문 39개 중 해당 구간이
-  **전부 완료된 직후**, 다음 생애주기로 넘어가기 전에 그 사진의 `PHOTO` 세션을
-  먼저 연다. 예: `age_at_time=19`(청소년기)로 확인된 사진이 있다면, 청소년기
-  고정 질문이 모두 끝난 시점에 — 바로 다음 생애주기(장년기) 첫 질문으로 넘어가는
-  게 아니라 — 그 사진 세션이 먼저 제시된다.
-- **비어 있으면(시기 불명)**: **모든 생애주기의 고정 질문이 전부 끝난 뒤**, 남은
-  미확정 시기 사진들을 한꺼번에 몰아서 사진마다 세션 하나씩 순서대로 진행한다.
+- **주어지면**: 그 생애주기로 매핑된(`MediaAsset.life_period_mapped`) 사진만.
+- **`None`이면**: 시기 미확정(`life_period_mapped IS NULL`) 사진만.
 
-### 구현 시 손댈 자리 (다음에 이 작업을 시작할 때)
+알고리즘: `QuestionGateway.get_next_unasked`로 다음 고정 질문을 구한다.
+**그 생애주기 질문이 이 유저에게 하나도 배정된 적 없을 때만**(=지금 막 그
+생애주기로 넘어온 시점, `QuestionGateway.has_assigned_question_in_period`로
+판정) 바로 앞 생애주기의 미인터뷰 사진이 있는지 확인해 있으면 먼저 내어준다.
+고정 질문이 하나도 안 남았으면 생애주기별로, 그다음 시기 미확정으로 순서대로
+사진을 내어준다.
 
-1. **"이 생애주기 고정 질문이 방금 끝났다"를 감지**: `interview_service.
-   add_user_turn`에서 `complete_session` 후 `gateways.questions.get_next_unasked`
-   로 다음 질문을 가져오는 지점(`QUESTION_BANK_GUIDE.md` 1~4절 구현부) — 그
-   다음 질문의 `life_period`가 방금 막 완료한 질문의 `life_period`와 달라졌다면
-   "생애주기 경계를 막 넘었다"는 신호다. `QuestionRecord`에 이미 `life_period`
-   필드가 있으므로 비교만 하면 된다.
-2. **그 생애주기에 아직 세션이 없는 사진 조회**: `MediaAssetGateway`에 새 메서드가
-   필요하다 — 예: `list_uninterviewed(user_id, life_period)`. "세션이 아직
-   없다"의 판정 기준은 `InterviewSession(session_type=PHOTO, linked_media_asset_id=
-   그 사진)`이 하나라도 존재하는지로 잡으면 된다(교재의 `QuestionGateway.
-   get_next_unasked`가 세션 존재 여부로 "배정됨"을 판정하는 것과 동일한 패턴).
-3. **생애주기 경계에서 사진이 있으면 먼저 제시, 없으면 다음 질문 그대로**: 위
-   1번 신호가 뜨고 2번 조회 결과가 있으면, 다음 고정 질문 대신 `PHOTO` 세션을
-   먼저 만들어 그 사진과 시작 질문을 보여준다. 그 사진 세션들을 다 마친 뒤에야
-   다음 생애주기의 첫 고정 질문으로 넘어간다.
-4. **전체 고정 질문 종료 시점(큐를 다 마쳐 `NoRemainingQuestionsError`가 나는
-   지점)**: 마찬가지로 시기 불명 사진(`life_period_mapped IS NULL`)이 남아있는지
-   확인해, 있으면 그것부터 순서대로 `PHOTO` 세션으로 제시한다.
-5. **OCR로 오인식 의심 텍스트가 있는 문서**(`Event(source_type=DOCUMENT,
-   verified=false)`, `media_service.py` 참조)의 승격도 이 틀 안에서 처리한다 —
-   그 문서/사진의 `PHOTO` 세션을 열 때 `prompts.build_ocr_confirmation_question`
-   로 만든 문구를 시작 질문에 실마리로 녹여 넣고("일기장에 '1975년 결혼'이라고
-   적혀 있던데, 이때 이야기를 들려주시겠어요?"), 그 세션 안에서 오간 대화 내용을
-   바탕으로 이벤트 추출·검증을 다시 돌리면 된다 — 별도의 예/아니오 게이트가
-   아니라 자연스러운 인터뷰 대화 자체가 확인 절차를 대신한다.
+**뒤늦게 업로드된 사진**(사진은 언제든 업로드 가능하므로, 이미 몇 생애주기를
+더 진행한 뒤에야 예전 시기 사진이 들어올 수 있다): 위 "하나도 배정된 적 없을
+때만" 조건 덕분에, 그 생애주기 경계를 이미 지나 다른 질문을 진행 중이면 뒤늦게
+들어온 사진이 지금 대화에 끼어들지 않는다 — 그 시기 경계에서 "아직 아무 질문도
+안 나간" 그 한 번의 기회를 놓치면, 고정 질문을 전부 마친 뒤 몰아보기 단계에서
+(시기 불명 사진들과 마찬가지로) 다뤄진다. `tests/test_photo_session_
+orchestration.py::test_late_uploaded_photo_does_not_interrupt_a_later_period_
+already_in_progress`가 이 케이스를 검증한다.
+
+상태를 별도로 저장하지 않고 "이 사진에 이미 세션이 있는가"/"이 생애주기 질문이
+이미 배정된 적 있는가"만 확인하므로 멱등하다 — 세션 완료 직후 미리보기 문구를
+만들 때와 실제로 다음 세션을 생성할 때 같은 함수를 그대로 재사용한다.
+
+### OCR 오인식 의심 텍스트 처리
+
+사진에 `Event(source_type=DOCUMENT, verified=false)`(OCR 1차 검증에서 격리된
+것, `media_service.py` 참조)가 있으면, `EventGateway.get_pending_document_
+confirmation`으로 찾아 그 `source_span.quoted_text`를 `build_photo_session_
+opening`의 실마리로 녹여 넣는다("이 사진 속에 '1975년 결혼'이라고 적혀 있는 것
+같아요. 이때 이야기를 좀 더 들려주시겠어요?") — 별도의 예/아니오 게이트가 아니라
+자연스러운 인터뷰 대화 자체가 확인 절차를 대신한다. 그 PHOTO 세션이 완료되면
+(대화 내용이 Phase 2 후처리로 정식 이벤트 추출을 거치므로) 촉발제였던 그 OCR
+스테이징 이벤트는 역할을 다한 것으로 보고 삭제한다.
+
+### OCR 텍스트로 사진 시기 자동 추정 — 구현 완료 (2026-07-13)
+
+`life_period_mapped`는 원래 사용자가 입력한 `age_at_time`으로만 채워졌다
+(`media_service.map_age_to_life_period`). 이제 사용자가 그걸 입력하지 않은
+사진은, `media_service._run_dual_track_analysis`가 TEXT_DOCUMENT 트랙으로
+분류할 때(OCR 텍스트가 `_MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK` 이상일 때) 그
+텍스트에서 시기 단서를 뽑아 `media_service._guess_life_period_from_ocr_text`로
+추정을 시도한다.
+
+- Solar(`prompts.build_ocr_date_extraction_prompt` /
+  `OCR_DATE_EXTRACTION_SCHEMA`)에게 텍스트 안의 **명시적** 연도("1975년")나
+  나이("19살 때")만 뽑게 한다 — 종이 재질이나 문체 같은 애매한 추측은 명시적으로
+  금지했다. 둘 다 없으면 `found=false`.
+- 나이가 직접 있으면 그걸로, 연도만 있으면 `User.birth_year`로 나이를 역산해서
+  `map_age_to_life_period`에 넘긴다. `birth_year`가 없거나 단서가 전혀 없으면
+  `None`(시기 불명으로 남겨 몰아보기 단계에서 다룸)을 반환한다 — 잘못 매핑해서
+  사진 세션 오케스트레이션이 엉뚱한 생애주기 경계에서 끼어드는 것보다 안전한
+  쪽을 택했다.
+- 사용자가 이미 `age_at_time`을 입력해 `life_period_mapped`가 채워져 있으면 이
+  추정 자체를 시도하지 않는다(`MediaAssetGateway.update_analysis`의
+  `life_period_mapped=None` 파라미터는 "건드리지 않는다"는 뜻인 기존 부분
+  갱신 관례를 그대로 따른다 — `UserGateway.update(current_stage=...)`와 동일
+  패턴). 사용자 입력을 OCR 추정이 덮어쓸 일은 없다.
+- `tests/test_media_ocr_date_estimation.py`가 4가지 경로(연도+birth_year,
+  나이 직접, 단서 없음, 이미 사용자 입력으로 매핑된 경우 스킵)를 검증한다.
+
+### 프론트엔드 — 구현 완료 (2026-07-13)
+
+`ChatOverlay.tsx`가 세션의 `session_type`이 `photo`면 `linked_media_asset_id`를
+`GET /media-assets/{id}`(새로 추가한 단건 조회 엔드포인트 — 기존엔 목록만 있어서
+개별 조회가 없었다, `app/api/v1/media.py`)로 가져와 대화 목록 위에 이미지로
+띄운다. 세션을 이어보기(`resumeSessionId`)로 열든, 첫 발화로 새로 만들든
+(`interviewsApi.create` 응답이 서버가 자동 전환한 `session_type`/
+`linked_media_asset_id`를 그대로 담아 온다) 양쪽 경로 모두에서 사진 상태를
+갱신한다. `photos/page.tsx`(사진첩)와 동일하게 `next/image`가 아닌 일반
+`<img>`를 쓴다(S3 원본 도메인이 아직 `remotePatterns`에 없음).
+
+### 아직 없는 것 / 알아두면 좋은 것
+
+- **테스트 환경에서 주의**: `interview_service.complete_session`은 세션마다
+  Celery `.delay()`로 브로커(Redis) 연결을 시도한다. 브로커가 없는 환경에서
+  세션을 여러 개 연속으로 완료시키는 테스트를 작성하면 연결 시도 자체가 누적
+  지연을 일으켜 체감상 멈춘 것처럼 보인다(`tests/test_photo_session_
+  orchestration.py`에서 실제로 재현 — `process_session_completion.delay`를
+  모킹해 해결했다). 이 패턴이 필요한 새 테스트를 쓸 때 참고할 것.

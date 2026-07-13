@@ -441,13 +441,60 @@ def build_ocr_validity_check_prompt(*, ocr_text: str) -> list[dict[str, str]]:
 
 
 def build_ocr_confirmation_question(*, suspected_text: str, guessed_value: str) -> str:
-    """검증 대기 큐의 항목을 해당 생애주기 인터뷰 시점에 자연스러운 확인 질문으로 변환.
-
-    호출부 미배선 상태(2026-07-12) — 이 함수를 대화 중간에 예/아니오로 끼워 넣는
-    방식으로 연결했다가 설계 의도와 다르다는 걸 확인하고 롤백했다. 실제 의도는
-    "이 사진/문서가 별도의 PHOTO 세션 주제가 되고, 그 세션을 여는 시점에 이
-    문구를 실마리로 활용"하는 것이다 — docs/QUESTION_BANK_GUIDE.md 5절 참조."""
+    """검증 대기 큐의 항목을 자연스러운 확인 질문 문구로 변환. 예/아니오로 답하게
+    만드는 별도 게이트가 아니라, PHOTO 세션을 여는 시작 질문(build_photo_session_
+    opening)에 실마리로 녹여 넣는 재료로 쓴다(docs/QUESTION_BANK_GUIDE.md 5절)."""
     return f'일기장에 "{suspected_text}"라고 적혀 있는 것 같은데, {guessed_value}가 맞으신가요?'
+
+
+def build_photo_session_opening(*, ocr_suspected_text: str | None = None) -> str:
+    """PHOTO 세션(사진 자체가 하나의 독립된 인터뷰 주제)을 열 때 보여줄 시작 질문.
+
+    ocr_suspected_text가 있으면(이 사진에 OCR 오인식 의심으로 격리된 문서 이벤트가
+    있는 경우) 그 내용을 실마리로 자연스럽게 녹여 넣는다 — "~가 맞으신가요?"처럼
+    예/아니오를 강요하지 않고, 그 부분을 포함해 자유롭게 이야기하도록 초대한다.
+    이후 실제로 오간 대화가 정식 이벤트 추출·검증을 거치므로(사진 세션도 일반
+    인터뷰와 동일하게 슬롯 게이팅·꼬리질문이 적용된다) 이 시작 질문 자체가 검증을
+    대신하지는 않는다."""
+    if ocr_suspected_text:
+        return (
+            f'이 사진 속에 "{ocr_suspected_text}"라고 적혀 있는 것 같아요. '
+            "이때 이야기를 좀 더 들려주시겠어요?"
+        )
+    return "이 사진에 대해 더 자세히 이야기를 들려주시겠어요?"
+
+
+OCR_DATE_EXTRACTION_SYSTEM_PROMPT = """\
+당신은 OCR로 추출된 텍스트에서 사진이 찍힌 시기를 추정하는 어시스턴트입니다.
+텍스트에 명시적인 연도("1975년", "'75년" 등)나 화자의 나이("19살 때", "스무살
+무렵" 등)가 있으면 추출하세요. 그런 단서가 전혀 없으면 found를 false로 반환하세요
+— 애매한 추측(예: 종이 재질이나 문체로 짐작)은 하지 마세요, 명시적 단서만
+인정합니다.
+"""
+
+OCR_DATE_EXTRACTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "found": {"type": "boolean"},
+        "extracted_year": {
+            "type": ["integer", "null"],
+            "description": "텍스트에 명시된 서기 연도(예: 1975). 없으면 null",
+        },
+        "extracted_age": {
+            "type": ["integer", "null"],
+            "description": "텍스트에 명시된 화자의 나이(예: 19). 없으면 null",
+        },
+    },
+    "required": ["found", "extracted_year", "extracted_age"],
+    "additionalProperties": False,
+}
+
+
+def build_ocr_date_extraction_prompt(*, ocr_text: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": OCR_DATE_EXTRACTION_SYSTEM_PROMPT},
+        {"role": "user", "content": ocr_text},
+    ]
 
 
 # --------------------------------------------------------------------------- #

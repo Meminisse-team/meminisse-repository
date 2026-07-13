@@ -42,9 +42,12 @@ from app.gateways.interfaces import (
 )
 from app.gateways.mock.store import MockStore
 from app.models.enums import (
+    AssetType,
     AutobiographyStatus,
     ConsentType,
     DraftStatus,
+    EventSourceType,
+    LifePeriod,
     MessageRole,
     RiskClassification,
     SessionStatus,
@@ -361,6 +364,23 @@ class MockEventGateway(EventGateway):
             event.importance_signals = update.importance_signals
             event.life_milestone_category = update.life_milestone_category
 
+    async def get_pending_document_confirmation(
+        self, media_asset_id: uuid.UUID
+    ) -> EventRecord | None:
+        candidates = [
+            e
+            for e in self._store.events.values()
+            if e.media_asset_id == media_asset_id
+            and e.source_type == EventSourceType.DOCUMENT
+            and not e.verified
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda e: e.created_at)
+
+    async def delete(self, event_id: uuid.UUID) -> None:
+        self._store.events.pop(event_id, None)
+
     def _require_event(self, event_id: uuid.UUID) -> EventRecord:
         event = self._store.events.get(event_id)
         if event is None:
@@ -401,12 +421,15 @@ class MockMediaAssetGateway(MediaAssetGateway):
         *,
         analysis_track,
         pre_extracted_labels: dict | None,
+        life_period_mapped: LifePeriod | None = None,
     ) -> None:
         asset = self._store.media_assets.get(media_asset_id)
         if asset is None:
             raise KeyError(f"media asset not found in mock store: {media_asset_id}")
         asset.analysis_track = analysis_track
         asset.pre_extracted_labels = pre_extracted_labels
+        if life_period_mapped is not None:
+            asset.life_period_mapped = life_period_mapped
 
     async def list_by_user(self, user_id: uuid.UUID) -> list[MediaAssetRecord]:
         assets = [a for a in self._store.media_assets.values() if a.user_id == user_id]
@@ -414,6 +437,25 @@ class MockMediaAssetGateway(MediaAssetGateway):
         assets.sort(key=lambda a: a.created_at)
         assets.reverse()
         return assets
+
+    async def list_uninterviewed(
+        self, user_id: uuid.UUID, *, life_period: LifePeriod | None
+    ) -> list[MediaAssetRecord]:
+        already_has_session = {
+            s.linked_media_asset_id
+            for s in self._store.sessions.values()
+            if s.session_type == SessionType.PHOTO and s.linked_media_asset_id is not None
+        }
+        candidates = [
+            a
+            for a in self._store.media_assets.values()
+            if a.user_id == user_id
+            and a.asset_type == AssetType.IMAGE
+            and a.life_period_mapped == life_period
+            and a.id not in already_has_session
+        ]
+        candidates.sort(key=lambda a: a.created_at)
+        return candidates
 
 
 class MockAutobiographyGateway(AutobiographyGateway):
@@ -694,6 +736,18 @@ class MockQuestionGateway(QuestionGateway):
         if not candidates:
             return None
         return min(candidates, key=lambda q: q.sequence_order)
+
+    async def has_assigned_question_in_period(
+        self, user_id: uuid.UUID, life_period: LifePeriod
+    ) -> bool:
+        return any(
+            s.user_id == user_id
+            and s.session_type == SessionType.FIXED_QUESTION
+            and s.question_id is not None
+            and s.question_id in self._store.questions
+            and self._store.questions[s.question_id].life_period == life_period
+            for s in self._store.sessions.values()
+        )
 
 
 def _dot_product(a: list[float], b: list[float]) -> float:

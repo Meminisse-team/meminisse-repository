@@ -36,4 +36,6 @@ export const mediaApi = {
   },
   /** 본인이 업로드한 미디어 전체를 최근 업로드순으로. */
   list: () => apiClient.get<MediaAsset[]>("/api/v1/media-assets"),
+  /** PHOTO 세션 채팅 화면이 linked_media_asset_id로 사진 원본을 조회할 때 쓴다. */
+  get: (mediaAssetId: string) => apiClient.get<MediaAsset>(`/api/v1/media-assets/${mediaAssetId}`),
 };

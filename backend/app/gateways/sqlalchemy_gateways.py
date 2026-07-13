@@ -72,7 +72,7 @@ from app.models import (
     SessionType,
     User,
 )
-from app.models.enums import MediaAnalysisTrack, UserStage
+from app.models.enums import AssetType, EventSourceType, LifePeriod, MediaAnalysisTrack, UserStage
 
 
 class SqlAlchemyUserGateway(UserGateway):
@@ -414,6 +414,26 @@ class SqlAlchemyEventGateway(EventGateway):
             obj.life_milestone_category = update.life_milestone_category
         await self._session.flush()
 
+    async def get_pending_document_confirmation(self, media_asset_id: UUID) -> EventRecord | None:
+        result = await self._session.execute(
+            select(Event)
+            .where(
+                Event.media_asset_id == media_asset_id,
+                Event.source_type == EventSourceType.DOCUMENT,
+                Event.verified.is_(False),
+            )
+            .order_by(Event.created_at.asc(), Event.id.asc())
+            .limit(1)
+        )
+        obj = result.scalar_one_or_none()
+        return _to_event_record(obj) if obj else None
+
+    async def delete(self, event_id: UUID) -> None:
+        obj = await self._session.get(Event, event_id)
+        if obj is not None:
+            await self._session.delete(obj)
+            await self._session.flush()
+
 
 class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
     def __init__(self, session: AsyncSession) -> None:
@@ -446,12 +466,15 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
         *,
         analysis_track: MediaAnalysisTrack,
         pre_extracted_labels: dict | None,
+        life_period_mapped: LifePeriod | None = None,
     ) -> None:
         obj = await self._session.get(MediaAsset, media_asset_id)
         if obj is None:
             raise KeyError(f"media asset not found: {media_asset_id}")
         obj.analysis_track = analysis_track
         obj.pre_extracted_labels = pre_extracted_labels
+        if life_period_mapped is not None:
+            obj.life_period_mapped = life_period_mapped
         await self._session.flush()
 
     async def list_by_user(self, user_id: UUID) -> list[MediaAssetRecord]:
@@ -460,6 +483,28 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
             select(MediaAsset)
             .where(MediaAsset.user_id == user_id)
             .order_by(MediaAsset.created_at.desc(), MediaAsset.id.desc())
+        )
+        result = await self._session.execute(stmt)
+        return [_to_media_asset_record(obj) for obj in result.scalars().all()]
+
+    async def list_uninterviewed(
+        self, user_id: UUID, *, life_period: LifePeriod | None
+    ) -> list[MediaAssetRecord]:
+        already_has_session = select(InterviewSession.linked_media_asset_id).where(
+            InterviewSession.session_type == SessionType.PHOTO,
+            InterviewSession.linked_media_asset_id.is_not(None),
+        )
+        stmt = (
+            select(MediaAsset)
+            .where(
+                MediaAsset.user_id == user_id,
+                MediaAsset.asset_type == AssetType.IMAGE,
+                MediaAsset.life_period_mapped.is_(life_period)
+                if life_period is None
+                else MediaAsset.life_period_mapped == life_period,
+                MediaAsset.id.not_in(already_has_session),
+            )
+            .order_by(MediaAsset.created_at.asc(), MediaAsset.id.asc())
         )
         result = await self._session.execute(stmt)
         return [_to_media_asset_record(obj) for obj in result.scalars().all()]
@@ -737,6 +782,22 @@ class SqlAlchemyQuestionGateway(QuestionGateway):
         result = await self._session.execute(stmt)
         question = result.scalar_one_or_none()
         return _to_question_record(question) if question else None
+
+    async def has_assigned_question_in_period(
+        self, user_id: UUID, life_period: LifePeriod
+    ) -> bool:
+        stmt = (
+            select(InterviewSession.id)
+            .join(Question, InterviewSession.question_id == Question.id)
+            .where(
+                InterviewSession.user_id == user_id,
+                InterviewSession.session_type == SessionType.FIXED_QUESTION,
+                Question.life_period == life_period,
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
 
 
 # --------------------------------------------------------------------------- #

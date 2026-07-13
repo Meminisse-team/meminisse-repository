@@ -120,8 +120,17 @@ async def _run_dual_track_analysis(
         )
         return
 
+    life_period_mapped = asset.life_period_mapped
+    if life_period_mapped is None:
+        life_period_mapped = await _guess_life_period_from_ocr_text(
+            gateways, user_id=asset.user_id, extracted_text=extracted_text
+        )
+
     await gateways.media_assets.update_analysis(
-        asset.id, analysis_track=MediaAnalysisTrack.TEXT_DOCUMENT, pre_extracted_labels=parsed
+        asset.id,
+        analysis_track=MediaAnalysisTrack.TEXT_DOCUMENT,
+        pre_extracted_labels=parsed,
+        life_period_mapped=life_period_mapped,
     )
 
     validity = await _check_ocr_validity(extracted_text)
@@ -131,7 +140,7 @@ async def _run_dual_track_analysis(
             user_id=asset.user_id,
             source_type=EventSourceType.DOCUMENT,
             media_asset_id=asset.id,
-            life_period=asset.life_period_mapped,
+            life_period=life_period_mapped,
             one_line_summary=extracted_text[:100],
             prose_paragraph=extracted_text,
             source_span={"quoted_text": extracted_text[:200]},
@@ -145,9 +154,47 @@ async def _run_dual_track_analysis(
         await gateways.events.bulk_update_embeddings([(event.id, vectors[0])])
 
 
+async def _guess_life_period_from_ocr_text(
+    gateways: Gateways, *, user_id: uuid.UUID, extracted_text: str
+) -> LifePeriod | None:
+    """OCR 텍스트에 명시적인 연도나 나이가 있으면 그걸로 생애주기를 추정한다.
+    애매한 문맥 추측은 하지 않는다(prompts.OCR_DATE_EXTRACTION_SYSTEM_PROMPT
+    참조) — 잘못 매핑하면 사진(PHOTO) 세션 오케스트레이션이 엉뚱한 생애주기
+    경계에서 사진을 들이밀 수 있으므로, 확신 없으면 None(시기 불명으로 남겨
+    전체 완료 후 몰아보기에서 다루게 한다)이 더 안전하다."""
+    result = await solar.structured_completion(
+        prompts.build_ocr_date_extraction_prompt(ocr_text=extracted_text),
+        schema_name="ocr_date_extraction",
+        json_schema=prompts.OCR_DATE_EXTRACTION_SCHEMA,
+        reasoning_effort="low",
+    )
+    if not result.get("found"):
+        return None
+
+    age = result.get("extracted_age")
+    if age is None:
+        extracted_year = result.get("extracted_year")
+        if extracted_year is None:
+            return None
+        user = await gateways.users.get_by_id(user_id)
+        if user is None or user.birth_year is None:
+            return None
+        age = extracted_year - user.birth_year
+
+    if age is None or age < 0:
+        return None
+    return map_age_to_life_period(age)
+
+
 async def list_media_assets(gateways: Gateways, user_id: uuid.UUID) -> list[MediaAssetRecord]:
     """GET /media-assets(사진첩 탭). created_at 내림차순 — 최근 업로드가 먼저 온다."""
     return await gateways.media_assets.list_by_user(user_id)
+
+
+async def get_media_asset(gateways: Gateways, media_asset_id: uuid.UUID) -> MediaAssetRecord | None:
+    """GET /media-assets/{id} — PHOTO 세션 채팅 화면이 linked_media_asset_id로 사진
+    원본(s3_url)을 조회할 때 쓴다(목록 전체를 내려받아 클라이언트에서 찾을 필요 없이)."""
+    return await gateways.media_assets.get_by_id(media_asset_id)
 
 
 async def _check_ocr_validity(extracted_text: str) -> dict:

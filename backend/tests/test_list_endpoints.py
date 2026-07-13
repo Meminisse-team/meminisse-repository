@@ -206,6 +206,34 @@ def test_media_assets_router_scopes_by_current_user(client: TestClient) -> None:
     assert body[0]["user_id"] == a_id
 
 
+def test_get_media_asset_by_id_scopes_by_current_user(client: TestClient) -> None:
+    """PHOTO 세션 채팅 화면이 linked_media_asset_id로 사진 원본을 조회하는 GET
+    /media-assets/{id}도 목록 엔드포인트와 동일하게 소유권 밖이면 404여야 한다."""
+    a_id, a_token = _signup_and_login(client, "photo-detail-a@example.com")
+    b_id, b_token = _signup_and_login(client, "photo-detail-b@example.com")
+
+    gw = MockMediaAssetGateway(default_store)
+    import asyncio
+
+    asset = asyncio.run(
+        gw.create(
+            MediaAssetCreateData(
+                user_id=uuid.UUID(a_id), s3_key="k1", s3_url="https://x/1", asset_type=AssetType.IMAGE
+            )
+        )
+    )
+
+    own_resp = client.get(f"/api/v1/media-assets/{asset.id}", headers=_auth_headers(a_token))
+    assert own_resp.status_code == 200
+    assert own_resp.json()["id"] == str(asset.id)
+
+    other_resp = client.get(f"/api/v1/media-assets/{asset.id}", headers=_auth_headers(b_token))
+    assert other_resp.status_code == 404
+
+    missing_resp = client.get(f"/api/v1/media-assets/{uuid.uuid4()}", headers=_auth_headers(a_token))
+    assert missing_resp.status_code == 404
+
+
 # --------------------------------------------------------------------------- #
 # GET /events                                                                 #
 # --------------------------------------------------------------------------- #

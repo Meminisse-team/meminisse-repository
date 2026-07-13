@@ -57,3 +57,14 @@ async def list_media_assets(gateways: GatewaysDep, current_user: CurrentUserDep)
     """본인이 업로드한 미디어 전체를 최근 업로드순으로 반환한다(사진첩 탭)."""
     assets = await media_service.list_media_assets(gateways, current_user.id)
     return [MediaAssetRead.model_validate(asset) for asset in assets]
+
+
+@router.get("/{media_asset_id}", response_model=MediaAssetRead)
+async def get_media_asset(
+    gateways: GatewaysDep, current_user: CurrentUserDep, media_asset_id: uuid.UUID
+) -> MediaAssetRead:
+    """PHOTO 세션 채팅 화면이 linked_media_asset_id로 사진 원본을 조회할 때 쓴다."""
+    asset = await media_service.get_media_asset(gateways, media_asset_id)
+    if asset is None or asset.user_id != current_user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "미디어를 찾을 수 없습니다.")
+    return MediaAssetRead.model_validate(asset)

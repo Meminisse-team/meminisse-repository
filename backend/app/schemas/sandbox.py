@@ -465,3 +465,23 @@ class LifeMilestoneClassificationRequest(BaseModel):
 
 class LifeMilestoneClassificationResponse(BaseModel):
     category: str | None = Field(None, description="LIFE_MILESTONE_KEYWORDS 중 일치한 첫 카테고리. 없으면 null")
+
+
+# --------------------------------------------------------------------------- #
+# 20. 사진 OCR 텍스트 → 생애주기(시기) 추정                                     #
+# --------------------------------------------------------------------------- #
+
+
+class OcrDateExtractionRequest(BaseModel):
+    ocr_text: str = Field(..., examples=["이 사진은 1975년 결혼식 날 찍은 것이다."])
+    system_prompt_override: str | None = Field(
+        None, description="OCR_DATE_EXTRACTION_SYSTEM_PROMPT 대신 사용할 임시 문구"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class OcrDateExtractionResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    found: bool
+    extracted_year: int | None
+    extracted_age: int | None

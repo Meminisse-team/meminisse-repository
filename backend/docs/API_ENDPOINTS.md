@@ -275,6 +275,13 @@ Supabase는 리프레시 토큰을 1회용으로 순환시키므로 이전 `refr
 항상 고정된다(다른 사람 명의로 세션을 만들 수 없도록 서버가 강제). 내부 동작:
 `slots_filled`를 11개 슬롯 모두 `false`로 초기화해 세션을 생성한다.
 
+**자동 배정(2026-07-12, `docs/QUESTION_BANK_GUIDE.md` 참조)**: `session_type=
+"fixed_question"`인데 `question_id`도 `linked_media_asset_id`도 안 보내면(프론트가
+직접 고르지 않고 "다음 걸 달라"는 일반적인 경로), 서버가 다음 항목을 알아서 고른다 —
+그 결과가 사진일 수도 있어(생애주기 경계에서 아직 안 다룬 사진이 있으면) 이때는
+응답의 `session_type`이 요청과 달리 `"photo"`로 돌아온다. 더 배정할 고정 질문도
+사진도 없으면(모든 큐를 다 마쳤으면) `409 Conflict`.
+
 **응답 `201 Created` (`SessionRead`)**: `id, user_id, session_type, question_id,
 linked_media_asset_id, status("open"), slots_filled(전부 false), followup_count(0),
 is_must_include(false), started_at, completed_at(null)`
@@ -444,6 +451,15 @@ user_comment, created_at` — 이 시점에는 `analysis_track`이 아직 `null`
 **응답 `200 OK` (`MediaAssetRead[]`)**: 위 업로드 응답과 동일한 스키마의 배열. 항목
 수가 많아져도 페이지네이션은 아직 없다 — 사용자 1인당 최대 20장 제한(프론트엔드에서
 강제)을 전제로 설계되어 있어 지금 규모에서는 문제가 되지 않는다.
+
+### `GET /api/v1/media-assets/{media_asset_id}` — 미디어 단건 조회 (인증 필요, 2026-07-13 추가)
+
+`PHOTO` 세션 채팅 화면이 `InterviewSession.linked_media_asset_id`로 사진 원본을
+조회할 때 쓴다(목록 전체를 내려받아 클라이언트에서 찾을 필요 없이). 본인 소유가
+아니거나 존재하지 않으면 `404`(목록에서 걸러내는 대신 개별 리소스 라우터답게
+바로 404).
+
+**응답 `200 OK` (`MediaAssetRead`)**: 위 업로드 응답과 동일한 스키마.
 
 ---
 
@@ -807,7 +823,6 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
 | PDF 조판이 `final_content`가 아닌 개별 챕터 `content`를 사용 | `pdf_service.render_manuscript_html` | 윤문(finalize) 단계에서 다듬어진 문장이 PDF에는 반영되지 않는다(페이지 나눔을 챕터 경계와 정확히 맞추기 위한 의도적 선택) — 필요하면 `final_content`를 챕터 경계 마커와 함께 파싱해 대체하는 방식으로 바꿀 수 있다 |
 | POD(주문형 인쇄) 발주 연계 미구현 | `pdf_service.py` 전체 | 완성된 PDF를 S3에 올려 URL을 반환하는 데까지만 담당한다. 실제 인쇄 발주(수량 선택, 결제, 배송)는 외부 업체 API 계약이 필요해 범위 밖으로 남겼다 |
 | 1층(완충) 세이프가드 트리거가 샌드박스에만 존재 | `app/api/v1/sandbox.py` `safeguard-check` | 실제 서비스는 2층(위기 대응)만 자동으로 걸리고, 1층은 강한 부정적 감정이어도 그냥 지나간다(2026-07-12 해소 — 아래 참조) |
-| 사진(PHOTO) 세션 오케스트레이션 미구현 — OCR 확인 질문 포함 | `docs/QUESTION_BANK_GUIDE.md` 5절 | `session_type=PHOTO`는 스키마에 있지만 어디서도 생성되지 않는다. 사진의 생애주기가 확정되면 그 시기 고정 질문 완료 직후, 불명확하면 전체 고정 질문 종료 후 사진마다 독립 세션으로 제시되어야 한다(설계 확정, 2026-07-12) — 아직 미구현. `Document`(OCR 오인식 의심) 이벤트의 verified 승격도 이 사진 세션 안에서 자연스러운 대화로 처리되는 것이 의도이며, 별도의 예/아니오 확인 질문을 대화 중간에 끼워 넣는 방식은 **아니다**(2026-07-12 그렇게 잘못 구현했다가 롤백) |
 | 계정 = 로그인 하나로 단순화됨(2026-07-09 인증 추가분) | `app/api/deps.py`, `users.py` | 자녀가 부모를 대신해 온보딩/동의하는 기획안의 "동의 주체 분리" 시나리오가, 현재는 자녀가 부모 계정에 직접 로그인해 대신 조작하는 것으로만 구현 가능하다 — 자녀 전용 별도 계정으로 부모 계정에 위임 접근하는 "가족 초대" 흐름은 미구현 |
 
 **해소된 항목(기록 목적으로 이전 버전 남김)**: "세션 히스토리 조회 엔드포인트 없음"은
@@ -817,8 +832,7 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
 데이터를 실제 데이터로 교체하기 위해 `GET /interview-sessions`, `GET /media-assets`,
 `GET /events` 3개 목록 조회 엔드포인트를 새로 추가했다(각각 2·3·4절 참조).
 
-2026-07-12(P4 컴플라이언스 마감)에 3건 추가 해소(OCR 확인 질문은 아래 "알려진 한계"
-표 참조 — 잘못된 방식으로 구현했다가 롤백하고 올바른 설계만 문서화했다):
+2026-07-12(P4 컴플라이언스 마감)에 3건 추가 해소:
 - **1층/3층 세이프가드 미연결** → `interview_service._detect_strong_negative_emotion`
   (1층 트리거)과 `GET /legal/disclosures`(3층 고지, 온보딩 동의 화면에 노출) 연결.
 - **등장인물 실명 동의가 인물 단위가 아닌 사용자 단위** → `consent_records.character_id`
@@ -827,3 +841,28 @@ Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1
   `publishing`, 최종 윤문 완료 시 `published`로 자동 전환(같은 시점에
   `AutobiographyStatus.PUBLISHED`도 처음으로 실제 설정됨 — 이전엔 enum 값만 있고
   아무 데서도 쓰이지 않던 죽은 값이었다).
+
+같은 날 뒤이어 **사진(PHOTO) 세션 오케스트레이션**도 구현했다(처음엔 "대화 중간에
+OCR 내용을 예/아니오로 확인"하는 잘못된 방식으로 만들었다가 롤백, 올바른 설계로
+재구현) — `interview_service._resolve_next_item`이 고정 질문 큐와 사진 큐를 합쳐
+다음 항목을 고른다: 사진의 생애주기가 확정되면 그 시기 고정 질문 완료 직후,
+불명확하면 전체 고정 질문 종료 후 사진마다 독립 `PHOTO` 세션으로 제시된다.
+OCR 오인식 의심 텍스트는 그 세션의 시작 질문에 실마리로 녹여 자연스러운 대화로
+확인한다. 상세 설계와 남은 프론트엔드 작업은 `docs/QUESTION_BANK_GUIDE.md` 5절,
+남은 한계는 위 표 참조.
+
+2026-07-13에 **OCR로 사진 시기를 추정하는 로직 없음** 항목도 해소했다 —
+`media_service._guess_life_period_from_ocr_text`가 OCR 텍스트에서 명시적
+연도/나이를 뽑아(애매한 추측은 하지 않음) `life_period_mapped`를 자동으로
+채운다(사용자가 이미 `age_at_time`을 입력한 사진은 건드리지 않음). 상세는
+`docs/QUESTION_BANK_GUIDE.md` 5절 "OCR 텍스트로 사진 시기 자동 추정" 참조.
+프롬프트를 새로 추가했으므로 `POST /sandbox/ocr-date-extraction`도 같이
+추가했다(사진 업로드가 아니라 실제 파이프라인과 동일하게 OCR 텍스트 문자열만
+입력받는다 — Document Parse가 이미 뽑아낸 텍스트가 이 프롬프트의 유일한
+입력이라, Swagger에서 사진을 올릴 수 있어야 할 필요 자체가 없다).
+
+같은 날 **사진(PHOTO) 세션 프론트엔드 UI 미배선** 항목도 해소했다 —
+`ChatOverlay.tsx`가 `session_type=photo`인 세션에서 `linked_media_asset_id`를
+새로 추가한 `GET /media-assets/{id}`(개별 조회, 기존엔 목록만 있었다)로 가져와
+대화 목록 위에 이미지로 띄운다. 상세는 `docs/QUESTION_BANK_GUIDE.md` 5절
+"프론트엔드 — 구현 완료" 참조.
