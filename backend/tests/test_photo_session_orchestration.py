@@ -50,6 +50,11 @@ async def _fake_structured_completion(messages, *, schema_name, json_schema, **k
         return {"strong_negative_emotion": False}
     if schema_name == "slot_gating":
         return {"newly_filled_slots": []}
+    if schema_name == "contextual_followup":
+        # 이 테스트 스위트의 관심사는 질문 큐/사진 오케스트레이션이지 맥락 기반
+        # 꼬리질문 자체가 아니므로, 항상 "캐물을 것 없음"으로 응답해 곧장 마무리
+        # 확인 단계로 넘어가게 한다(interview_service.py:_generate_contextual_followup).
+        return {"has_followup": False, "question": None}
     raise AssertionError(f"unexpected schema_name: {schema_name}")
 
 
@@ -66,13 +71,26 @@ def _patches():
     )
 
 
+_LONG_ENOUGH_CONTENT = "내용" * 45  # interview_service.MIN_RICH_ANSWER_LENGTH(80자)보다 길어야
+# 슬롯이 다 찬 뒤 곧바로 완료 처리된다 — 짧으면 "구체화 요청" 분기를 타 완료가 미뤄진다.
+
+
 async def _complete_one_session(gateways, session) -> tuple:
-    """세션의 슬롯을 강제로 다 채운 뒤 한 턴을 보내 완료 처리시킨다. (assistant_content, updated_session) 반환."""
+    """세션의 슬롯을 강제로 다 채운 뒤 두 턴을 보내 완료 처리시킨다 — 슬롯이 다
+    차고 답변도 충분히 풍부해지면 곧바로 완료되지 않고 "더 하실 말씀 있으세요?"
+    라고 한 번 더 확인하므로(interview_service.py:_WRAP_UP_OFFERED_KEY,
+    2026-07-15), 그 확인에 짧게 답하는 턴을 하나 더 보내야 실제로 완료된다.
+    (assistant_content, updated_session)는 마지막(완료 처리) 턴 기준."""
     await gateways.sessions.update_slots(
         session.id, slots_filled=_ALL_SLOTS_FILLED, followup_count=0
     )
     session = await gateways.sessions.get_by_id(session.id)
-    _, assistant_turn, updated = await interview_service.add_user_turn(gateways, session, "내용")
+    await interview_service.add_user_turn(gateways, session, _LONG_ENOUGH_CONTENT)
+
+    session = await gateways.sessions.get_by_id(session.id)
+    _, assistant_turn, updated = await interview_service.add_user_turn(
+        gateways, session, "아니요, 없어요"
+    )
     return assistant_turn.content, updated
 
 
@@ -109,8 +127,10 @@ async def test_photo_session_offered_right_after_its_life_period_finishes() -> N
         )
         await gateways.commit()
 
-        last_preview = await _complete_n_fixed_sessions(gateways, user.id, 8)
-        assert "사진" in last_preview
+        # 완료 메시지 자체는 더 이상 다음 항목 미리보기를 담지 않는다(2026-07-15 —
+        # "계속하기" 버튼을 누르는 시점에 GET next-preview로 새로 가져가는 방식으로
+        # 바뀜, ChatOverlay.tsx 참조) — 그래서 실제 다음 세션 생성 결과로 검증한다.
+        await _complete_n_fixed_sessions(gateways, user.id, 8)
 
         next_session = await interview_service.create_session(
             gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)
@@ -167,8 +187,19 @@ async def test_late_uploaded_photo_does_not_interrupt_a_later_period_already_in_
             second_youth_session.id, slots_filled=_ALL_SLOTS_FILLED, followup_count=0
         )
         session = await gateways.sessions.get_by_id(second_youth_session.id)
-        _, assistant_turn, _ = await interview_service.add_user_turn(gateways, session, "내용")
+        _, assistant_turn, _ = await interview_service.add_user_turn(
+            gateways, session, _LONG_ENOUGH_CONTENT
+        )
         assert "사진" not in assistant_turn.content
+
+        # 슬롯/풍부함이 다 찬 뒤 뜨는 "더 하실 말씀 있으세요?" 확인에 답해야
+        # second_youth_session이 실제로 완료된다(_complete_one_session 주석 참조) —
+        # 안 그러면 이 세션이 계속 OPEN으로 남아 아래 29개 카운트가 어긋난다.
+        session = await gateways.sessions.get_by_id(second_youth_session.id)
+        _, assistant_turn2, _ = await interview_service.add_user_turn(
+            gateways, session, "아니요, 없어요"
+        )
+        assert "사진" not in assistant_turn2.content
 
         await _complete_n_fixed_sessions(gateways, user.id, 29)
 

@@ -362,6 +362,19 @@ class SqlAlchemyEventGateway(EventGateway):
         result = await self._session.execute(stmt)
         return [_to_event_record(obj) for obj in result.scalars().all()]
 
+    async def list_by_session(self, session_id: UUID) -> list[EventRecord]:
+        stmt = (
+            select(Event)
+            .where(
+                Event.session_id == session_id,
+                Event.verified.is_(True),
+                Event.duplicate_of_event_id.is_(None),
+            )
+            .order_by(Event.created_at.asc())
+        )
+        result = await self._session.execute(stmt)
+        return [_to_event_record(obj) for obj in result.scalars().all()]
+
     async def find_merge_candidates(
         self,
         *,
@@ -798,6 +811,10 @@ class SqlAlchemyQuestionGateway(QuestionGateway):
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def get_by_id(self, question_id: UUID) -> QuestionRecord | None:
+        question = await self._session.get(Question, question_id)
+        return _to_question_record(question) if question else None
 
 
 # --------------------------------------------------------------------------- #

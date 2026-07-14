@@ -63,3 +63,15 @@ class TurnResponse(BaseModel):
     user_message: ChatMessageRead
     assistant_message: ChatMessageRead
     session: SessionRead
+
+
+class NextItemPreviewRead(BaseModel):
+    """GET /interview-sessions/next-preview 응답 — 세션을 만들지 않고 다음 질문/
+    사진 대화의 인사말만 미리 보여준다(app/services/interview_service.py:
+    NextItemPreview 참조)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    session_type: SessionType | None
+    linked_media_asset_id: uuid.UUID | None
+    opening_message: str

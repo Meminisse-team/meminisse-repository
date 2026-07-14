@@ -19,7 +19,7 @@ from app.agents import prompts
 from app.clients import solar
 from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, MediaAssetRecord, QuestionRecord, SessionCreateData
 from app.gateways.factory import Gateways
-from app.models.enums import LifePeriod, MessageRole, SessionType, UserStage
+from app.models.enums import LifePeriod, MessageRole, SessionStatus, SessionType, UserStage
 from app.schemas.interview import SessionCreate
 
 # 유년기→청년기→장년기→노년기 — enum 선언 순서 그대로가 정본이다(app/models/enums.py).
@@ -31,6 +31,17 @@ class NoRemainingQuestionsError(Exception):
     생성하려 했는데, 이 유저에게 더 배정할 고정 질문도 사진 세션도 없는 경우
     (전체 큐를 다 마침). 라우터가 이를 못 잡으면 500으로 새어나간다
     (app/api/v1/interviews.py 참조)."""
+
+
+class SessionNotOpenError(Exception):
+    """이미 완료(또는 건너뜀)된 세션에 발화를 이어붙이려 한 경우. 프론트가 세션 완료
+    시점에 새 세션으로 넘어가지 않고 같은 session_id로 계속 보내면, 이미 꽉 찬
+    slots_filled 때문에 매 턴마다 "슬롯 충족" 분기가 재발동해 그 세션이 반복
+    재완료 처리되고 Phase 2 후처리(session_prose 재조립·이벤트 추출)가 매번 다시
+    돌아 사실상 매 턴마다 새 이벤트가 중복 생성되는 문제가 있었다(2026-07-14
+    실제 프론트 사용 중 재현: "다음 세션으로 안 넘어가고 같은 질문 반복" +
+    "대화가 세션별 산문이 아니라 턴마다 개별 저장된 것처럼 보임"). 이 경로를
+    아예 막아 프론트가 반드시 새 세션을 만들도록 강제한다."""
 
 
 @dataclass
@@ -98,6 +109,69 @@ async def _photo_session_opening_text(gateways: Gateways, media_asset: MediaAsse
     return prompts.build_photo_session_opening(ocr_suspected_text=ocr_hint)
 
 
+@dataclass
+class NextItemPreview:
+    """세션을 실제로 만들지 않고 "다음 세션을 시작하면 뭘 묻게 될지"만 미리 계산한
+    결과. 세션은 여전히 첫 발화 시점에야 만들어진다(빈 세션이 계속 쌓이는 것을
+    막기 위한 기존 설계, ChatOverlay.tsx 참조) — 그래서 대화창을 열자마자 사용자가
+    아무것도 입력하기 전에 "다음 질문이 뭔지" 보여주려면, 세션 생성과 분리된
+    이 미리보기 경로가 필요하다."""
+
+    session_type: SessionType | None  # None이면 배정할 항목이 없다는 뜻(질문·사진 큐를 모두 마침).
+    linked_media_asset_id: uuid.UUID | None
+    opening_message: str
+
+
+async def preview_next_item(gateways: Gateways, user_id: uuid.UUID) -> NextItemPreview:
+    """GET /interview-sessions/next-preview. 간단한 인사 + 아직 다루지 않은 다음
+    질문(또는 사진 대화 시작 문구)을 합쳐 반환한다 — "어떤 대화를 해볼까요?" 같은
+    정적 문구 대신 실제로 무엇을 물을지 대화창을 열자마자 보여주기 위함
+    (2026-07-14 프론트 실사용 중 발견)."""
+    next_item = await _resolve_next_item(gateways, user_id)
+    if next_item is None:
+        return NextItemPreview(
+            session_type=None,
+            linked_media_asset_id=None,
+            opening_message=(
+                "안녕하세요! 준비된 질문에는 모두 답변해 주셨어요. "
+                "더 나누고 싶은 이야기가 있다면 편하게 말씀해주세요."
+            ),
+        )
+    if next_item.session_type == SessionType.FIXED_QUESTION:
+        assert next_item.question is not None
+        return NextItemPreview(
+            session_type=SessionType.FIXED_QUESTION,
+            linked_media_asset_id=None,
+            opening_message=f"안녕하세요! 오늘은 이 이야기를 들려주시겠어요?\n\n{next_item.question.content}",
+        )
+
+    assert next_item.media_asset is not None
+    opening = await _photo_session_opening_text(gateways, next_item.media_asset)
+    return NextItemPreview(
+        session_type=SessionType.PHOTO,
+        linked_media_asset_id=next_item.media_asset.id,
+        opening_message=f"안녕하세요! 이번엔 사진 속 이야기를 들어볼까요?\n\n{opening}",
+    )
+
+
+async def _resolve_opening_content(gateways: Gateways, session: InterviewSessionRecord) -> str | None:
+    """세션이 다루는 질문/사진의 실제 문구를 조회한다 — create_session이 이를
+    chat_log(role=assistant)로 남겨, 세션 종료 후 산문 재조립 시 "무엇에 대한
+    답인지" 맥락이 함께 보존되게 한다(2026-07-15). 이전에는 이 문구가 프론트
+    로컬 상태(previewNext 응답)로만 보여지고 실제로는 저장되지 않아, 예를 들어
+    "대학을 어디 다녔나요?"라는 질문에 "서울대"라고만 답해도 DB에는 "서울대"
+    한 마디만 남아 무엇에 대한 답인지 알 수 없는 문제가 있었다."""
+    if session.session_type == SessionType.FIXED_QUESTION and session.question_id is not None:
+        question = await gateways.questions.get_by_id(session.question_id)
+        return question.content if question is not None else None
+    if session.session_type == SessionType.PHOTO and session.linked_media_asset_id is not None:
+        media_asset = await gateways.media_assets.get_by_id(session.linked_media_asset_id)
+        if media_asset is None:
+            return None
+        return await _photo_session_opening_text(gateways, media_asset)
+    return None
+
+
 async def create_session(
     gateways: Gateways, user_id: uuid.UUID, payload: SessionCreate
 ) -> InterviewSessionRecord:
@@ -139,6 +213,12 @@ async def create_session(
         )
     )
 
+    opening_content = await _resolve_opening_content(gateways, session)
+    if opening_content is not None:
+        await gateways.sessions.add_chat_log(
+            session.id, role=MessageRole.ASSISTANT, content=opening_content
+        )
+
     # User.current_stage는 가입 시 ONBOARDING으로 고정된 뒤 어디서도 갱신되지
     # 않아 프로필 화면이 항상 "온보딩 중"으로만 표시되는 버그가 있었다(2026-07-12
     # 발견). 첫 인터뷰 세션이 만들어지는 시점이 곧 "대화 진행 중" 전환 시점이다.
@@ -161,21 +241,41 @@ async def list_sessions(gateways: Gateways, user_id: uuid.UUID) -> list[Intervie
     return await gateways.sessions.list_by_user(user_id)
 
 
+_WRAP_UP_OFFERED_KEY = "_wrap_up_offered"  # slots_filled 안에 두는 내부 플래그들. 실제
+_CONTEXTUAL_FOLLOWUP_OFFERED_KEY = "_contextual_followup_offered"  # 슬롯이 아니므로
+# prompts.REQUIRED_SLOTS/ALL_SLOTS에는 없고, missing_required 판정에도 섞이지 않는다.
+
+
 async def add_user_turn(
     gateways: Gateways, session: InterviewSessionRecord, content: str
 ) -> tuple[ChatLogRecord, ChatLogRecord, InterviewSessionRecord]:
     """유저 발화를 저장하고, 세이프가드·슬롯 게이팅을 거쳐 에이전트 응답을 생성한다.
 
     반환값은 (user_chat_log, assistant_chat_log, 갱신된 세션).
+
+    Solar 호출(최대 90초, app/clients/base.py 참조)을 전부 끝낸 뒤에야 DB에 쓴다 —
+    먼저 유저 발화부터 저장해 트랜잭션을 열어둔 채 느린 Solar 응답을 기다리면,
+    Supabase가 idle-in-transaction 상태의 커넥션을 일정 시간 뒤 강제로 끊어 맨
+    마지막 커밋이 실패하는 문제가 있었다(2026-07-15 실사용 중 재현 — 답변이 길어
+    Solar 판정이 오래 걸리거나, 한 턴 안에서 Solar 호출이 여러 번 겹칠수록
+    재현 빈도가 높았다). 그래서 이 함수는 두 단계로 나뉜다: (1) Solar 호출을
+    포함한 순수 판단(DB 쓰기 없음), (2) 판단 결과를 바탕으로 몰아서 하는 빠른
+    DB 쓰기.
     """
-    user_turn = await gateways.sessions.add_chat_log(
-        session.id, role=MessageRole.USER, content=content
-    )
+    if session.status != SessionStatus.OPEN:
+        raise SessionNotOpenError()
+
+    # --- 1단계: 판단(Solar 호출 포함) — DB 쓰기는 아직 하지 않는다 -------------
+    updated_slots: dict[str, bool] | None = None
+    new_followup_count = session.followup_count
+    should_complete = False
+    is_crisis = False
 
     if prompts.contains_crisis_keyword(content):
-        # 2층: 위기 신호 — 심화 질문 전면 차단, 세션을 부드럽게 마무리.
+        # 2층: 위기 신호 — 심화 질문 전면 차단, 세션을 부드럽게 마무리. 키워드
+        # 매칭이라 Solar 호출이 없다(app/agents/prompts.py:CRISIS_KEYWORDS).
         assistant_content = prompts.TIER2_CRISIS_RESPONSE
-        await gateways.sessions.complete(session.id)
+        is_crisis = True
     elif await _detect_strong_negative_emotion(content):
         # 1층: 위기까지는 아니지만 심화 질문은 피해야 할 만큼 강한 부정적 감정 —
         # 슬롯/꼬리질문 진행 없이 완충 응답만 돌려주고 세션은 계속 열어 둔다(2층과
@@ -185,8 +285,31 @@ async def add_user_turn(
         newly_filled = await _run_slot_gating(content=content, slots_filled=session.slots_filled)
         updated_slots = {**session.slots_filled, **{slot: True for slot in newly_filled}}
         missing_required = [key for key in prompts.REQUIRED_SLOTS if not updated_slots.get(key)]
+        is_fixed_or_photo = session.session_type in (SessionType.FIXED_QUESTION, SessionType.PHOTO)
 
-        should_complete = False
+        def _finalize_wrap_up_or_complete() -> str:
+            """슬롯·풍부함·맥락 기반 꼬리질문까지 다 거친 뒤 도달하는 마지막 갈림길
+            — 마무리 확인을 아직 안 했으면 그것부터, 이미 했으면 진짜로 완료한다.
+            둘 이상의 분기(맥락 꼬리질문이 "없음"으로 나온 경우와, 애초에 그 단계
+            자체가 스킵된 경우)에서 공통으로 이 지점에 도달하므로 헬퍼로 뺐다."""
+            nonlocal should_complete
+            if not updated_slots.get(_WRAP_UP_OFFERED_KEY):
+                updated_slots[_WRAP_UP_OFFERED_KEY] = True
+                return prompts.WRAP_UP_CHECK_IN_MESSAGE
+            # PHOTO 세션도 FIXED_QUESTION과 동일하게 다룬다(docs/QUESTION_BANK_
+            # GUIDE.md 5절 — "이후 대화는 일반 인터뷰와 동일하게 진행된다"). 다음
+            # 질문 미리보기는 더 이상 여기서 만들지 않는다 — 프론트가 "다음 이야기
+            # 계속하기" 버튼을 누르는 시점에 GET next-preview로 새로 가져간다
+            # (2026-07-15 — 이전엔 여기서 미리 다음 질문을 만들어 보여줘, 세션이
+            # 끝나도 새 채팅이 열리는 느낌 없이 한 세션 안에서 여러 질문을 받는
+            # 것처럼 보인다는 피드백이 있었다).
+            should_complete = is_fixed_or_photo
+            return (
+                "네, 잘 들었어요. 소중한 이야기 들려주셔서 감사해요."
+                if should_complete
+                else "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+            )
+
         if missing_required and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT:
             assistant_content = await _generate_followup_question(
                 event_summary=content,
@@ -194,48 +317,66 @@ async def add_user_turn(
                 followup_count=session.followup_count,
             )
             new_followup_count = session.followup_count + 1
+        elif (
+            _total_user_content_length(session, content) < prompts.MIN_RICH_ANSWER_LENGTH
+            and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
+        ):
+            # 필수 슬롯은 다 찼지만 이 사건에 대해 실제로 쓴 글자 수가 너무 적다 —
+            # 채팅 말풍선 UI가 카카오톡처럼 짧은 대답을 유도한다는 피드백(2026-07-14)
+            # 대응. 남은 꼬리 질문 예산 안에서(MAX_FOLLOWUP_PER_EVENT 공유) 한 번 더
+            # 자연스러운 구체화 질문을 던진다.
+            assistant_content = await _generate_elaboration_question(content)
+            new_followup_count = session.followup_count + 1
+        elif (
+            not updated_slots.get(_CONTEXTUAL_FOLLOWUP_OFFERED_KEY)
+            and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
+            and is_fixed_or_photo
+        ):
+            # 슬롯(필수 정보)과 풍부함(길이)은 기계적 기준이었다 — 여기서는 그와
+            # 별개로, 진짜 전기 작가라면 자연스럽게 캐물었을 만한 지점이 대화 속에
+            # 있는지 LLM이 직접 판단한다(2026-07-15 피드백, INTERVIEW_PERSONA_
+            # SYSTEM_PROMPT가 원래 표방했지만 실제로는 연결된 적 없던 역할). 세션당
+            # 한 번만 시도하고(플래그로 기록), 꼬리 질문 예산을 공유해 무한정
+            # 캐묻지 않는다. "캐물을 게 없다"는 결과가 나오면 같은 턴 안에서 바로
+            # 마무리 확인으로 넘어간다 — 빈 라운드트립으로 한 턴을 낭비하지 않는다.
+            updated_slots[_CONTEXTUAL_FOLLOWUP_OFFERED_KEY] = True
+            contextual_question = await _generate_contextual_followup(session=session, latest_content=content)
+            if contextual_question is not None:
+                assistant_content = contextual_question
+                new_followup_count = session.followup_count + 1
+            else:
+                assistant_content = _finalize_wrap_up_or_complete()
         else:
-            new_followup_count = session.followup_count
-            # PHOTO 세션도 FIXED_QUESTION과 동일하게 슬롯이 다 채워지면 완료 처리하고
-            # 다음 항목을 제시한다(docs/QUESTION_BANK_GUIDE.md 5절 — "이후 대화는
-            # 일반 인터뷰와 동일하게 진행된다").
-            should_complete = session.session_type in (SessionType.FIXED_QUESTION, SessionType.PHOTO)
-            assistant_content = "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+            assistant_content = _finalize_wrap_up_or_complete()
 
+    # --- 2단계: 판단 결과를 몰아서 쓰는 DB 쓰기(빠름, Solar 호출 없음) ---------
+    user_turn = await gateways.sessions.add_chat_log(
+        session.id, role=MessageRole.USER, content=content
+    )
+
+    if updated_slots is not None:
         await gateways.sessions.update_slots(
             session.id, slots_filled=updated_slots, followup_count=new_followup_count
         )
 
-        if should_complete:
-            if session.session_type == SessionType.PHOTO and session.linked_media_asset_id is not None:
-                # 이 사진 세션의 대화로 정식 이벤트가 곧 추출될 것이므로(Phase 2
-                # 후처리), 애초에 이 세션을 촉발한 OCR 스테이징 이벤트(오인식 의심,
-                # verified=false)는 역할을 다했다 — 정리한다.
-                pending_event = await gateways.events.get_pending_document_confirmation(
-                    session.linked_media_asset_id
-                )
-                if pending_event is not None:
-                    await gateways.events.delete(pending_event.id)
+    if is_crisis:
+        await gateways.sessions.complete(session.id)
+    elif should_complete:
+        if session.session_type == SessionType.PHOTO and session.linked_media_asset_id is not None:
+            # 이 사진 세션의 대화로 정식 이벤트가 곧 추출될 것이므로(Phase 2
+            # 후처리), 애초에 이 세션을 촉발한 OCR 스테이징 이벤트(오인식 의심,
+            # verified=false)는 역할을 다했다 — 정리한다.
+            pending_event = await gateways.events.get_pending_document_confirmation(
+                session.linked_media_asset_id
+            )
+            if pending_event is not None:
+                await gateways.events.delete(pending_event.id)
 
-            # "한 세션 = 질문 하나" 관례(InterviewSession 모델 docstring)에 따라,
-            # 이 세션의 슬롯이 충분히 채워졌으면 바로 완료 처리하고(Phase 2 후처리
-            # 큐잉까지 포함 — complete_session 참조) 다음 항목을 미리 보여준다.
-            # 프론트는 이 응답을 받은 뒤 새 세션을 만들어 이어가면 된다.
-            await complete_session(gateways, session)
-            next_item = await _resolve_next_item(gateways, session.user_id)
-            if next_item is None:
-                assistant_content = (
-                    "말씀해주셔서 감사해요. 준비된 질문에 모두 답변해 주셨어요. 정말 수고 많으셨습니다."
-                )
-            elif next_item.session_type == SessionType.FIXED_QUESTION:
-                assert next_item.question is not None
-                assistant_content = (
-                    f"말씀해주셔서 감사해요. 다음 질문으로 넘어가 볼까요?\n\n{next_item.question.content}"
-                )
-            else:
-                assert next_item.media_asset is not None
-                opening = await _photo_session_opening_text(gateways, next_item.media_asset)
-                assistant_content = f"말씀해주셔서 감사해요. 이번엔 사진 속 이야기를 들어볼까요?\n\n{opening}"
+        # "한 세션 = 질문 하나" 관례(InterviewSession 모델 docstring)에 따라, 이
+        # 세션의 슬롯이 충분히 채워졌으면 바로 완료 처리한다(Phase 2 후처리 큐잉
+        # 포함 — complete_session 참조). 프론트는 "다음 이야기 계속하기" 버튼을
+        # 누르면 새 세션을 만들어 이어간다.
+        await complete_session(gateways, session)
 
     assistant_turn = await gateways.sessions.add_chat_log(
         session.id, role=MessageRole.ASSISTANT, content=assistant_content
@@ -285,6 +426,40 @@ async def _generate_followup_question(
     )
     response = await solar.chat_completion(messages, reasoning_effort="low", max_tokens=200)
     return response.choices[0].message.content or ""
+
+
+def _total_user_content_length(session: InterviewSessionRecord, latest_content: str) -> int:
+    """이 세션에서 지금까지(이번 발화 포함) 사용자가 실제로 쓴 글자 수 총합 —
+    "한 세션 = 사건 하나" 관례상 이 세션의 모든 사용자 턴이 같은 사건을 다룬다.
+    session.chat_logs는 이번 발화 이전까지의 턴만 담고 있으므로(add_user_turn이
+    아직 이번 턴을 세션에 반영하기 전) latest_content를 더해줘야 한다."""
+    prior = sum(len(log.content) for log in session.chat_logs if log.role == MessageRole.USER)
+    return prior + len(latest_content)
+
+
+async def _generate_elaboration_question(content: str) -> str:
+    messages = prompts.build_elaboration_prompt(user_content=content)
+    response = await solar.chat_completion(messages, reasoning_effort="low", max_tokens=200)
+    return response.choices[0].message.content or ""
+
+
+async def _generate_contextual_followup(
+    *, session: InterviewSessionRecord, latest_content: str
+) -> str | None:
+    """이 세션의 지금까지 대화 전체(오프닝 질문 포함, session.chat_logs)에 방금
+    답변을 더해 LLM에게 넘기고, 자연스럽게 캐물을 지점이 있는지 판단시킨다.
+    없다고 판단되면 None을 반환한다."""
+    chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
+    chat_turns.append({"role": "user", "content": latest_content})
+    result = await solar.structured_completion(
+        prompts.build_contextual_followup_prompt(chat_turns=chat_turns),
+        schema_name="contextual_followup",
+        json_schema=prompts.CONTEXTUAL_FOLLOWUP_SCHEMA,
+        reasoning_effort="low",
+    )
+    if not result.get("has_followup"):
+        return None
+    return result.get("question")
 
 
 async def complete_session(

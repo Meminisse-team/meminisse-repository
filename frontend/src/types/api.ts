@@ -93,6 +93,16 @@ export interface TurnResponse {
   session: InterviewSession;
 }
 
+/** GET /api/v1/interview-sessions/next-preview 응답 — 세션을 만들지 않고 다음
+ * 질문/사진 대화의 인사말만 미리 보여준다(backend/app/schemas/interview.py:
+ * NextItemPreviewRead). session_type이 null이면 배정할 항목이 없다는 뜻(질문·사진
+ * 큐를 모두 마침) — 그래도 opening_message는 항상 채워져 있다. */
+export interface NextItemPreview {
+  session_type: SessionType | null;
+  linked_media_asset_id: string | null;
+  opening_message: string;
+}
+
 /** GET /api/v1/interview-sessions/{id} 전용 — 목록 조회(InterviewSession)에는 없는
  * chat_logs가 포함된다(backend/app/schemas/interview.py:SessionDetailRead). */
 export interface InterviewSessionDetail extends InterviewSession {
@@ -117,6 +127,17 @@ export interface EventItem {
   is_must_include: boolean;
   life_milestone_category: LifeMilestoneCategory | null;
   created_at: string;
+}
+
+/** GET /api/v1/stories 응답 단위 — 사건이 아니라 완료된 세션 단위 카드
+ * (backend/app/schemas/story.py:StoryCardRead). 제목은 그 세션이 다룬 질문/사진
+ * 오프닝 문구 그 자체, 부제는 재조립된 산문(prose)으로부터 재추출한 요약 라벨. */
+export interface StoryCard {
+  session_id: string;
+  title: string;
+  subtitle: string | null;
+  prose: string;
+  completed_at: string | null;
 }
 
 export interface MediaAsset {

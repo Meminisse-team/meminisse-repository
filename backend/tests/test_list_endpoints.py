@@ -146,7 +146,13 @@ def test_session_detail_includes_chat_logs_list_does_not(client: TestClient) -> 
 
     detail = client.get(f"/api/v1/interview-sessions/{session['id']}", headers=_auth_headers(token))
     assert detail.status_code == 200
-    assert detail.json()["chat_logs"] == []
+    # 세션 생성 시 질문 문구가 chat_log(role=assistant)로 자동 저장된다(2026-07-15
+    # — 세션 종료 후 산문 재조립 시 "무엇에 대한 답인지" 맥락을 보존하기 위함,
+    # interview_service.py:_resolve_opening_content). 아직 사용자 발화는 없으므로
+    # 이 한 건뿐이어야 한다.
+    chat_logs = detail.json()["chat_logs"]
+    assert len(chat_logs) == 1
+    assert chat_logs[0]["role"] == "assistant"
 
 
 # --------------------------------------------------------------------------- #

@@ -324,6 +324,17 @@ class MockEventGateway(EventGateway):
         events.sort(key=lambda e: e.created_at)
         return events
 
+    async def list_by_session(self, session_id: uuid.UUID) -> list[EventRecord]:
+        events = [
+            event
+            for event in self._store.events.values()
+            if event.session_id == session_id
+            and event.verified
+            and event.duplicate_of_event_id is None
+        ]
+        events.sort(key=lambda e: e.created_at)
+        return events
+
     async def find_merge_candidates(
         self,
         *,
@@ -748,6 +759,9 @@ class MockQuestionGateway(QuestionGateway):
             and self._store.questions[s.question_id].life_period == life_period
             for s in self._store.sessions.values()
         )
+
+    async def get_by_id(self, question_id: uuid.UUID) -> QuestionRecord | None:
+        return self._store.questions.get(question_id)
 
 
 def _dot_product(a: list[float], b: list[float]) -> float:

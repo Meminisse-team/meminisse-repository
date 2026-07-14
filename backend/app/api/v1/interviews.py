@@ -7,6 +7,7 @@ from app.gateways.dto import InterviewSessionRecord, UserRecord
 from app.schemas.interview import (
     ChatMessageCreate,
     ChatMessageRead,
+    NextItemPreviewRead,
     SessionCreate,
     SessionDetailRead,
     SessionRead,
@@ -52,6 +53,16 @@ async def list_sessions(gateways: GatewaysDep, current_user: CurrentUserDep) -> 
     return [SessionRead.model_validate(session) for session in sessions]
 
 
+@router.get("/next-preview", response_model=NextItemPreviewRead)
+async def preview_next(gateways: GatewaysDep, current_user: CurrentUserDep) -> NextItemPreviewRead:
+    """새 대화창을 열 때, 세션을 만들기 전에 다음 질문/사진이 무엇일지 미리 보여준다
+    (세션 자체는 여전히 첫 발화 시점에 생성 — 빈 세션 방지, ChatOverlay.tsx 참조).
+    반드시 `/{session_id}` 라우트보다 먼저 등록해야 한다 — 안 그러면 "next-preview"가
+    session_id 경로 파라미터로 잘못 매칭된다."""
+    preview = await interview_service.preview_next_item(gateways, current_user.id)
+    return NextItemPreviewRead.model_validate(preview)
+
+
 @router.get("/{session_id}", response_model=SessionDetailRead)
 async def get_session(
     session_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
@@ -65,9 +76,15 @@ async def send_message(
     session_id: uuid.UUID, payload: ChatMessageCreate, gateways: GatewaysDep, current_user: CurrentUserDep
 ) -> TurnResponse:
     session = await _get_own_session_or_404(gateways, session_id, current_user)
-    user_turn, assistant_turn, updated_session = await interview_service.add_user_turn(
-        gateways, session, payload.content
-    )
+    try:
+        user_turn, assistant_turn, updated_session = await interview_service.add_user_turn(
+            gateways, session, payload.content
+        )
+    except interview_service.SessionNotOpenError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "이미 종료된 대화입니다. 새 대화를 시작해주세요.",
+        )
     return TurnResponse(
         user_message=ChatMessageRead.model_validate(user_turn),
         assistant_message=ChatMessageRead.model_validate(assistant_turn),

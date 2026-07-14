@@ -209,6 +209,13 @@ class EventGateway(ABC):
         created_at 오름차순(먼저 등장한 이벤트를 canonical으로 우선 채택)."""
 
     @abstractmethod
+    async def list_by_session(self, session_id: UUID) -> list[EventRecord]:
+        """이 세션에서 추출된 검증된(verified=True, 미병합) 이벤트들을 created_at
+        오름차순으로 반환한다 — '나의 이야기' 세션 카드(app/services/story_service.py)
+        의 부제(요약 라벨)를 만드는 데 쓴다. 한 세션이 여러 사건으로 쪼개질 수도
+        있어(기획안 원칙 1) 리스트로 반환한다."""
+
+    @abstractmethod
     async def find_merge_candidates(
         self,
         *,
@@ -419,6 +426,14 @@ class QuestionGateway(ABC):
         것. "배정됨"의 판정 기준은 session_type=FIXED_QUESTION이고 status가
         OPEN이 아닌(즉 완료·건너뜀으로 실제로 다뤄진) 세션들의 question_id
         집합이다. 더 배정할 질문이 없으면(질문 큐를 전부 마쳤으면) None."""
+
+    @abstractmethod
+    async def get_by_id(self, question_id: UUID) -> QuestionRecord | None:
+        """세션에 이미 배정된 question_id로 그 질문의 실제 문구를 조회한다 —
+        세션 생성 시 이 질문 문구를 chat_log에 남겨두기 위해 쓴다(interview_
+        service.py:create_session, 2026-07-15 — 이전엔 질문 문구가 프론트
+        로컬 상태로만 보였고 실제로는 저장되지 않아, 세션 종료 후 산문 재조립
+        시 "무엇에 대한 답인지" 맥락이 통째로 사라지는 문제가 있었다)."""
 
     @abstractmethod
     async def has_assigned_question_in_period(

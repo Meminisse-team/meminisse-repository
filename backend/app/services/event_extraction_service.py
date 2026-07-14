@@ -42,7 +42,9 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
         prompts.build_prose_reassembly_prompt(chat_turns=chat_turns),
         reasoning_effort="low",
     )
-    session_prose = prose_response.choices[0].message.content or ""
+    session_prose = _strip_leaked_assistant_sentences(
+        prose=prose_response.choices[0].message.content or "", chat_turns=chat_turns
+    )
     await gateways.sessions.set_session_prose(session_id, session_prose)
 
     if not await _passes_distortion_check(original_turns=chat_turns, reassembled_prose=session_prose):
@@ -52,8 +54,19 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
         await gateways.commit()
         return []
 
+    # 세션의 첫 chat_log는 이 세션이 다룬 질문/사진 오프닝 문구다(role=assistant,
+    # interview_service.py:_resolve_opening_content가 생성 시점에 저장). session_prose
+    # 자체는 화자의 말만 최소 변형으로 담아야 하므로(왜곡 탐지 대상이라 손대면 안 됨,
+    # _strip_leaked_assistant_sentences 참조) 이 맥락은 산문에 섞지 않고 이벤트 추출
+    # 단계에만 별도로 건네 준다 — "서울대"처럼 답변이 짧아도 무엇에 대한 이야기인지
+    # one_line_summary/prose_paragraph가 명확하게 나오도록(2026-07-15 피드백).
+    question_context = (
+        chat_turns[0]["content"] if chat_turns and chat_turns[0]["role"] == "assistant" else None
+    )
     extraction = await solar.structured_completion(
-        prompts.build_event_extraction_prompt(session_prose=session_prose),
+        prompts.build_event_extraction_prompt(
+            session_prose=session_prose, question_context=question_context
+        ),
         schema_name="event_extraction",
         json_schema=prompts.EVENT_EXTRACTION_SCHEMA,
         reasoning_effort="medium",
@@ -71,6 +84,36 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
 
     await gateways.commit()
     return events
+
+
+def _strip_leaked_assistant_sentences(*, prose: str, chat_turns: list[dict[str, str]]) -> str:
+    """산문 재조립 단계의 코드 레벨 backstop — _filter_interviewer_leakage와 같은
+    발상을 한 단계 앞(이벤트 추출이 아니라 session_prose 자체)에 적용한다.
+
+    PROSE_REASSEMBLY_SYSTEM_PROMPT가 "assistant 턴은 산문에 포함하지 말라"고
+    명시하지만, 세션 완료 시 마지막 assistant 턴에 다음 질문 전체 문장이 그대로
+    담기게 되면서(interview_service.py:add_user_turn, "다음 질문으로 넘어가
+    볼까요?\\n\\n{content}") LLM이 이를 사용자 발화로 착각해 산문에 그대로 끼워
+    넣는 사례가 실사용 중 확인됐다(2026-07-14) — 질문 하나가 통째로 아무 맥락
+    없이 산문 중간에 섞여 들어가는 심각한 오염이라, 이벤트 추출 단계의 backstop과
+    달리 원본 session_prose 자체에서부터 걸러낸다. 문장 단위로 쪼개 assistant
+    턴 원문에 그대로(부분 문자열로) 들어있는 문장만 제거한다."""
+    assistant_texts = [turn["content"] for turn in chat_turns if turn.get("role") == "assistant"]
+    if not assistant_texts:
+        return prose
+
+    kept_sentences = []
+    for sentence in nli.split_sentences(prose):
+        leaked = len(sentence) >= _MIN_INTERVIEWER_LEAK_QUOTE_LENGTH and any(
+            sentence in assistant_text for assistant_text in assistant_texts
+        )
+        if leaked:
+            logging.getLogger(__name__).warning(
+                "인터뷰어 발화가 산문 재조립에 새어 들어와 제거함: %r", sentence
+            )
+            continue
+        kept_sentences.append(sentence)
+    return " ".join(kept_sentences)
 
 
 def _filter_interviewer_leakage(
