@@ -10,6 +10,7 @@ from app.schemas.autobiography import (
     CustomizationConfirmRequest,
     CustomizationOptionItem,
     CustomizationOptionsResponse,
+    CustomizationRecommendationResponse,
     CustomizationSelectionRequest,
     SamplePreviewItem,
     SamplePreviewsResponse,
@@ -82,6 +83,23 @@ async def get_customization_options(
             for k, v in prompts.CONCEPT_OPTIONS.items()
         ],
     )
+
+
+@router.get(
+    "/{autobiography_id}/customization/recommendations",
+    response_model=CustomizationRecommendationResponse,
+)
+async def get_customization_recommendations(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> CustomizationRecommendationResponse:
+    """이 유저가 실제로 답변한 고정 질문들의 태그(app/data/question_bank.py의
+    suggested_tags)를 집계해 말투·구성·컨셉 추천 조합을 반환한다. 참고용
+    힌트일 뿐이라 select 단계에서 다른 조합을 자유롭게 골라도 무방하다."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    recommendations = await autobiography_service.get_customization_recommendations(
+        gateways, autobiography_id
+    )
+    return CustomizationRecommendationResponse(**recommendations)
 
 
 @router.post("/{autobiography_id}/customization/select", response_model=AutobiographyRead)

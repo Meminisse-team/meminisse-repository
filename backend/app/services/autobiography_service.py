@@ -25,6 +25,7 @@ from decimal import Decimal
 from app.agents import prompts
 from app.clients import embeddings as embeddings_client
 from app.clients import nli, solar
+from app.data.question_bank import QUESTION_BANK_BY_SEQUENCE
 from app.gateways.dto import (
     AutobiographyRecord,
     ChapterDraftCreateData,
@@ -138,6 +139,105 @@ async def save_customization_selection(
     autobiography = await gateways.autobiographies.update(autobiography_id, style_bible=style_bible)
     await gateways.commit()
     return autobiography
+
+
+async def _recommend_customization_from_tags(
+    gateways: Gateways, autobiography: AutobiographyRecord
+) -> dict[str, list[str]]:
+    """태그 기반 즉석 힌트(Phase 3 이전에도 동작) — 이 유저가 실제로 답변을 남긴
+    고정 질문들의 suggested_tags(app/data/question_bank.py)를 모아 말투·구성·컨셉
+    각 카테고리별로 어울리는 옵션 키를 빈도순으로 추천한다. 고정 질문 100개는
+    모든 유저가 동일한 큐를 거치므로, 전부 답한 유저는 실제 이야기 내용과
+    무관하게 전원 같은 조합으로 수렴한다는 한계가 있다 — 그래서 Phase 3가 끝나
+    콘텐츠 기반 추천(_generate_content_based_customization_recommendation)이
+    준비되면 get_customization_recommendations는 그쪽을 우선한다."""
+    events = await gateways.events.list_unmerged_verified(autobiography.user_id)
+    session_ids = {event.session_id for event in events if event.session_id is not None}
+    if not session_ids:
+        return {"tones": [], "structures": [], "concepts": []}
+
+    sessions = await gateways.sessions.list_by_user(autobiography.user_id)
+    question_ids = {
+        session.question_id
+        for session in sessions
+        if session.id in session_ids and session.question_id is not None
+    }
+
+    suggested_tags: list[str] = []
+    for question_id in question_ids:
+        question = await gateways.questions.get_by_id(question_id)
+        if question is None:
+            continue
+        entry = QUESTION_BANK_BY_SEQUENCE.get(question.sequence_order)
+        if entry is not None:
+            suggested_tags.extend(entry["suggested_tags"])
+
+    ranked = prompts.recommend_customization_keys(suggested_tags)
+    # save_customization_selection이 카테고리당 1~2개를 요구하므로 상위 2개만 추천한다.
+    return {
+        "tones": ranked["tone"][:2],
+        "structures": ranked["structure"][:2],
+        "concepts": ranked["concept"][:2],
+    }
+
+
+async def _generate_content_based_customization_recommendation(
+    gateways: Gateways, user_id: uuid.UUID, style_bible_text: str
+) -> dict | None:
+    """Phase 3(consolidate_autobiography)에서 스타일 바이블 생성 직후 한 번 호출된다.
+    태그 기반 추천(_recommend_customization_from_tags)과 달리 "어떤 질문에
+    답했는가"가 아니라 실제로 화자가 쓴 문체·소재·정서(스타일 바이블 + 중요도 순
+    사건 요약)를 LLM에 보여주고 직접 판단하게 한다 — 그래서 같은 100문항에 답했어도
+    사람마다 다른 추천이 나올 수 있다. 이벤트가 없으면(사건 추출 전) None을 반환해
+    호출부가 태그 기반으로 폴백하게 한다."""
+    events = await gateways.events.list_unmerged_verified(user_id)
+    if not style_bible_text or not events:
+        return None
+
+    event_summaries = "\n".join(
+        f"- [중요도 {event.importance_score}] {event.one_line_summary} "
+        f"(시기: {event.occurred_at_label or '미상'}, 감정: {event.emotion_tag or '미상'})"
+        for event in events[:15]
+    )
+    result = await solar.structured_completion(
+        prompts.build_customization_recommendation_prompt(
+            style_bible=style_bible_text, event_summaries=event_summaries
+        ),
+        schema_name="customization_recommendation",
+        json_schema=prompts.CUSTOMIZATION_RECOMMENDATION_SCHEMA,
+        reasoning_effort="medium",
+    )
+    return {
+        "tones": result.get("tones", [])[:2],
+        "structures": result.get("structures", [])[:2],
+        "concepts": result.get("concepts", [])[:2],
+        "reasoning": result.get("reasoning", ""),
+    }
+
+
+async def get_customization_recommendations(
+    gateways: Gateways, autobiography_id: uuid.UUID
+) -> dict:
+    """말투·구성·컨셉 추천을 반환한다(하이브리드). Phase 3가 끝나 콘텐츠 기반
+    추천(style_bible.recommended_customization)이 이미 있으면 그것을 그대로
+    쓰고("content_based"), 아직 없으면(Phase 3 이전, 또는 이벤트가 없어 콘텐츠
+    기반 추천 자체가 생성되지 않은 경우) 태그 기반 즉석 힌트로 대체한다
+    ("tag_based"). 어느 쪽이든 참고용일 뿐 강제가 아니며, save_customization_
+    selection 단계에서 사용자는 자유롭게 다른 조합을 선택할 수 있다."""
+    autobiography = await get_autobiography_by_id(gateways, autobiography_id)
+
+    content_based = (autobiography.style_bible or {}).get("recommended_customization")
+    if content_based:
+        return {
+            "tones": content_based["tones"],
+            "structures": content_based["structures"],
+            "concepts": content_based["concepts"],
+            "source": "content_based",
+            "reasoning": content_based.get("reasoning"),
+        }
+
+    tag_based = await _recommend_customization_from_tags(gateways, autobiography)
+    return {**tag_based, "source": "tag_based", "reasoning": None}
 
 
 async def generate_sample_previews(
@@ -255,6 +355,17 @@ async def consolidate_autobiography(gateways: Gateways, user_id: uuid.UUID) -> A
     await _merge_duplicate_events(gateways, user_id)
     await _score_importance(gateways, user_id)
     style_bible = await _generate_style_bible(gateways, user_id)
+
+    if style_bible is not None:
+        # 스타일 바이블이 막 만들어진 시점이라야 이 사람의 실제 문체·사건을 근거로
+        # 한 콘텐츠 기반 커스터마이징 추천을 만들 재료가 갖춰진다 — 없으면(이벤트
+        # 없음) None이 돌아오고, get_customization_recommendations가 태그 기반으로
+        # 폴백한다.
+        recommendation = await _generate_content_based_customization_recommendation(
+            gateways, user_id, style_bible["content"]
+        )
+        if recommendation is not None:
+            style_bible["recommended_customization"] = recommendation
 
     autobiography = await gateways.autobiographies.update(
         autobiography.id,

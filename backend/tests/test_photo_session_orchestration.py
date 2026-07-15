@@ -4,8 +4,9 @@
 핵심 규칙: 시기가 확정된 사진은 그 생애주기 고정 질문을 모두 마친 직후, 시기가
 불명확한 사진은 전체 고정 질문을 다 마친 뒤에 각각 독립된 PHOTO 세션으로 제시된다.
 
-고정 질문 큐는 실제 시드 데이터(app/data/question_bank.py, 유년기 8개)를 그대로
-쓴다 — Mock 스토어가 그 데이터로 초기화되므로 별도 세팅이 필요 없다.
+고정 질문 큐는 실제 시드 데이터(app/data/question_bank.py, 생애주기별 25개씩
+총 100개)를 그대로 쓴다 — Mock 스토어가 그 데이터로 초기화되므로 별도 세팅이
+필요 없다.
 """
 
 from __future__ import annotations
@@ -108,7 +109,7 @@ async def _complete_n_fixed_sessions(gateways, user_id: uuid.UUID, n: int) -> st
 
 @pytest.mark.asyncio
 async def test_photo_session_offered_right_after_its_life_period_finishes() -> None:
-    """유년기 사진 하나 + 유년기 고정 질문 8개 — 8번째를 마치면 청년기 첫 질문이
+    """유년기 사진 하나 + 유년기 고정 질문 25개 — 25번째를 마치면 청년기 첫 질문이
     아니라 그 사진의 PHOTO 세션이 먼저 제시돼야 한다."""
     p1, p2, p3 = _patches()
     with p1, p2, p3:
@@ -130,7 +131,7 @@ async def test_photo_session_offered_right_after_its_life_period_finishes() -> N
         # 완료 메시지 자체는 더 이상 다음 항목 미리보기를 담지 않는다(2026-07-15 —
         # "계속하기" 버튼을 누르는 시점에 GET next-preview로 새로 가져가는 방식으로
         # 바뀜, ChatOverlay.tsx 참조) — 그래서 실제 다음 세션 생성 결과로 검증한다.
-        await _complete_n_fixed_sessions(gateways, user.id, 8)
+        await _complete_n_fixed_sessions(gateways, user.id, 25)
 
         next_session = await interview_service.create_session(
             gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)
@@ -152,8 +153,8 @@ async def test_late_uploaded_photo_does_not_interrupt_a_later_period_already_in_
         )
         await gateways.commit()
 
-        # 사진 없이 유년기 8개를 모두 마치고 청년기로 넘어간다.
-        await _complete_n_fixed_sessions(gateways, user.id, 8)
+        # 사진 없이 유년기 25개를 모두 마치고 청년기로 넘어간다.
+        await _complete_n_fixed_sessions(gateways, user.id, 25)
         youth_session = await interview_service.create_session(
             gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)
         )
@@ -181,7 +182,7 @@ async def test_late_uploaded_photo_does_not_interrupt_a_later_period_already_in_
         )
         assert second_youth_session.session_type == SessionType.FIXED_QUESTION
 
-        # 남은 청년기(10개) + 장년기(10) + 노년기(10) 고정 질문을 전부 마치면
+        # 남은 청년기(23개) + 장년기(25) + 노년기(25) 고정 질문을 전부 마치면
         # 그제서야 뒤늦은 유년기 사진이 몰아보기로 제시된다.
         await gateways.sessions.update_slots(
             second_youth_session.id, slots_filled=_ALL_SLOTS_FILLED, followup_count=0
@@ -194,14 +195,14 @@ async def test_late_uploaded_photo_does_not_interrupt_a_later_period_already_in_
 
         # 슬롯/풍부함이 다 찬 뒤 뜨는 "더 하실 말씀 있으세요?" 확인에 답해야
         # second_youth_session이 실제로 완료된다(_complete_one_session 주석 참조) —
-        # 안 그러면 이 세션이 계속 OPEN으로 남아 아래 29개 카운트가 어긋난다.
+        # 안 그러면 이 세션이 계속 OPEN으로 남아 아래 73개 카운트가 어긋난다.
         session = await gateways.sessions.get_by_id(second_youth_session.id)
         _, assistant_turn2, _ = await interview_service.add_user_turn(
             gateways, session, "아니요, 없어요"
         )
         assert "사진" not in assistant_turn2.content
 
-        await _complete_n_fixed_sessions(gateways, user.id, 29)
+        await _complete_n_fixed_sessions(gateways, user.id, 73)
 
         final_session = await interview_service.create_session(
             gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)
@@ -212,7 +213,7 @@ async def test_late_uploaded_photo_does_not_interrupt_a_later_period_already_in_
 
 @pytest.mark.asyncio
 async def test_unmapped_period_photo_offered_only_after_all_fixed_questions_done() -> None:
-    """시기 불명 사진은 39개 고정 질문을 전부 마친 뒤에만 제시된다."""
+    """시기 불명 사진은 100개 고정 질문을 전부 마친 뒤에만 제시된다."""
     p1, p2, p3 = _patches()
     with p1, p2, p3:
         gateways = _build_mock_gateways()
@@ -239,7 +240,7 @@ async def test_unmapped_period_photo_offered_only_after_all_fixed_questions_done
         )
         assert "사진" not in first_content
 
-        await _complete_n_fixed_sessions(gateways, user.id, 38)
+        await _complete_n_fixed_sessions(gateways, user.id, 99)
 
         next_session = await interview_service.create_session(
             gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)
@@ -258,7 +259,7 @@ async def test_no_remaining_questions_error_when_everything_exhausted() -> None:
         )
         await gateways.commit()
 
-        await _complete_n_fixed_sessions(gateways, user.id, 39)
+        await _complete_n_fixed_sessions(gateways, user.id, 100)
 
         with pytest.raises(interview_service.NoRemainingQuestionsError):
             await interview_service.create_session(
@@ -296,7 +297,7 @@ async def test_photo_session_completion_cleans_up_pending_ocr_event_and_uses_hin
         )
         await gateways.commit()
 
-        await _complete_n_fixed_sessions(gateways, user.id, 8)
+        await _complete_n_fixed_sessions(gateways, user.id, 25)
 
         photo_session = await interview_service.create_session(
             gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)

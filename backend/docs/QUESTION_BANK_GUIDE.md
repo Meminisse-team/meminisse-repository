@@ -2,7 +2,7 @@
 
 ## 1~4절: 고정 질문 큐 — 구현 완료 (2026-07-12)
 
-유년기~노년기 39개 고정 질문 배선은 끝났다. `Question` 테이블 시드
+유년기~노년기 100개(생애주기별 25개) 고정 질문 배선은 끝났다. `Question` 테이블 시드
 (`alembic/versions/006_seed_questions.py`, `app/data/question_bank.py`),
 `QuestionGateway`(`get_next_unasked` — `sequence_order` 전역 순서로 다음 미배정
 질문 하나), `interview_service.create_session`(question_id 미지정 시 자동 배정),

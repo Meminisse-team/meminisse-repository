@@ -554,7 +554,12 @@ toc_data, style_bible, book_synopsis, final_content, pdf_url, created_at, update
    계산하고, 근거를 `importance_signals`에 스냅샷으로 남긴다.
 4. **스타일 바이블 생성**: 전체 세션 산문을 한 번에 Solar에 넣어 문체/가치관/감정 아크를
    요약한 문서를 생성해 `style_bible`에 저장.
-5. `Autobiography.status`를 `"consolidated"`로 전환.
+5. **콘텐츠 기반 커스터마이징 추천**: 스타일 바이블과 중요도 순 사건 요약을 Solar에
+   보여주고, 이 사람의 실제 이야기에 가장 잘 맞는 말투·구성·컨셉을 직접 고르게 해
+   `style_bible.recommended_customization`에 저장(스타일 바이블이 없으면, 즉 4단계가
+   `null`을 돌려주면 건너뜀). `GET .../customization/recommendations`가 이후 이 값을
+   최우선으로 사용한다(아래 참조).
+6. `Autobiography.status`를 `"consolidated"`로 전환.
 
 **전제 조건**: 이벤트가 하나도 없어도(=아직 어떤 세션도 완료되지 않았어도) 에러 없이
 진행되며, 그 경우 `style_bible=null`인 채로 `status="consolidated"`까지 그냥 전환된다 —
@@ -570,6 +575,30 @@ toc_data, style_bible, book_synopsis, final_content, pdf_url, created_at, update
 #### `GET /api/v1/autobiographies/{autobiography_id}/customization/options`
 사용 가능한 말투(10개), 구성(5개), 컨셉(9개) 선택지 전체 목록을 반환한다.
 **응답 (`CustomizationOptionsResponse`)**: `tones`, `structures`, `concepts` 배열. 각 배열 요소는 `key, name, description, example`로 구성.
+
+#### `GET /api/v1/autobiographies/{autobiography_id}/customization/recommendations`
+`select` 전에 450가지 조합 중 무엇을 고를지 참고할 기본값을 보여준다. 참고용
+힌트일 뿐이라 사용자는 이 추천과 무관하게 자유롭게 다른 조합을 선택할 수 있다
+(강제 아님). 두 방식을 하이브리드로 쓴다(`response.source`로 어느 쪽인지 구분):
+
+- **`content_based`** (Phase 3/`consolidate` 완료 후): 스타일 바이블 생성 직후
+  실제 문체·가치관·감정 아크와 중요도 순 사건 요약을 LLM에 보여주고 그 내용에
+  맞는 조합을 직접 고르게 한 결과(`app/agents/prompts.py:build_customization_
+  recommendation_prompt`). "어떤 질문에 답했는가"가 아니라 실제로 무슨 이야기를
+  했는지가 근거이므로, 같은 100문항에 답했어도 사람마다 다른 추천이 나올 수 있다.
+  `response.reasoning`에 LLM이 남긴 1~2문장 근거가 채워진다.
+- **`tag_based`** (Phase 3 이전, 또는 이벤트가 없어 콘텐츠 기반 추천이 아직 없는
+  경우): 답변을 남긴 고정 질문들에 붙어 있는 태그(`app/data/question_bank.py`의
+  `suggested_tags`)를 모아 `app/agents/prompts.py`의 정규화 매핑(`_TAG_TO_OPTION`)
+  으로 변환해 빈도순 상위 조합을 즉석에서 계산한다. 고정 질문 100개는 모든
+  유저가 같은 큐를 거치므로, 전부 답한 유저는 실제 이야기 내용과 무관하게 전원
+  같은 조합으로 수렴한다는 한계가 있다 — 그래서 Phase 3가 끝나면 `content_based`가
+  우선한다. 아직 답변한 질문이 하나도 없으면 세 배열 모두 빈 배열.
+
+**응답 (`CustomizationRecommendationResponse`)**: `tones`, `structures`, `concepts`
+(각 0~2개의 옵션 키 배열 — `CustomizationSelectionRequest`와 동일한 형태라 프론트가
+select 폼의 기본값으로 그대로 채워 넣을 수 있다), `source`(`"content_based"` |
+`"tag_based"`), `reasoning`(`content_based`일 때만 채워짐, 그 외 `null`).
 
 #### `POST /api/v1/autobiographies/{autobiography_id}/customization/select`
 각 카테고리에서 1~2개씩 선택한 값을 저장한다. (최대 8개 조합)

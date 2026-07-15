@@ -56,6 +56,12 @@ async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
 
 _STRUCTURED_RESPONSES = {
     "event_merge_judge": {"same_event": False, "reasoning": "다른 사건으로 판단"},
+    "customization_recommendation": {
+        "tones": ["confessional"],
+        "structures": ["chronological"],
+        "concepts": ["family"],
+        "reasoning": "친구와의 우정을 담담히 되짚는 이야기라 이 조합이 잘 어울립니다.",
+    },
     "toc_generation": {
         "candidates": [
             {"chapters": [{"chapter_index": 1, "title": "1장. 어린 시절", "theme_keywords": ["어린시절"]}]},
@@ -126,10 +132,18 @@ async def test_full_phase3_4_pipeline_runs_end_to_end() -> None:
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)
 
-        # Phase 3: 병합 판정(모두 별개 사건 처리) + 중요도 산정 + 스타일 바이블
+        # Phase 3: 병합 판정(모두 별개 사건 처리) + 중요도 산정 + 스타일 바이블 +
+        # 콘텐츠 기반 커스터마이징 추천
         autobiography = await autobiography_service.consolidate_autobiography(gateways, user.id)
         assert autobiography.status.value == "consolidated"
         assert autobiography.style_bible is not None
+        assert autobiography.style_bible["recommended_customization"]["tones"] == ["confessional"]
+
+        recommendations = await autobiography_service.get_customization_recommendations(
+            gateways, autobiography.id
+        )
+        assert recommendations["source"] == "content_based"
+        assert recommendations["tones"] == ["confessional"]
 
         # Phase 4: 목차 후보 생성 → 선택(챕터 초안 + 책 시놉시스) → 챕터 집필 → 최종 윤문
         autobiography = await autobiography_service.generate_toc_candidates(gateways, autobiography.id)

@@ -190,6 +190,87 @@ export interface Autobiography {
   updated_at: string;
 }
 
+/** GET /customization/options 응답 항목 하나 — 말투/구성/컨셉 선택지 공통 형태
+ * (backend/app/schemas/autobiography.py:CustomizationOptionItem). CONCEPT_OPTIONS의
+ * 일부 항목은 example이 없어(backend/app/agents/prompts.py) null일 수 있다. */
+export interface CustomizationOptionItem {
+  key: string;
+  name: string;
+  description: string;
+  example: string | null;
+}
+
+/** GET /api/v1/autobiographies/{id}/customization/options 응답
+ * (backend/app/schemas/autobiography.py:CustomizationOptionsResponse). */
+export interface CustomizationOptionsResponse {
+  tones: CustomizationOptionItem[];
+  structures: CustomizationOptionItem[];
+  concepts: CustomizationOptionItem[];
+}
+
+export type CustomizationRecommendationSource = "content_based" | "tag_based";
+
+/** GET /api/v1/autobiographies/{id}/customization/recommendations 응답
+ * (backend/app/schemas/autobiography.py:CustomizationRecommendationResponse).
+ * tones/structures/concepts는 각각 최대 2개, 빈 배열일 수 있다. source가
+ * "content_based"면 Phase 3(consolidate) 완료 후 실제 이야기 내용을 근거로 한
+ * 추천이라 reasoning이 채워지고, "tag_based"면 답변한 질문들의 사전 태그를 집계한
+ * 즉석 힌트라 reasoning은 항상 null이다. */
+export interface CustomizationRecommendationResponse {
+  tones: string[];
+  structures: string[];
+  concepts: string[];
+  source: CustomizationRecommendationSource;
+  reasoning: string | null;
+}
+
+/** POST .../customization/select 요청 바디(backend/app/schemas/autobiography.py:
+ * CustomizationSelectionRequest). 카테고리별 1~2개. */
+export interface CustomizationSelectionRequest {
+  tones: string[];
+  structures: string[];
+  concepts: string[];
+}
+
+/** GET .../customization/previews, style_bible.customization.previews 응답 단위
+ * (backend/app/schemas/autobiography.py:SamplePreviewItem). tone/structure/concept는
+ * POST .../customization/confirm에 그대로 되돌려 보내는 키다. */
+export interface SamplePreviewItem {
+  tone: string;
+  structure: string;
+  concept: string;
+  tone_name: string;
+  structure_name: string;
+  concept_name: string;
+  preview_text: string;
+}
+
+export interface SamplePreviewsResponse {
+  samples: SamplePreviewItem[];
+}
+
+/** POST .../customization/confirm 요청 바디(backend/app/schemas/autobiography.py:
+ * CustomizationConfirmRequest) — 8개 샘플 중 고른 SamplePreviewItem의
+ * tone/structure/concept 필드를 그대로 전달하면 된다. */
+export interface CustomizationConfirmRequest {
+  tone: string;
+  structure: string;
+  concept: string;
+}
+
+/** Autobiography.style_bible.customization의 shape(백엔드 style_bible 자체는 dict라
+ * Autobiography.style_bible: Record<string, unknown>으로만 느슨히 타입화돼 있음 — 이
+ * 부분만 읽을 때 이 타입으로 좁혀 쓴다. backend/app/services/autobiography_service.py:
+ * save_customization_selection/generate_sample_previews/confirm_customization 참조). */
+export interface CustomizationState {
+  selected_at: string;
+  tones: string[];
+  structures: string[];
+  concepts: string[];
+  confirmed: (CustomizationConfirmRequest & { confirmed_at: string }) | null;
+  previews: SamplePreviewItem[] | null;
+}
+
 export type DraftStatus = "draft" | "reviewed" | "finalized";
 
 /** GET /api/v1/autobiographies/{id}/chapters 응답 단위

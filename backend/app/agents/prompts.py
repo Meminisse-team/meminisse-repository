@@ -25,6 +25,7 @@ Meminisse 에이전트의 모든 시스템/유저 프롬프트를 한 곳에서 
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 # --------------------------------------------------------------------------- #
@@ -1382,6 +1383,182 @@ def build_customized_unity_revision_prompt(
         f"윤문 시 이 말투와 컨셉의 일관성도 함께 확인하고 유지하세요."
     )
     user_prompt = f"[스타일 바이블]\n{style_bible}\n\n[전체 원고]\n{full_manuscript}"
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+# ── 11-6. 질문 리스트 → 커스터마이징 추천 (app/data/question_bank.py 연동) ────
+#
+#     각 고정 질문(QUESTION_BANK)에는 "질문 리스트.md" 원본이 붙여둔 suggested_tags
+#     (예: "공간 및 장소 중심", "내밀한 고백체")가 있다 — 이 문항에 어떤 답을 하게
+#     될지를 보고 사람이 미리 판단해 둔, 어울리는 말투/구성/컨셉에 대한 힌트다.
+#     사용자가 실제로 답변을 남긴 문항들의 이 힌트를 모아 집계하면, 450가지
+#     조합(말투10×구성5×컨셉9) 중 그 사람이 들려준 이야기 결과 자체에 가장 잘
+#     맞는 조합을 추천할 수 있다 — select_customization 이전에 참고용으로 보여주는
+#     용도이며, 사용자가 다른 조합을 고르는 것을 막지 않는다.
+#
+#     원본 표기가 TONE/STRUCTURE/CONCEPT_OPTIONS의 정식 키·name과 항상 정확히
+#     일치하지는 않아(축약형, 유사어, 카테고리 간 쏠림 등) 아래 매핑을 사람이 직접
+#     검토해 만들었다. 여기 없는 태그는 조용히 무시된다 — 추천은 힌트일 뿐이므로
+#     매핑 누락이 기능을 깨뜨리면 안 된다.
+
+_TAG_TO_OPTION: dict[str, tuple[str, str]] = {
+    # 구성(Structure)
+    "공간 및 장소 중심": ("structure", "geographical"),
+    "공간 중심": ("structure", "geographical"),
+    "사물 중심": ("structure", "thematic"),
+    "결정적 에피소드": ("structure", "episodic"),
+    "역순행적 구성": ("structure", "in_medias_res"),
+    "연대기 구성": ("structure", "chronological"),
+    "연대기 구성(에필로그)": ("structure", "chronological"),
+    "테마별 구성": ("structure", "thematic"),
+    "자유 구성": ("structure", "thematic"),
+    "테마-사물": ("structure", "thematic"),
+    "테마-가족": ("structure", "thematic"),
+    "테마-인연": ("structure", "thematic"),
+    "테마-꿈": ("structure", "thematic"),
+    "테마-독립": ("structure", "thematic"),
+    "테마-관계": ("structure", "thematic"),
+    "테마-성장": ("structure", "thematic"),
+    "테마-철학": ("structure", "thematic"),
+    "테마-일과 삶": ("structure", "thematic"),
+    "테마-직업": ("structure", "thematic"),
+    "테마-취미": ("structure", "thematic"),
+    "테마-일상": ("structure", "thematic"),
+    "테마-배움": ("structure", "thematic"),
+    "테마-가치관": ("structure", "thematic"),
+    "테마-죽음": ("structure", "thematic"),
+    "인연": ("structure", "thematic"),  # "테마-인연"의 표기 누락형(질문 리스트.md 원본 그대로)
+
+    # 컨셉(Concept)
+    "생애 전반 회고록": ("concept", "complete_memoir"),
+    "가족사": ("concept", "family"),
+    "가족사 및 양육기": ("concept", "family"),
+    "비즈니스 & 리더십": ("concept", "business"),
+    "멘토링 대담집": ("concept", "masterclass"),
+    "3인칭 관찰자 평전": ("concept", "reporter"),
+    "3인칭 평전": ("concept", "reporter"),
+    "실패와 재기": ("concept", "resilience"),
+    "실패와 재기의 기록": ("concept", "resilience"),
+    "덕업일치": ("concept", "passion"),
+    "덕업일치 및 취미 몰입기": ("concept", "passion"),
+    "취미 몰입기": ("concept", "passion"),
+    "가치관 사전": ("concept", "philosophical"),
+    "가치관 및 철학 사전": ("concept", "philosophical"),
+    "철학 사전": ("concept", "philosophical"),
+    "특정 시기 집중": ("concept", "golden_era"),
+    "특정 시기 집중 조명": ("concept", "golden_era"),
+    "청춘의 낭만": ("concept", "golden_era"),
+
+    # 말투(Tone)
+    "소설적 서술체": ("tone", "literary"),
+    "친근한 대화체": ("tone", "conversational"),
+    "따뜻한 대화체": ("tone", "conversational"),
+    "내밀한 고백체": ("tone", "confessional"),
+    "담담한 평어체": ("tone", "plain"),
+    "객관적 기록체": ("tone", "documentary"),
+    "관조적 에세이": ("tone", "essay"),
+    "관조적 에세이체": ("tone", "essay"),
+    "유머러스한 풍자체": ("tone", "witty"),
+    "가상의 인터뷰체": ("tone", "interview"),
+    "대중 강연체": ("tone", "speech"),
+    "편지체": ("tone", "letter"),
+    "과거의 나에게 건네는 편지체": ("tone", "letter"),
+}
+
+
+def recommend_customization_keys(suggested_tags: list[str]) -> dict[str, list[str]]:
+    """suggested_tags 원문 문자열 목록(여러 질문의 것을 그대로 합친 것)을 받아,
+    카테고리(tone/structure/concept)별로 _TAG_TO_OPTION에 매핑되는 정식 옵션 키를
+    등장 빈도 내림차순으로 정렬해 반환한다. 상위 몇 개를 쓸지는 호출부가 정한다
+    (save_customization_selection이 카테고리당 1~2개를 요구하므로 보통 앞 1~2개만
+    사용). 매핑에 없는 태그는 건너뛴다."""
+    tallies: dict[str, Counter[str]] = {
+        "tone": Counter(), "structure": Counter(), "concept": Counter(),
+    }
+    for tag in suggested_tags:
+        mapped = _TAG_TO_OPTION.get(tag)
+        if mapped is None:
+            continue
+        category, key = mapped
+        tallies[category][key] += 1
+    return {category: [key for key, _ in counter.most_common()] for category, counter in tallies.items()}
+
+
+# ── 11-7. 콘텐츠 기반 커스터마이징 추천 (Phase 3, 스타일 바이블/사건 근거) ────
+#
+#     11-6의 태그 기반 추천은 "어떤 질문에 답했는가"만 본다 — 고정 질문 100개는
+#     모든 유저가 같은 큐를 거치므로, 전부 답한 유저는 실제로 무슨 이야기를
+#     했든 전원 같은 조합으로 수렴한다는 한계가 있다. 이 절은 그 대신 Phase 3에서
+#     이미 생성되는 스타일 바이블(문체·가치관·감정 아크)과 중요도 순 사건 요약을
+#     LLM에 그대로 보여주고, 실제 내용에 맞는 조합을 직접 고르게 한다 — 같은
+#     100문항에 답했어도 사람마다 결과가 달라질 수 있다. consolidate_autobiography
+#     (Phase 3) 안에서 스타일 바이블 생성과 함께 한 번 호출되고 결과가 style_bible.
+#     recommended_customization에 저장된다(autobiography_service 참조).
+
+
+def _describe_options(options: dict[str, dict[str, str]]) -> str:
+    return "\n".join(f"- {key}: {value['name']} — {value['description']}" for key, value in options.items())
+
+
+CUSTOMIZATION_RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE = """\
+당신은 자서전 집필 컨설턴트입니다. 아래 [스타일 바이블](화자의 문체·가치관·감정
+아크 요약)과 [주요 사건 요약]을 읽고, 이 사람이 실제로 들려준 이야기에 가장 잘
+어울리는 말투·구성·컨셉을 각각 1~2개씩 골라주세요.
+
+판단 기준은 화자가 어떤 질문 문항에 답했는지가 아니라, 실제로 쓴 표현·소재·
+정서입니다. 예를 들어 담담하고 사실 위주로 서술하는 사람에게는 감정을 과장하는
+말투를 추천하지 마세요. 아래 나열된 키만 사용해야 합니다.
+
+[말투 선택지]
+{tone_descriptions}
+
+[구성 선택지]
+{structure_descriptions}
+
+[컨셉 선택지]
+{concept_descriptions}
+"""
+
+CUSTOMIZATION_RECOMMENDATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "tones": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(TONE_OPTIONS.keys())},
+            "description": "가장 잘 어울리는 말투 키 1~2개, 잘 맞는 순서대로.",
+        },
+        "structures": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(STRUCTURE_OPTIONS.keys())},
+            "description": "가장 잘 어울리는 구성 키 1~2개, 잘 맞는 순서대로.",
+        },
+        "concepts": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(CONCEPT_OPTIONS.keys())},
+            "description": "가장 잘 어울리는 컨셉 키 1~2개, 잘 맞는 순서대로.",
+        },
+        "reasoning": {
+            "type": "string",
+            "description": "이 조합을 추천하는 근거를 1~2문장으로.",
+        },
+    },
+    "required": ["tones", "structures", "concepts", "reasoning"],
+    "additionalProperties": False,
+}
+
+
+def build_customization_recommendation_prompt(
+    *, style_bible: str, event_summaries: str
+) -> list[dict[str, str]]:
+    system_prompt = CUSTOMIZATION_RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE.format(
+        tone_descriptions=_describe_options(TONE_OPTIONS),
+        structure_descriptions=_describe_options(STRUCTURE_OPTIONS),
+        concept_descriptions=_describe_options(CONCEPT_OPTIONS),
+    )
+    user_prompt = f"[스타일 바이블]\n{style_bible}\n\n[주요 사건 요약]\n{event_summaries}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
