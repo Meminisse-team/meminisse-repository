@@ -40,7 +40,12 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
     prose_response = await solar.chat_completion(
         prompts.build_prose_reassembly_prompt(chat_turns=chat_turns),
-        reasoning_effort="low",
+        # "low"에서는 세션 안에 사건이 2개 이상이고 각각 후속 질문 병합이 필요할 때
+        # 원본 문장과 병합 문장을 중복으로 남기는 오류가 실사용 검증(4회 중 약 2~3회)
+        # 재현됐다. "medium"으로 올리면 같은 검증에서 대부분 정상 병합되고(4회 중
+        # 3회 완전 정상), "high"는 오히려 21세·집에서 같은 구체적 사실을 뭉뚱그려
+        # 누락시키는 별도 실패 유형이 나타나 채택하지 않았다.
+        reasoning_effort="medium",
     )
     session_prose = _strip_leaked_assistant_sentences(
         prose=prose_response.choices[0].message.content or "", chat_turns=chat_turns
@@ -60,9 +65,61 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     # _strip_leaked_assistant_sentences 참조) 이 맥락은 산문에 섞지 않고 이벤트 추출
     # 단계에만 별도로 건네 준다 — "서울대"처럼 답변이 짧아도 무엇에 대한 이야기인지
     # one_line_summary/prose_paragraph가 명확하게 나오도록(2026-07-15 피드백).
-    question_context = (
-        chat_turns[0]["content"] if chat_turns and chat_turns[0]["role"] == "assistant" else None
+    question_context = _question_context(chat_turns)
+    events = await _extract_events_from_prose(
+        gateways,
+        session=session,
+        session_prose=session_prose,
+        question_context=question_context,
+        chat_turns=chat_turns,
     )
+
+    await gateways.commit()
+    return events
+
+
+async def reextract_events_from_edited_prose(
+    gateways: Gateways, session_id: uuid.UUID
+) -> list[EventRecord]:
+    """사용자가 '나의 이야기'에서 재조립된 산문을 직접 고쳐 저장한 뒤 호출된다
+    (story_service.update_session_prose). 이미 사람이 검수·확정한 텍스트이므로
+    process_completed_session과 달리 산문 재조립도, 왜곡 탐지(NLI)도 다시 거치지
+    않고 session.session_prose를 그대로 이벤트 추출의 입력으로 삼는다 — "왜곡"이라는
+    개념 자체가 AI 생성물에만 적용되는 것이지 사용자 본인이 직접 쓴 텍스트에는
+    적용될 수 없기 때문이다. 기존에 이 세션에서 추출됐던 이벤트는 전부 폐기하고
+    새로 추출한 이벤트로 완전히 교체한다(부분 재사용 없음 — verified 승격 등 상태를
+    이벤트별로 따로 판단하기보다 통째로 다시 만드는 편이 일관성이 단순하다)."""
+    session = await gateways.sessions.get_by_id(session_id)
+    if session is None:
+        raise ValueError(f"InterviewSession {session_id} not found")
+    if session.session_prose is None:
+        raise ValueError(f"InterviewSession {session_id} has no session_prose yet")
+
+    chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
+    await gateways.events.delete_by_session(session_id)
+    events = await _extract_events_from_prose(
+        gateways,
+        session=session,
+        session_prose=session.session_prose,
+        question_context=_question_context(chat_turns),
+        chat_turns=chat_turns,
+    )
+    await gateways.commit()
+    return events
+
+
+def _question_context(chat_turns: list[dict[str, str]]) -> str | None:
+    return chat_turns[0]["content"] if chat_turns and chat_turns[0]["role"] == "assistant" else None
+
+
+async def _extract_events_from_prose(
+    gateways: Gateways,
+    *,
+    session,
+    session_prose: str,
+    question_context: str | None,
+    chat_turns: list[dict[str, str]],
+) -> list[EventRecord]:
     extraction = await solar.structured_completion(
         prompts.build_event_extraction_prompt(
             session_prose=session_prose, question_context=question_context
@@ -76,13 +133,11 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
         extracted=extraction.get("events", []), chat_turns=chat_turns
     )
     events = await _persist_events(
-        gateways, user_id=session.user_id, session_id=session_id, extracted=extracted
+        gateways, user_id=session.user_id, session_id=session.id, extracted=extracted
     )
     await _persist_relations(
         gateways, events=events, relations=extraction.get("relations", []), index_map=index_map
     )
-
-    await gateways.commit()
     return events
 
 

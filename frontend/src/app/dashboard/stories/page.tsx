@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ApiError } from "@/lib/api/client";
 import { storiesApi } from "@/lib/api/stories";
 import type { StoryCard } from "@/types/api";
 
@@ -20,6 +21,10 @@ export default function StoriesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     // 이전 시도에서 남은 에러 메시지를 지우지 않으면, 새로고침이 실제로 성공해도
@@ -44,6 +49,41 @@ export default function StoriesPage() {
     // 피드백이 전혀 없었다. 폴링과 별개로 수동 클릭 시엔 "새로고침 중..."을 보여준다.
     setRefreshing(true);
     void refresh().finally(() => setRefreshing(false));
+  }
+
+  function startEdit(story: StoryCard) {
+    setEditingId(story.session_id);
+    setDraft(story.prose);
+    setSaveError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setSaveError(null);
+  }
+
+  // 타이핑할 때마다가 아니라 이 저장 버튼을 눌렀을 때만 호출된다 — 매 저장이
+  // 이벤트 재추출(Solar 구조화 호출)을 트리거하므로(story_service.update_session_prose)
+  // 연타 낭비를 막기 위해 서버가 쿨다운(429)도 함께 둔다(2026-07-15 검토).
+  function saveEdit(sessionId: string) {
+    setSaving(true);
+    setSaveError(null);
+    storiesApi
+      .updateProse(sessionId, draft)
+      .then((updated) => {
+        setStories((current) =>
+          current.map((s) => (s.session_id === sessionId ? updated : s))
+        );
+        setEditingId(null);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 429) {
+          setSaveError("너무 자주 저장했어요. 잠시 후 다시 시도해주세요.");
+        } else {
+          setSaveError("저장하지 못했어요. 잠시 후 다시 시도해주세요.");
+        }
+      })
+      .finally(() => setSaving(false));
   }
 
   const totalPages = Math.max(1, Math.ceil(stories.length / PAGE_SIZE));
@@ -90,21 +130,66 @@ export default function StoriesPage() {
       )}
 
       <div className="flex flex-col gap-5">
-        {pageStories.map((story) => (
-          <article key={story.session_id} className="rounded-2xl border border-black/10 p-6">
-            {story.completed_at && (
-              <p className="text-sm text-black/40">
-                {new Date(story.completed_at).toLocaleDateString("ko-KR")}
-              </p>
-            )}
-            {/* 제목 = 이 세션에서 실제로 물었던 질문 그 자체(무엇에 대한 이야기인지
-            바로 알 수 있게, 2026-07-15 피드백). */}
-            <h2 className="mt-2 text-lg font-semibold text-black">{story.title}</h2>
-            {/* 부제 = 재조립된 산문으로부터 재추출한 요약 라벨. */}
-            {story.subtitle && <p className="mt-1 text-sm text-black/50">{story.subtitle}</p>}
-            <p className="mt-3 text-base leading-relaxed text-black/70">{story.prose}</p>
-          </article>
-        ))}
+        {pageStories.map((story) => {
+          const isEditing = editingId === story.session_id;
+          return (
+            <article key={story.session_id} className="rounded-2xl border border-black/10 p-6">
+              {story.completed_at && (
+                <p className="text-sm text-black/40">
+                  {new Date(story.completed_at).toLocaleDateString("ko-KR")}
+                </p>
+              )}
+              {/* 제목 = 이 세션에서 실제로 물었던 질문 그 자체(무엇에 대한 이야기인지
+              바로 알 수 있게, 2026-07-15 피드백). */}
+              <h2 className="mt-2 text-lg font-semibold text-black">{story.title}</h2>
+              {/* 부제 = 재조립된 산문으로부터 재추출한 요약 라벨. */}
+              {story.subtitle && <p className="mt-1 text-sm text-black/50">{story.subtitle}</p>}
+
+              {isEditing ? (
+                <div className="mt-3 flex flex-col gap-2">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    rows={6}
+                    className="w-full resize-y rounded-xl border border-black/20 p-3 text-base leading-relaxed text-black focus:border-black/40 focus:outline-none"
+                  />
+                  {saveError && <p className="text-sm text-red-600">{saveError}</p>}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => saveEdit(story.session_id)}
+                      disabled={saving || draft.trim().length === 0}
+                      className="rounded-full bg-black px-4 py-1.5 text-sm text-white disabled:opacity-50"
+                    >
+                      {saving ? "저장 중..." : "저장"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      disabled={saving}
+                      className="rounded-full px-4 py-1.5 text-sm text-black/50 hover:text-black disabled:opacity-50"
+                    >
+                      취소
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="mt-3 whitespace-pre-wrap text-base leading-relaxed text-black/70">
+                    {story.prose}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(story)}
+                    className="mt-2 text-sm text-black/40 underline-offset-4 hover:text-black hover:underline"
+                  >
+                    이 이야기 수정하기
+                  </button>
+                </>
+              )}
+            </article>
+          );
+        })}
       </div>
 
       {/* 총 페이지가 1개뿐이면(산문이 7개 이하) 페이지네이션 자체를 보여줄 필요가 없다. */}

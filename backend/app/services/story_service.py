@@ -22,14 +22,38 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.gateways.dto import InterviewSessionRecord
 from app.gateways.factory import Gateways
 from app.models.enums import MessageRole, SessionType
+from app.services import event_extraction_service
 
 _SUBTITLE_SEPARATOR = " · "
 _FALLBACK_TITLE = "이야기"
+
+# 저장(반영) 버튼을 연타해도 이벤트 재추출(Solar 구조화 호출)이 그때마다 나가지
+# 않도록 막는 쿨다운. 2026-07-15 검토 결과 건당 비용 자체는 작지만(세션 하나 분량
+# 산문 재추출, 약 3.7천 토큰 실측), 조급한 연타로 인한 낭비까지 막을 필요는 있다고
+# 판단해 최소한의 방어선만 둔다 — 신중하게 여러 번 고쳐 쓰는 정당한 사용까지
+# 막으려는 목적은 아니다.
+_PROSE_EDIT_COOLDOWN = timedelta(seconds=60)
+
+
+class StoryNotFoundError(Exception):
+    """세션이 없거나 본인 소유가 아니다."""
+
+
+class ProseNotReadyError(Exception):
+    """아직 Phase 2 후처리(산문 재조립)가 끝나지 않아 편집할 대상이 없다."""
+
+
+class ProseEditCooldownError(Exception):
+    """직전 편집 저장 이후 쿨다운이 끝나지 않았다."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"{retry_after_seconds}초 후 다시 시도해주세요.")
 
 
 @dataclass
@@ -52,24 +76,53 @@ async def list_story_cards(gateways: Gateways, user_id: uuid.UUID) -> list[Story
     for session in sessions:
         if session.session_prose is None:
             continue
-
-        title = await _resolve_title(gateways, session)
-
-        events = await gateways.events.list_by_session(session.id)
-        subtitle = (
-            _SUBTITLE_SEPARATOR.join(event.one_line_summary for event in events) if events else None
-        )
-
-        cards.append(
-            StoryCard(
-                session_id=session.id,
-                title=title,
-                subtitle=subtitle,
-                prose=session.session_prose,
-                completed_at=session.completed_at,
-            )
-        )
+        cards.append(await _to_story_card(gateways, session))
     return cards
+
+
+async def update_session_prose(
+    gateways: Gateways, user_id: uuid.UUID, session_id: uuid.UUID, new_prose: str
+) -> StoryCard:
+    """사용자가 '나의 이야기'에서 재조립된 산문이 마음에 들지 않을 때 직접 고쳐
+    저장한다(저장 버튼을 눌렀을 때만 호출 — 타이핑마다 호출하지 않는다, 2026-07-15
+    피드백). 저장 즉시 이 텍스트를 사람이 검수·확정한 것으로 간주해 왜곡 탐지 없이
+    session_prose를 덮어쓰고, 이 세션의 이벤트를 새 텍스트 기준으로 재추출한다
+    (event_extraction_service.reextract_events_from_edited_prose) — 그래야 최종
+    원고 집필(write_chapter)이 참조하는 Event 테이블도 편집 내용을 반영한다."""
+    session = await gateways.sessions.get_by_id(session_id)
+    if session is None or session.user_id != user_id:
+        raise StoryNotFoundError()
+    if session.session_prose is None:
+        raise ProseNotReadyError()
+
+    now = datetime.now(timezone.utc)
+    if session.prose_last_edited_at is not None:
+        elapsed = now - session.prose_last_edited_at
+        if elapsed < _PROSE_EDIT_COOLDOWN:
+            remaining = _PROSE_EDIT_COOLDOWN - elapsed
+            raise ProseEditCooldownError(retry_after_seconds=int(remaining.total_seconds()) + 1)
+
+    await gateways.sessions.apply_user_prose_edit(session_id, new_prose=new_prose, edited_at=now)
+    await gateways.commit()
+    await event_extraction_service.reextract_events_from_edited_prose(gateways, session_id)
+
+    updated_session = await gateways.sessions.get_by_id(session_id)
+    return await _to_story_card(gateways, updated_session)
+
+
+async def _to_story_card(gateways: Gateways, session: InterviewSessionRecord) -> StoryCard:
+    title = await _resolve_title(gateways, session)
+    events = await gateways.events.list_by_session(session.id)
+    subtitle = (
+        _SUBTITLE_SEPARATOR.join(event.one_line_summary for event in events) if events else None
+    )
+    return StoryCard(
+        session_id=session.id,
+        title=title,
+        subtitle=subtitle,
+        prose=session.session_prose,
+        completed_at=session.completed_at,
+    )
 
 
 async def _resolve_title(gateways: Gateways, session: InterviewSessionRecord) -> str:

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StoryCardRead(BaseModel):
@@ -15,3 +15,9 @@ class StoryCardRead(BaseModel):
     subtitle: str | None
     prose: str
     completed_at: datetime | None
+
+
+class StoryProseUpdate(BaseModel):
+    """PATCH /stories/{session_id}. 사용자가 재조립된 산문을 직접 고쳐 저장할 때."""
+
+    prose: str = Field(..., min_length=1)

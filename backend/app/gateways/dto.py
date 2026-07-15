@@ -37,6 +37,7 @@ from app.models.enums import (
     RiskClassification,
     SessionStatus,
     SessionType,
+    UserRole,
     UserStage,
 )
 
@@ -53,6 +54,7 @@ class UserRecord:
     birth_year: int | None
     hometown: str | None
     current_stage: UserStage
+    role: UserRole = UserRole.USER
 
 
 @dataclass
@@ -100,6 +102,8 @@ class InterviewSessionRecord:
     started_at: datetime
     completed_at: datetime | None
     chat_logs: list[ChatLogRecord] = field(default_factory=list)
+    session_prose_original: str | None = None
+    prose_last_edited_at: datetime | None = None
 
 
 @dataclass
@@ -109,6 +113,29 @@ class SessionCreateData:
     question_id: UUID | None = None
     linked_media_asset_id: UUID | None = None
     initial_slots_filled: dict[str, bool] = field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------- #
+# 관리자 감사 로그 (app/models/admin.py:AdminAuditLog)                          #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class AdminAuditLogRecord:
+    id: UUID
+    admin_id: UUID
+    action: str
+    target_user_id: UUID | None
+    target_session_id: UUID | None
+    created_at: datetime
+
+
+@dataclass
+class AdminAuditLogCreateData:
+    admin_id: UUID
+    action: str
+    target_user_id: UUID | None = None
+    target_session_id: UUID | None = None
 
 
 # --------------------------------------------------------------------------- #

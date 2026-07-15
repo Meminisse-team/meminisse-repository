@@ -8,6 +8,13 @@ class UserStage(str, PyEnum):
     PUBLISHED = "published"    # 자서전 출판 완료
 
 
+class UserRole(str, PyEnum):
+    """권한 레벨. 관리자 대시보드(파이프라인 상태·위기 대응 로그 조회) 접근 게이트로만
+    쓰인다 — 일반 서비스 로직은 role을 참조하지 않는다."""
+    USER = "user"
+    ADMIN = "admin"
+
+
 class LifePeriod(str, PyEnum):
     """질문/사건의 시간적 배경 분류. 타임라인 정렬용 메타데이터. 챕터 구분 기준 아님."""
     CHILDHOOD = "childhood"

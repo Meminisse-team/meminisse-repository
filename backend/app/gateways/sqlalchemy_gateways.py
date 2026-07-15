@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.gateways.dto import (
+    AdminAuditLogCreateData,
+    AdminAuditLogRecord,
     AutobiographyRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
@@ -41,6 +43,7 @@ from app.gateways.dto import (
     UserRecord,
 )
 from app.gateways.interfaces import (
+    AuditGateway,
     AutobiographyGateway,
     ChapterDraftGateway,
     CharacterGateway,
@@ -52,6 +55,7 @@ from app.gateways.interfaces import (
     UserGateway,
 )
 from app.models import (
+    AdminAuditLog,
     Autobiography,
     AutobiographyStatus,
     ChapterDraft,
@@ -73,6 +77,26 @@ from app.models import (
     User,
 )
 from app.models.enums import AssetType, EventSourceType, LifePeriod, MediaAnalysisTrack, UserStage
+
+
+class SqlAlchemyAuditGateway(AuditGateway):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, data: AdminAuditLogCreateData) -> AdminAuditLogRecord:
+        obj = AdminAuditLog(
+            admin_id=data.admin_id,
+            action=data.action,
+            target_user_id=data.target_user_id,
+            target_session_id=data.target_session_id,
+        )
+        self._session.add(obj)
+        await self._session.flush()
+        return AdminAuditLogRecord(
+            id=obj.id, admin_id=obj.admin_id, action=obj.action,
+            target_user_id=obj.target_user_id, target_session_id=obj.target_session_id,
+            created_at=obj.created_at,
+        )
 
 
 class SqlAlchemyUserGateway(UserGateway):
@@ -206,6 +230,35 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
             select(InterviewSession)
             .where(InterviewSession.user_id == user_id)
             .order_by(InterviewSession.started_at.desc(), InterviewSession.id.desc())
+        )
+        return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
+
+    async def apply_user_prose_edit(
+        self, session_id: UUID, *, new_prose: str, edited_at: datetime
+    ) -> None:
+        session_obj = await self._require_session(session_id)
+        if session_obj.session_prose_original is None:
+            session_obj.session_prose_original = session_obj.session_prose
+        session_obj.session_prose = new_prose
+        session_obj.prose_last_edited_at = edited_at
+        await self._session.flush()
+
+    async def list_stale_completed(self, *, older_than: datetime) -> list[InterviewSessionRecord]:
+        result = await self._session.execute(
+            select(InterviewSession).where(
+                InterviewSession.status == SessionStatus.COMPLETED,
+                InterviewSession.session_prose.is_(None),
+                InterviewSession.completed_at < older_than,
+            )
+        )
+        return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
+
+    async def list_by_chat_log_content(self, content: str) -> list[InterviewSessionRecord]:
+        result = await self._session.execute(
+            select(InterviewSession)
+            .join(ChatLog, ChatLog.session_id == InterviewSession.id)
+            .where(ChatLog.content == content)
+            .distinct()
         )
         return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
 
@@ -374,6 +427,12 @@ class SqlAlchemyEventGateway(EventGateway):
         )
         result = await self._session.execute(stmt)
         return [_to_event_record(obj) for obj in result.scalars().all()]
+
+    async def delete_by_session(self, session_id: UUID) -> None:
+        # event_relations.from_event_id/to_event_id가 ondelete="CASCADE"라(models/event.py)
+        # Event 행을 지우면 걸려 있던 관계도 DB 레벨에서 함께 정리된다.
+        await self._session.execute(delete(Event).where(Event.session_id == session_id))
+        await self._session.flush()
 
     async def find_merge_candidates(
         self,
@@ -826,6 +885,7 @@ def _to_user_record(user: User) -> UserRecord:
     return UserRecord(
         id=user.id, email=user.email, name=user.name,
         birth_year=user.birth_year, hometown=user.hometown, current_stage=user.current_stage,
+        role=user.role,
     )
 
 
@@ -853,6 +913,8 @@ def _to_session_record(
         started_at=session_obj.started_at,
         completed_at=session_obj.completed_at,
         chat_logs=[_to_chat_log_record(c) for c in sorted(chat_logs, key=lambda c: c.turn_index)],
+        session_prose_original=session_obj.session_prose_original,
+        prose_last_edited_at=session_obj.prose_last_edited_at,
     )
 
 

@@ -27,6 +27,7 @@ from typing import Any
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.gateways.interfaces import (
+    AuditGateway,
     AutobiographyGateway,
     ChapterDraftGateway,
     CharacterGateway,
@@ -52,6 +53,7 @@ class Gateways:
     consents: ConsentGateway
     storage: ObjectStorageGateway
     questions: QuestionGateway
+    audit: AuditGateway
     _commit: Callable[[], Coroutine[Any, Any, None]]
 
     async def commit(self) -> None:
@@ -64,6 +66,7 @@ async def _noop_commit() -> None:
 
 def _build_mock_gateways() -> Gateways:
     from app.gateways.mock.gateways import (
+        MockAuditGateway,
         MockAutobiographyGateway,
         MockChapterDraftGateway,
         MockCharacterGateway,
@@ -88,6 +91,7 @@ def _build_mock_gateways() -> Gateways:
         consents=MockConsentGateway(default_store),
         storage=MockObjectStorage(default_store),
         questions=MockQuestionGateway(default_store),
+        audit=MockAuditGateway(default_store),
         _commit=_noop_commit,
     )
 
@@ -95,6 +99,7 @@ def _build_mock_gateways() -> Gateways:
 def _build_postgres_gateways(session) -> Gateways:  # noqa: ANN001 (AsyncSession)
     from app.gateways.s3_gateway import S3ObjectStorageGateway
     from app.gateways.sqlalchemy_gateways import (
+        SqlAlchemyAuditGateway,
         SqlAlchemyAutobiographyGateway,
         SqlAlchemyChapterDraftGateway,
         SqlAlchemyCharacterGateway,
@@ -117,6 +122,7 @@ def _build_postgres_gateways(session) -> Gateways:  # noqa: ANN001 (AsyncSession
         consents=SqlAlchemyConsentGateway(session),
         storage=S3ObjectStorageGateway(),
         questions=SqlAlchemyQuestionGateway(session),
+        audit=SqlAlchemyAuditGateway(session),
         _commit=session.commit,
     )
 

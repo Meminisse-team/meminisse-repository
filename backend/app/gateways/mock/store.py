@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from app.data.question_bank import QUESTION_BANK
 from app.gateways.dto import (
+    AdminAuditLogRecord,
     AutobiographyRecord,
     ChapterDraftRecord,
     CharacterRecord,
@@ -43,6 +44,7 @@ class MockStore:
         self.character_mentions: list[tuple[UUID, UUID | None, UUID | None]] = []
         self.consents: dict[UUID, ConsentGrant] = {}
         self.objects: dict[str, bytes] = {}
+        self.audit_logs: list[AdminAuditLogRecord] = []
         # 고정 질문 큐: 다른 dict들과 달리 유저가 만드는 게 아니라 기획자가 확정한
         # 고정 데이터라 실 DB(alembic 006)와 마찬가지로 생성 시점에 미리 채워둔다.
         self.questions: dict[UUID, QuestionRecord] = {}

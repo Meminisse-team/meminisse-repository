@@ -2,7 +2,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models.enums import UserStage
+from app.models.enums import UserRole, UserStage
 
 
 class UserCreate(BaseModel):
@@ -30,6 +30,7 @@ class UserRead(BaseModel):
     birth_year: int | None
     hometown: str | None
     current_stage: UserStage
+    role: UserRole
 
 
 class UserProfileUpdate(BaseModel):

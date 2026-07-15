@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from app.gateways.dto import (
+    AdminAuditLogCreateData,
+    AdminAuditLogRecord,
     AutobiographyRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
@@ -29,6 +31,7 @@ from app.gateways.dto import (
     UserRecord,
 )
 from app.gateways.interfaces import (
+    AuditGateway,
     AutobiographyGateway,
     ChapterDraftGateway,
     CharacterGateway,
@@ -52,6 +55,7 @@ from app.models.enums import (
     RiskClassification,
     SessionStatus,
     SessionType,
+    UserRole,
     UserStage,
 )
 
@@ -75,6 +79,23 @@ class MockObjectStorage(ObjectStorageGateway):
         return self._store.objects[key]
 
 
+class MockAuditGateway(AuditGateway):
+    def __init__(self, store: MockStore) -> None:
+        self._store = store
+
+    async def record(self, data: AdminAuditLogCreateData) -> AdminAuditLogRecord:
+        record = AdminAuditLogRecord(
+            id=uuid.uuid4(),
+            admin_id=data.admin_id,
+            action=data.action,
+            target_user_id=data.target_user_id,
+            target_session_id=data.target_session_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        self._store.audit_logs.append(record)
+        return record
+
+
 class MockUserGateway(UserGateway):
     def __init__(self, store: MockStore) -> None:
         self._store = store
@@ -87,6 +108,7 @@ class MockUserGateway(UserGateway):
             birth_year=data.birth_year,
             hometown=data.hometown,
             current_stage=UserStage.ONBOARDING,
+            role=UserRole.USER,
         )
         self._store.users[user.id] = user
         return user
@@ -198,6 +220,30 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
         sessions.sort(key=lambda s: s.started_at)
         sessions.reverse()
         return sessions
+
+    async def apply_user_prose_edit(
+        self, session_id: uuid.UUID, *, new_prose: str, edited_at: datetime
+    ) -> None:
+        session = self._require_session(session_id)
+        if session.session_prose_original is None:
+            session.session_prose_original = session.session_prose
+        session.session_prose = new_prose
+        session.prose_last_edited_at = edited_at
+
+    async def list_stale_completed(self, *, older_than: datetime) -> list[InterviewSessionRecord]:
+        return [
+            s for s in self._store.sessions.values()
+            if s.status == SessionStatus.COMPLETED
+            and s.session_prose is None
+            and s.completed_at is not None
+            and s.completed_at < older_than
+        ]
+
+    async def list_by_chat_log_content(self, content: str) -> list[InterviewSessionRecord]:
+        return [
+            s for s in self._store.sessions.values()
+            if any(log.content == content for log in s.chat_logs)
+        ]
 
     def _require_session(self, session_id: uuid.UUID) -> InterviewSessionRecord:
         session = self._store.sessions.get(session_id)
@@ -334,6 +380,18 @@ class MockEventGateway(EventGateway):
         ]
         events.sort(key=lambda e: e.created_at)
         return events
+
+    async def delete_by_session(self, session_id: uuid.UUID) -> None:
+        stale_ids = [
+            event_id for event_id, event in self._store.events.items()
+            if event.session_id == session_id
+        ]
+        for event_id in stale_ids:
+            del self._store.events[event_id]
+        self._store.event_relations = [
+            r for r in self._store.event_relations
+            if r.from_event_id not in stale_ids and r.to_event_id not in stale_ids
+        ]
 
     async def find_merge_candidates(
         self,

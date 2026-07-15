@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.core.security import InvalidTokenError, decode_access_token, decode_access_token_payload
 from app.gateways.dto import UserRecord
 from app.gateways.factory import Gateways, get_gateways
+from app.models.enums import UserRole
 from app.services import auth_service
 from app.services.auth_service import InvalidCredentialsError
 
@@ -43,6 +44,19 @@ async def get_current_user(
 
 
 CurrentUserDep = Annotated[UserRecord, Depends(get_current_user)]
+
+
+async def require_admin(current_user: CurrentUserDep) -> UserRecord:
+    """관리자 대시보드 라우터(app/api/v1/admin.py) 전용 게이트. current_stage 등
+    다른 권한 체계와 무관하게 users.role만 본다 — 별도 인증 체계 없이 기존
+    로그인(Supabase Auth) 그대로 쓰되, 이 의존성이 걸린 엔드포인트만 role=admin
+    사용자에게 403 없이 통과된다."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "관리자 권한이 필요합니다.")
+    return current_user
+
+
+AdminUserDep = Annotated[UserRecord, Depends(require_admin)]
 
 
 async def get_verified_token_payload(

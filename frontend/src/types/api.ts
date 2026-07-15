@@ -5,6 +5,7 @@
  */
 
 export type UserStage = "onboarding" | "interview" | "publishing" | "published";
+export type UserRole = "user" | "admin";
 export type LifePeriod = "childhood" | "youth" | "adulthood" | "senior";
 export type SessionType = "photo" | "fixed_question";
 export type SessionStatus = "open" | "completed" | "skipped";
@@ -32,6 +33,7 @@ export interface User {
   birth_year: number | null;
   hometown: string | null;
   current_stage: UserStage;
+  role: UserRole;
 }
 
 /** POST /api/v1/auth/oauth-sync 응답. is_new=true면 방금 프로필이 생성된
@@ -108,6 +110,10 @@ export interface NextItemPreview {
 export interface InterviewSessionDetail extends InterviewSession {
   chat_logs: ChatMessage[];
 }
+
+/** GET /api/v1/admin/stale-sessions, /api/v1/admin/crisis-sessions 응답 단위 —
+ * SessionRead와 형태가 같다(backend/app/schemas/admin.py:AdminSessionRead). */
+export type AdminSession = InterviewSession;
 
 /** GET /api/v1/events 응답 단위 — '나의 이야기' 탭(backend/app/schemas/event.py:EventRead). */
 export interface EventItem {

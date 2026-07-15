@@ -63,6 +63,13 @@ class InterviewSession(Base):
     # 문장 병합·재배열 없이 어미/추임새만 정돈. NLI 왜곡 탐지의 대조 대상이며,
     # 이후 Solar가 이 산문을 사건 단위로 분할해 Event.prose_paragraph로 쪼갠다.
     session_prose = Column(Text, nullable=True)
+    # 사용자가 "나의 이야기"에서 재조립된 산문을 직접 고쳐 저장하면 채워진다. AI가 처음
+    # 재조립한 원본을 보존해 나중에 프롬프트 품질을 비교·개선할 수 있게 한다 — 최초 편집
+    # 시점에만 채워지고(story_service.update_session_prose), 이후 재편집으로 덮어쓰지 않는다.
+    session_prose_original = Column(Text, nullable=True)
+    # 마지막 사용자 편집 저장 시각. 재추출(이벤트 추출 LLM 호출)을 연타로 재트리거하지
+    # 못하게 막는 쿨다운 판정에 쓰인다(story_service._PROSE_EDIT_COOLDOWN).
+    prose_last_edited_at = Column(DateTime(timezone=True), nullable=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

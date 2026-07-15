@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/Button";
@@ -70,6 +71,15 @@ export default function ProfilePage() {
               </ul>
             )}
           </section>
+
+          {user.role === "admin" && (
+            <Link
+              href="/admin"
+              className="rounded-2xl border border-black/10 p-6 text-base text-black transition-colors hover:bg-black/5"
+            >
+              관리자 대시보드 →
+            </Link>
+          )}
 
           <Button variant="secondary" onClick={handleLogout}>
             로그아웃

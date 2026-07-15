@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.models.base import Base, str_enum
-from app.models.enums import UserStage
+from app.models.enums import UserRole, UserStage
 
 
 class User(Base):
@@ -41,6 +41,12 @@ class User(Base):
         nullable=False,
         default=UserStage.ONBOARDING,
         server_default=UserStage.ONBOARDING.value,
+    )
+    role = Column(
+        str_enum(UserRole, name="userrole"),
+        nullable=False,
+        default=UserRole.USER,
+        server_default=UserRole.USER.value,
     )
     # 정수 인덱스 대신 FK를 사용하여 질문 비활성화 시 인덱스 깨짐 방지.
     current_question_id = Column(

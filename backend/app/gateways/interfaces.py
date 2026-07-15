@@ -20,9 +20,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from datetime import datetime
 from uuid import UUID
 
 from app.gateways.dto import (
+    AdminAuditLogCreateData,
+    AdminAuditLogRecord,
     AutobiographyRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
@@ -71,6 +74,14 @@ class ObjectStorageGateway(ABC):
         """저장된 객체의 원본 바이트를 그대로 읽어온다. Celery 워커가 업로드 요청 때
         받았던 파일을 다시 필요로 할 때 쓴다(예: 사진 분석을 비동기로 미룰 때) —
         큰 바이트 페이로드를 브로커(Redis) 메시지에 그대로 실어 보내지 않기 위함."""
+
+
+class AuditGateway(ABC):
+    """관리자 감사 로그(app/models/admin.py:AdminAuditLog). 관리자가 사용자의
+    개인 서사 데이터를 조회할 때마다 기록한다(app/services/admin_service.py)."""
+
+    @abstractmethod
+    async def record(self, data: AdminAuditLogCreateData) -> AdminAuditLogRecord: ...
 
 
 class UserGateway(ABC):
@@ -144,6 +155,30 @@ class InterviewSessionGateway(ABC):
         chat_logs는 채우지 않는다 — 목록 조회에서 매 세션의 전체 대화를 함께
         내려주면 페이로드가 불필요하게 커진다(전체 대화는 get_by_id로 개별 조회)."""
 
+    @abstractmethod
+    async def apply_user_prose_edit(
+        self, session_id: UUID, *, new_prose: str, edited_at: datetime
+    ) -> None:
+        """사용자가 '나의 이야기'에서 재조립된 산문을 직접 고쳐 저장할 때 호출된다.
+        session_prose_original이 아직 비어 있으면(최초 편집) 편집 전 session_prose를
+        그리로 백업한 뒤, session_prose를 new_prose로 덮어쓰고 prose_last_edited_at을
+        edited_at으로 갱신한다 — "최초 편집 시에만 원본 백업" 판단을 호출부가 아니라
+        구현체 내부에서 원자적으로 처리해, 서비스 레이어가 원본 존재 여부를 미리
+        조회해야 하는 경쟁 상태를 피한다."""
+
+    @abstractmethod
+    async def list_stale_completed(self, *, older_than: datetime) -> list[InterviewSessionRecord]:
+        """관리자 대시보드용: status=COMPLETED인데 session_prose가 아직 비어 있고
+        completed_at이 older_than보다 오래된 세션들. Celery 처리가 아예 큐잉되지
+        못했거나(워커 다운) 실패해 조용히 멈춘 세션을 사람이 발견하기 위함
+        (2026-07-15 실사용 중 6개 세션이 이 상태로 20분 이상 방치된 사고 참조)."""
+
+    @abstractmethod
+    async def list_by_chat_log_content(self, content: str) -> list[InterviewSessionRecord]:
+        """chat_logs.content가 정확히 일치하는 발화를 가진 세션들. 관리자의 위기
+        대응 로그 조회(prompts.TIER2_CRISIS_RESPONSE 문구 매칭)에 쓰인다 — 게이트웨이는
+        어떤 문구를 찾는지 모르고 호출부(admin_service)가 결정한다."""
+
 
 class EventGateway(ABC):
     """Layer 1(검증 계층)의 실체. Event/EventRelation을 다룬다."""
@@ -214,6 +249,14 @@ class EventGateway(ABC):
         오름차순으로 반환한다 — '나의 이야기' 세션 카드(app/services/story_service.py)
         의 부제(요약 라벨)를 만드는 데 쓴다. 한 세션이 여러 사건으로 쪼개질 수도
         있어(기획안 원칙 1) 리스트로 반환한다."""
+
+    @abstractmethod
+    async def delete_by_session(self, session_id: UUID) -> None:
+        """이 세션에서 추출된 이벤트(및 그 이벤트가 걸린 관계)를 전부 삭제한다.
+        사용자가 산문을 직접 편집해 이벤트를 재추출할 때(event_extraction_service.
+        reextract_events_from_edited_prose), AI가 원래 추출했던 이벤트를 새 이벤트로
+        완전히 교체하기 위해 먼저 호출한다 — verified 승격 등 상태를 부분적으로
+        재사용하지 않고 통째로 다시 만드는 편이 일관성이 단순하다."""
 
     @abstractmethod
     async def find_merge_candidates(

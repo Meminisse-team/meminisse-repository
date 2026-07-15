@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import uuid
+
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUserDep, GatewaysDep
-from app.schemas.story import StoryCardRead
+from app.schemas.story import StoryCardRead, StoryProseUpdate
 from app.services import story_service
 
 router = APIRouter(prefix="/stories", tags=["stories"])
@@ -18,3 +20,32 @@ router = APIRouter(prefix="/stories", tags=["stories"])
 async def list_stories(gateways: GatewaysDep, current_user: CurrentUserDep) -> list[StoryCardRead]:
     cards = await story_service.list_story_cards(gateways, current_user.id)
     return [StoryCardRead.model_validate(card) for card in cards]
+
+
+@router.patch("/{session_id}", response_model=StoryCardRead)
+async def update_story_prose(
+    session_id: uuid.UUID,
+    payload: StoryProseUpdate,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> StoryCardRead:
+    """재조립된 산문이 마음에 들지 않을 때 사용자가 직접 고쳐 저장한다. 저장할 때만
+    호출되고(프론트가 타이핑마다 호출하지 않음), 저장 즉시 이 세션의 이벤트를
+    새 텍스트로 재추출하므로 최종 원고에도 반영된다."""
+    try:
+        card = await story_service.update_session_prose(
+            gateways, current_user.id, session_id, payload.prose
+        )
+    except story_service.StoryNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "이야기를 찾을 수 없습니다.")
+    except story_service.ProseNotReadyError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "아직 정리되지 않은 이야기예요. 잠시 후 다시 시도해주세요."
+        )
+    except story_service.ProseEditCooldownError as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"{exc.retry_after_seconds}초 후 다시 시도해주세요.",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+    return StoryCardRead.model_validate(card)
