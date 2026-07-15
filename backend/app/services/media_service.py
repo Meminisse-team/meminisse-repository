@@ -1,18 +1,23 @@
 """
 Phase 1: 기록물 대량 스캔 — 업로드 즉시 S3(Layer 0)에 원본을 보존하고, Azure Vision
-(Image Analysis, app/clients/azure_vision.py)으로 캡션과 사진 속 텍스트를 함께
-얻는다. 캡션(예: "집 앞에서 5명이 함께 찍은 사진")은 텍스트 유무와 무관하게 항상
-생성되어 PHOTO 세션 오프닝 질문의 재료가 된다(prompts.build_photo_session_opening).
+(Image Analysis, app/clients/azure_vision.py)으로 물체 탐지·장면 태그와 사진 속
+텍스트를 함께 얻는다. 물체/태그(영어)는 Solar로 한국어 명사구 하나로 다듬어
+(_describe_scene, 예: "실외에서 사람과 집이 보이는 사진") 텍스트 유무와 무관하게
+항상 PHOTO 세션 오프닝 질문의 재료가 된다(prompts.build_photo_session_opening).
 사진 속에 텍스트(손글씨 메모 등)까지 검출되면 TEXT_DOCUMENT 트랙으로 분류해 Solar
 1차 타당성 검증을 거친 뒤 Event(source_type=DOCUMENT)로도 스테이징한다 — 대화가
 아직 일어나지 않아도 그 자체로 검색 가능한 사실이 되고, 실제로 그 사진에 대해
 나눈 대화에서 비슷한 사실이 다시 추출되면 Phase 3 중복 병합(_merge_duplicate_events)
 이 자연스럽게 흡수한다(별도의 "대기 중 확인" 상태나 삭제 로직을 두지 않는다).
-텍스트가 없으면(PURE_MEMORY 트랙) 캡션에만 의존한다.
+텍스트가 없으면(PURE_MEMORY 트랙) 물체/태그 설명에만 의존한다.
+
+Azure Vision의 Caption 기능(자연어 한 문장 요약)은 쓰지 않는다 — 일부 지역에서만
+지원되고 그마저도 영어로만 생성돼(app/clients/azure_vision.py 모듈 docstring
+참조) 실제 배포 중 여러 지역에서 반복 실패를 겪었다(2026-07-16). 물체 탐지(objects)
++장면 태그(tags)는 이런 제약이 없어 대체 채택했다.
 
 예전에는 Upstage Document Parse(텍스트만 읽는 OCR)를 썼는데, 글자가 없는 순수
-추억 사진에서는 아무 단서도 얻지 못했다 — Azure Vision으로 교체해 캡션까지 함께
-받아오도록 바꿨다(2026-07-15).
+추억 사진에서는 아무 단서도 얻지 못했다 — Azure Vision으로 교체했다(2026-07-15).
 
 듀얼 트랙 분석(_run_dual_track_analysis)은 외부 동기 API 호출을 포함하는데, 예전에
 이걸 업로드 요청 안에서 그대로 await했더니 사진 한 장 올릴 때마다 응답이 몇십 초~수
@@ -126,7 +131,9 @@ async def _run_dual_track_analysis(
         )
         return
 
-    caption = azure_vision.extract_caption(analysis)
+    objects = azure_vision.extract_objects(analysis)
+    tags = azure_vision.extract_tags(analysis)
+    caption = await _describe_scene(objects=objects, tags=tags)
     read_text = azure_vision.extract_read_text(analysis)
     has_text = bool(read_text) and len(read_text) >= _MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK
 
@@ -167,6 +174,25 @@ async def _run_dual_track_analysis(
     if verified:
         vectors = await embeddings_client.embed_passages([event.prose_paragraph])
         await gateways.events.bulk_update_embeddings([(event.id, vectors[0])])
+
+
+async def _describe_scene(*, objects: list[str], tags: list[str]) -> str | None:
+    """objects/tags(영어 키워드)를 Solar로 한국어 명사구 하나로 다듬는다
+    (prompts.build_scene_description_prompt) — Azure Vision의 Caption 기능을
+    대체한다(지역·언어 제약 때문에 objects/tags로 전환, 2026-07-16). 아무것도
+    감지되지 않았으면 불필요한 Solar 호출 없이 바로 None을 반환한다.
+
+    reasoning_effort="low"에서는 입력이 영어 키워드다 보니 종종 그대로 영어로
+    답해버리는 실패가 실사용 검증 중 재현됐다(4회 중 1회). "medium"으로 올리니
+    같은 검증에서 안정적으로 한국어 결과가 나왔다."""
+    if not objects and not tags:
+        return None
+    response = await solar.chat_completion(
+        prompts.build_scene_description_prompt(objects=objects, tags=tags),
+        reasoning_effort="medium",
+    )
+    description = (response.choices[0].message.content or "").strip()
+    return description or None
 
 
 async def _guess_life_period_from_ocr_text(
