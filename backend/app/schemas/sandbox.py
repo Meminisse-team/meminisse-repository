@@ -485,3 +485,61 @@ class OcrDateExtractionResponse(BaseModel):
     found: bool
     extracted_year: int | None
     extracted_age: int | None
+
+
+# --------------------------------------------------------------------------- #
+# 21. 자서전 커스터마이징 — 샘플 미리보기                                        #
+# --------------------------------------------------------------------------- #
+
+
+class SamplePreviewSandboxRequest(BaseModel):
+    tone_key: str = Field(..., examples=["plain"], description=f"말투 키. 선택 가능: {list(prompts.TONE_OPTIONS.keys())}")
+    structure_key: str = Field(..., examples=["chronological"], description=f"구성 키. 선택 가능: {list(prompts.STRUCTURE_OPTIONS.keys())}")
+    concept_key: str = Field(..., examples=["complete_memoir"], description=f"컨셉 키. 선택 가능: {list(prompts.CONCEPT_OPTIONS.keys())}")
+    style_bible: str = Field(..., examples=["간결하고 담담한 문체. 가족과 성실함을 중시함."])
+    event_summaries: str = Field(
+        ...,
+        examples=[
+            "- 1978년 부산 출생 (시기: 1978년)\n"
+            "- 첫 취업 (시기: 2001년)\n"
+            "- 결혼 (시기: 2005년)"
+        ],
+    )
+    system_prompt_override: str | None = Field(None, description="SAMPLE_PREVIEW_SYSTEM_PROMPT 대신 사용할 임시 문구")
+    generation: GenerationOverrides | None = None
+
+
+class SamplePreviewSandboxResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    preview_text: str
+    tone_name: str
+    structure_name: str
+    concept_name: str
+
+
+# --------------------------------------------------------------------------- #
+# 22. 자서전 커스터마이징 — 커스터마이징된 챕터 집필                              #
+# --------------------------------------------------------------------------- #
+
+
+class CustomizedChapterWritingRequest(BaseModel):
+    style_bible: str = Field(..., examples=["간결하고 담담한 문체."])
+    book_synopsis: str = Field(..., examples=["부산에서 태어나 성실하게 삶을 일군 한 사람의 이야기."])
+    chapter_synopsis: str = Field(..., examples=["유년기의 평온함과 가족의 따뜻함을 그린다."])
+    previous_chapter_summary: str | None = Field(None, description="직전 챕터 요약. 첫 챕터면 생략")
+    retrieved_event_paragraphs: list[str] = Field(
+        ..., min_length=1, examples=[["저는 1978년 부산에서 태어났습니다."]]
+    )
+    tone_key: str = Field(..., examples=["plain"], description=f"말투 키. 선택 가능: {list(prompts.TONE_OPTIONS.keys())}")
+    concept_key: str = Field(..., examples=["complete_memoir"], description=f"컨셉 키. 선택 가능: {list(prompts.CONCEPT_OPTIONS.keys())}")
+    system_prompt_override: str | None = Field(
+        None, description="CHAPTER_WRITING_SYSTEM_PROMPT 대신 사용할 임시 문구 (말투·컨셉 지시는 항상 추가됨)"
+    )
+    generation: GenerationOverrides | None = None
+
+
+class CustomizedChapterWritingResponse(BaseModel):
+    messages_sent: list[dict[str, Any]]
+    chapter_content: str
+    tone_name: str
+    concept_name: str

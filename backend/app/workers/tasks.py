@@ -59,6 +59,17 @@ async def _consolidate_autobiography_async(user_id: uuid.UUID) -> None:
         await autobiography_service.consolidate_autobiography(gateways, user_id)
 
 
+@celery_app.task(name="generate_sample_previews")
+def generate_sample_previews(autobiography_id: str) -> None:
+    """커스터마이징 샘플 미리보기 8개(최대) 생성 태스크."""
+    _run(_generate_sample_previews_async(uuid.UUID(autobiography_id)))
+
+
+async def _generate_sample_previews_async(autobiography_id: uuid.UUID) -> None:
+    async with gateways_context() as gateways:
+        await autobiography_service.generate_sample_previews(gateways, autobiography_id)
+
+
 @celery_app.task(name="write_chapter")
 def write_chapter(chapter_draft_id: str) -> None:
     """Phase 4 챕터 단위 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔)."""

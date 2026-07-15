@@ -563,6 +563,34 @@ toc_data, style_bible, book_synopsis, final_content, pdf_url, created_at, update
 
 ---
 
+### 자서전 커스터마이징 엔드포인트
+
+목차(TOC) 생성 전후로, 사용자가 자서전의 말투/구성/컨셉을 고르고 조합 결과를 확인한 뒤 최종 확정하는 기능이다.
+
+#### `GET /api/v1/autobiographies/{autobiography_id}/customization/options`
+사용 가능한 말투(10개), 구성(5개), 컨셉(9개) 선택지 전체 목록을 반환한다.
+**응답 (`CustomizationOptionsResponse`)**: `tones`, `structures`, `concepts` 배열. 각 배열 요소는 `key, name, description, example`로 구성.
+
+#### `POST /api/v1/autobiographies/{autobiography_id}/customization/select`
+각 카테고리에서 1~2개씩 선택한 값을 저장한다. (최대 8개 조합)
+**요청 바디 (`CustomizationSelectionRequest`)**: `tones`, `structures`, `concepts` (각 1~2개의 string 배열)
+**응답 (`AutobiographyRead`)**: 선택이 저장된 상태의 자서전 객체 반환.
+
+#### `POST /api/v1/autobiographies/{autobiography_id}/customization/previews`
+선택한 1~2개의 말투/구성/컨셉 조합(최대 2x2x2=8개)에 대해 각각 맛보기 텍스트 생성을 비동기로 요청한다.
+**응답 `202 Accepted`**: `{"detail": "Sample previews generation queued"}`
+
+#### `GET /api/v1/autobiographies/{autobiography_id}/customization/previews`
+생성된 샘플 미리보기를 조회한다. 아직 생성이 끝나지 않았으면 빈 배열 반환.
+**응답 (`SamplePreviewsResponse`)**: `samples` 배열. 각 요소는 선택 키들과 `preview_text`.
+
+#### `POST /api/v1/autobiographies/{autobiography_id}/customization/confirm`
+샘플 중 가장 마음에 드는 조합(말투, 구성, 컨셉 각 1개)을 최종 확정한다. 확정된 이후의 목차 생성 및 챕터 집필은 이 설정을 따른다.
+**요청 바디 (`CustomizationConfirmRequest`)**: `tone`, `structure`, `concept`
+**응답 (`AutobiographyRead`)**: 확정된 상태의 자서전 객체 반환.
+
+---
+
 ### `POST /api/v1/autobiographies/{autobiography_id}/toc/generate` — 목차 후보 생성
 
 `consolidate`와 달리 **동기 처리**(LLM 호출 1회로 끝나므로 Celery로 위임하지 않음).

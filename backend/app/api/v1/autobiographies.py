@@ -7,10 +7,17 @@ from app.gateways.dto import AutobiographyRecord, UserRecord
 from app.schemas.autobiography import (
     AutobiographyRead,
     ChapterDraftRead,
+    CustomizationConfirmRequest,
+    CustomizationOptionItem,
+    CustomizationOptionsResponse,
+    CustomizationSelectionRequest,
+    SamplePreviewItem,
+    SamplePreviewsResponse,
     TocCandidateSelect,
 )
 from app.schemas.character import CharacterRead, RetainRealNameRequest
 from app.services import autobiography_service, character_service
+from app.agents import prompts
 
 router = APIRouter(prefix="/autobiographies", tags=["autobiographies"])
 
@@ -48,6 +55,97 @@ async def consolidate(user_id: uuid.UUID, current_user: CurrentUserDep) -> dict:
 
     consolidate_task.delay(str(user_id))
     return {"detail": "Phase 3 consolidation queued"}
+
+
+# --------------------------------------------------------------------------- #
+# 자서전 커스터마이징 — 말투·구성·컨셉 선택 / 미리보기 / 확정                    #
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/{autobiography_id}/customization/options", response_model=CustomizationOptionsResponse)
+async def get_customization_options(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> CustomizationOptionsResponse:
+    """사용 가능한 말투(10)·구성(5)·컨셉(9) 선택지 전체 목록을 반환한다."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    return CustomizationOptionsResponse(
+        tones=[
+            CustomizationOptionItem(key=k, name=v["name"], description=v["description"], example=v.get("example"))
+            for k, v in prompts.TONE_OPTIONS.items()
+        ],
+        structures=[
+            CustomizationOptionItem(key=k, name=v["name"], description=v["description"], example=v.get("example"))
+            for k, v in prompts.STRUCTURE_OPTIONS.items()
+        ],
+        concepts=[
+            CustomizationOptionItem(key=k, name=v["name"], description=v["description"], example=v.get("example"))
+            for k, v in prompts.CONCEPT_OPTIONS.items()
+        ],
+    )
+
+
+@router.post("/{autobiography_id}/customization/select", response_model=AutobiographyRead)
+async def select_customization(
+    autobiography_id: uuid.UUID,
+    payload: CustomizationSelectionRequest,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> AutobiographyRead:
+    """말투·구성·컨셉 각 2개를 선택해 저장한다."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    try:
+        autobiography = await autobiography_service.save_customization_selection(
+            gateways, autobiography_id,
+            tones=payload.tones, structures=payload.structures, concepts=payload.concepts,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return AutobiographyRead.model_validate(autobiography)
+
+
+@router.post("/{autobiography_id}/customization/previews", status_code=status.HTTP_202_ACCEPTED)
+async def generate_previews(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> dict:
+    """8개 샘플 미리보기 생성 트리거. 8회의 LLM 호출이 필요하므로 Celery에 위임한다."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    from app.workers.tasks import generate_sample_previews as preview_task
+
+    preview_task.delay(str(autobiography_id))
+    return {"detail": "Sample previews generation queued"}
+
+
+@router.get("/{autobiography_id}/customization/previews", response_model=SamplePreviewsResponse)
+async def get_previews(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> SamplePreviewsResponse:
+    """생성된 8개 샘플 미리보기를 조회한다. 아직 생성 전이면 빈 배열."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    previews = await autobiography_service.get_sample_previews(gateways, autobiography_id)
+    if previews is None:
+        return SamplePreviewsResponse(samples=[])
+    return SamplePreviewsResponse(
+        samples=[SamplePreviewItem(**preview) for preview in previews]
+    )
+
+
+@router.post("/{autobiography_id}/customization/confirm", response_model=AutobiographyRead)
+async def confirm_customization(
+    autobiography_id: uuid.UUID,
+    payload: CustomizationConfirmRequest,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> AutobiographyRead:
+    """8개 샘플 중 마음에 드는 조합을 최종 확정한다."""
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    try:
+        autobiography = await autobiography_service.confirm_customization(
+            gateways, autobiography_id,
+            tone=payload.tone, structure=payload.structure, concept=payload.concept,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return AutobiographyRead.model_validate(autobiography)
 
 
 @router.post("/{autobiography_id}/toc/generate", response_model=AutobiographyRead)

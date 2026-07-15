@@ -26,6 +26,50 @@ class TocCandidateSelect(BaseModel):
     candidate_index: int
 
 
+class CustomizationOptionItem(BaseModel):
+    """단일 선택지의 이름·설명·서술 예시."""
+    key: str
+    name: str
+    description: str
+    example: str | None = None
+
+
+class CustomizationOptionsResponse(BaseModel):
+    """사용 가능한 말투·구성·컨셉 선택지 전체 목록."""
+    tones: list[CustomizationOptionItem]
+    structures: list[CustomizationOptionItem]
+    concepts: list[CustomizationOptionItem]
+
+
+class CustomizationSelectionRequest(BaseModel):
+    """각 카테고리에서 2개씩 선택."""
+    tones: list[str]
+    structures: list[str]
+    concepts: list[str]
+
+
+class SamplePreviewItem(BaseModel):
+    """8개 샘플 중 하나."""
+    tone: str
+    structure: str
+    concept: str
+    tone_name: str
+    structure_name: str
+    concept_name: str
+    preview_text: str
+
+
+class SamplePreviewsResponse(BaseModel):
+    samples: list[SamplePreviewItem]
+
+
+class CustomizationConfirmRequest(BaseModel):
+    """최종 확정할 조합 1개."""
+    tone: str
+    structure: str
+    concept: str
+
+
 class ChapterDraftRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

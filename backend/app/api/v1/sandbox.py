@@ -34,6 +34,8 @@ from app.schemas.sandbox import (
     ChapterSynopsisResponse,
     ChapterWritingRequest,
     ChapterWritingResponse,
+    CustomizedChapterWritingRequest,
+    CustomizedChapterWritingResponse,
     EventExtractionRequest,
     EventExtractionResponse,
     EventItemOut,
@@ -63,6 +65,8 @@ from app.schemas.sandbox import (
     RelationItemOut,
     SafeguardCheckRequest,
     SafeguardCheckResponse,
+    SamplePreviewSandboxRequest,
+    SamplePreviewSandboxResponse,
     SlotGatingRequest,
     SlotGatingResponse,
     StyleBibleRequest,
@@ -104,6 +108,8 @@ async def list_sandbox_scenarios() -> dict[str, str]:
         "POST /sandbox/ner-extraction": "NER_EXTRACTION_SYSTEM_PROMPT — 등장인물 NER 스캔",
         "POST /sandbox/ocr-confirmation-question": "[LLM 미호출] build_ocr_confirmation_question 미리보기",
         "POST /sandbox/life-milestone-classification": "[LLM 미호출] classify_life_milestone_category 미리보기",
+        "POST /sandbox/sample-preview": "SAMPLE_PREVIEW_SYSTEM_PROMPT — 말투·구성·컨셉 조합 맛보기 텍스트 (Structured Outputs)",
+        "POST /sandbox/customized-chapter-writing": "CHAPTER_WRITING_SYSTEM_PROMPT + 말투·컨셉 지시문 — 커스터마이징된 챕터 집필",
         "참고": "모든 요청의 system_prompt_override 필드에 임시 문구를 넣으면 prompts.py를 "
         "고치지 않고도 즉시 다른 워딩으로 비교 테스트할 수 있습니다.",
     }
@@ -571,3 +577,89 @@ async def sandbox_life_milestone_classification(
     생애 이정표 카테고리 매칭(LIFE_MILESTONE_KEYWORDS) 신호를 프롬프트 없이 바로 확인한다."""
     category = prompts.classify_life_milestone_category(payload.text)
     return LifeMilestoneClassificationResponse(category=category)
+
+
+@router.post("/sample-preview", response_model=SamplePreviewSandboxResponse)
+async def sandbox_sample_preview(
+    payload: SamplePreviewSandboxRequest,
+) -> SamplePreviewSandboxResponse:
+    """자서전 커스터마이징: 말투·구성·컨셉 조합 1개에 대한 맛보기 텍스트를 생성한다.
+
+    8개 조합을 한꺼번에 돌리는 실제 서비스와 달리, 여기서는 조합 1개씩 자유롭게
+    테스트할 수 있다. 프롬프트 튜닝 시 말투/컨셉 instruction 문구를 고치고,
+    그 스타일이 실제 산문에 어떻게 반영되는지 바로 확인하는 용도다.
+    """
+    if payload.tone_key not in prompts.TONE_OPTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"유효하지 않은 말투 키: {payload.tone_key}")
+    if payload.structure_key not in prompts.STRUCTURE_OPTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"유효하지 않은 구성 키: {payload.structure_key}")
+    if payload.concept_key not in prompts.CONCEPT_OPTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"유효하지 않은 컨셉 키: {payload.concept_key}")
+
+    messages = prompts.build_sample_preview_prompt(
+        tone_key=payload.tone_key,
+        structure_key=payload.structure_key,
+        concept_key=payload.concept_key,
+        style_bible=payload.style_bible,
+        event_summaries=payload.event_summaries,
+    )
+    if payload.system_prompt_override:
+        messages[0] = {"role": "system", "content": payload.system_prompt_override}
+
+    opts = payload.generation or GenerationOverrides()
+    result = await solar.structured_completion(
+        messages,
+        schema_name="sample_preview",
+        json_schema=prompts.SAMPLE_PREVIEW_SCHEMA,
+        model=opts.model or solar.DEFAULT_MODEL,
+        reasoning_effort=opts.reasoning_effort or "medium",
+    )
+    return SamplePreviewSandboxResponse(
+        messages_sent=messages,
+        preview_text=result.get("preview_text", ""),
+        tone_name=prompts.TONE_OPTIONS[payload.tone_key]["name"],
+        structure_name=prompts.STRUCTURE_OPTIONS[payload.structure_key]["name"],
+        concept_name=prompts.CONCEPT_OPTIONS[payload.concept_key]["name"],
+    )
+
+
+@router.post("/customized-chapter-writing", response_model=CustomizedChapterWritingResponse)
+async def sandbox_customized_chapter_writing(
+    payload: CustomizedChapterWritingRequest,
+) -> CustomizedChapterWritingResponse:
+    """자서전 커스터마이징: 말투·컨셉이 반영된 챕터 본문을 집필한다.
+
+    기존 chapter-writing과 동일하되, 선택한 말투(tone)와 컨셉(concept)의 instruction이
+    시스템 프롬프트에 추가 주입된다. 같은 소재로 말투/컨셉만 바꿔가며 결과물 차이를
+    비교하는 데 쓴다.
+    """
+    if payload.tone_key not in prompts.TONE_OPTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"유효하지 않은 말투 키: {payload.tone_key}")
+    if payload.concept_key not in prompts.CONCEPT_OPTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"유효하지 않은 컨셉 키: {payload.concept_key}")
+
+    messages = prompts.build_customized_chapter_writing_prompt(
+        style_bible=payload.style_bible,
+        book_synopsis=payload.book_synopsis,
+        chapter_synopsis=payload.chapter_synopsis,
+        previous_chapter_summary=payload.previous_chapter_summary,
+        retrieved_event_paragraphs=payload.retrieved_event_paragraphs,
+        tone_key=payload.tone_key,
+        concept_key=payload.concept_key,
+    )
+    if payload.system_prompt_override:
+        messages[0] = {"role": "system", "content": payload.system_prompt_override}
+
+    opts = payload.generation or GenerationOverrides()
+    response = await solar.chat_completion(
+        messages,
+        model=opts.model or solar.DEFAULT_MODEL,
+        reasoning_effort=opts.reasoning_effort or "high",
+        temperature=opts.temperature,
+    )
+    return CustomizedChapterWritingResponse(
+        messages_sent=messages,
+        chapter_content=response.choices[0].message.content or "",
+        tone_name=prompts.TONE_OPTIONS[payload.tone_key]["name"],
+        concept_name=prompts.CONCEPT_OPTIONS[payload.concept_key]["name"],
+    )
