@@ -76,7 +76,7 @@ from app.models import (
     SessionType,
     User,
 )
-from app.models.enums import AssetType, EventSourceType, LifePeriod, MediaAnalysisTrack, UserStage
+from app.models.enums import AssetType, LifePeriod, MediaAnalysisTrack, UserStage
 
 
 class SqlAlchemyAuditGateway(AuditGateway):
@@ -486,26 +486,6 @@ class SqlAlchemyEventGateway(EventGateway):
             obj.life_milestone_category = update.life_milestone_category
         await self._session.flush()
 
-    async def get_pending_document_confirmation(self, media_asset_id: UUID) -> EventRecord | None:
-        result = await self._session.execute(
-            select(Event)
-            .where(
-                Event.media_asset_id == media_asset_id,
-                Event.source_type == EventSourceType.DOCUMENT,
-                Event.verified.is_(False),
-            )
-            .order_by(Event.created_at.asc(), Event.id.asc())
-            .limit(1)
-        )
-        obj = result.scalar_one_or_none()
-        return _to_event_record(obj) if obj else None
-
-    async def delete(self, event_id: UUID) -> None:
-        obj = await self._session.get(Event, event_id)
-        if obj is not None:
-            await self._session.delete(obj)
-            await self._session.flush()
-
 
 class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
     def __init__(self, session: AsyncSession) -> None:
@@ -539,12 +519,16 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
         analysis_track: MediaAnalysisTrack,
         pre_extracted_labels: dict | None,
         life_period_mapped: LifePeriod | None = None,
+        image_caption: str | None = None,
+        image_ocr_text: str | None = None,
     ) -> None:
         obj = await self._session.get(MediaAsset, media_asset_id)
         if obj is None:
             raise KeyError(f"media asset not found: {media_asset_id}")
         obj.analysis_track = analysis_track
         obj.pre_extracted_labels = pre_extracted_labels
+        obj.image_caption = image_caption
+        obj.image_ocr_text = image_ocr_text
         if life_period_mapped is not None:
             obj.life_period_mapped = life_period_mapped
         await self._session.flush()
@@ -944,6 +928,7 @@ def _to_media_asset_record(asset: MediaAsset) -> MediaAssetRecord:
         age_at_time=asset.age_at_time, location_at_time=asset.location_at_time,
         people_at_time=asset.people_at_time, life_period_mapped=asset.life_period_mapped,
         analysis_track=asset.analysis_track, pre_extracted_labels=asset.pre_extracted_labels,
+        image_caption=asset.image_caption, image_ocr_text=asset.image_ocr_text,
         user_comment=asset.user_comment, created_at=asset.created_at,
     )
 

@@ -157,6 +157,13 @@ export interface MediaAsset {
   people_at_time: string | null;
   life_period_mapped: LifePeriod | null;
   analysis_track: MediaAnalysisTrack | null;
+  /** Azure Vision 캡션 — 사진의 시각적 내용을 설명하는 한 문장(예: "집 앞에서 5명이
+   * 함께 찍은 사진"). PHOTO 세션 오프닝 질문의 재료가 된다. 분석 전이거나 Azure
+   * 미설정이면 null. */
+  image_caption: string | null;
+  /** Azure Vision이 사진 속에서 읽어낸 인쇄/손글씨 텍스트. analysis_track이
+   * "text_document"일 때만 채워진다. */
+  image_ocr_text: string | null;
   user_comment: string | null;
   created_at: string;
 }

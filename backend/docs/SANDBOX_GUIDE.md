@@ -278,11 +278,11 @@ curl -X POST http://localhost:8000/api/v1/sandbox/event-extraction \
 
 ---
 
-### 7. `POST /sandbox/ocr-validity-check` — Document Parse 결과 1차 타당성 검증
+### 7. `POST /sandbox/ocr-validity-check` — 사진 텍스트 인식(Azure Vision) 결과 1차 타당성 검증
 
-**목적**: `media_service._check_ocr_validity`와 동일한 호출. Document Parse로 추출된 텍스트에
-문맥상 비정상적인 문자열이나 깨진 글자(OCR 오인식)가 있는지 판별하는 프롬프트를 검증한다.
-이 결과가 `Event.verified`의 초기값을 결정한다(의심되면 `false`로 격리).
+**목적**: `media_service._check_ocr_validity`와 동일한 호출. Azure Vision이 사진 속에서
+읽어낸 텍스트에 문맥상 비정상적인 문자열이나 깨진 글자(오인식)가 있는지 판별하는
+프롬프트를 검증한다. 이 결과가 `Event.verified`의 초기값을 결정한다(의심되면 `false`로 격리).
 
 **입력 (`OcrValidityCheckRequest`)**
 

@@ -108,7 +108,7 @@ async def _generate_manuscript_pdf_async(autobiography_id: uuid.UUID) -> None:
 
 @celery_app.task(name="analyze_media_asset")
 def analyze_media_asset(media_asset_id: str) -> None:
-    """Phase 1 사진 듀얼 트랙 분석(Document Parse 동기 API 호출 포함). 업로드 요청
+    """Phase 1 사진 듀얼 트랙 분석(Azure Vision 동기 API 호출 포함). 업로드 요청
     경로에서 분리한 이유는 media_service.upload_media_asset 상단 docstring 참조."""
     _run(_analyze_media_asset_async(uuid.UUID(media_asset_id)))
 

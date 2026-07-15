@@ -24,9 +24,11 @@ class LifePeriod(str, PyEnum):
 
 
 class MediaAnalysisTrack(str, PyEnum):
-    """Phase 1 듀얼 트랙 분류 결과."""
-    TEXT_DOCUMENT = "text_document"  # 텍스트 포함 사진 → Upstage Document Parse 경로
-    PURE_MEMORY = "pure_memory"      # 순수 추억 사진 → 유저 코멘트 경로
+    """Phase 1 듀얼 트랙 분류 결과. 캡션(image_caption)은 두 트랙 모두에서 항상
+    생성된다 — 이 값은 순전히 "Azure Vision이 사진 속에서 읽어낸 텍스트가
+    있었는가"만 가른다(app/services/media_service.py)."""
+    TEXT_DOCUMENT = "text_document"  # 사진 속 텍스트(메모 등) 검출됨 → image_ocr_text 채워짐
+    PURE_MEMORY = "pure_memory"      # 텍스트 없음 → 캡션(image_caption)에만 의존
 
 
 class SessionType(str, PyEnum):
@@ -68,7 +70,7 @@ class AutobiographyStatus(str, PyEnum):
 class EventSourceType(str, PyEnum):
     """이벤트(Event)가 어느 경로에서 추출되었는지. 원칙 1(이벤트 1급 객체화)의 출처 분기."""
     SESSION_CHAT = "session_chat"  # 인터뷰 대화 산문에서 Solar가 분할·추출
-    DOCUMENT = "document"          # Document Parse OCR 결과에서 추출 (Layer 1 검증 게이트 대상)
+    DOCUMENT = "document"          # 사진 속 텍스트(Azure Vision) 결과에서 추출 (Layer 1 검증 게이트 대상)
 
 
 class EventRelationType(str, PyEnum):

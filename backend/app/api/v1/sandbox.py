@@ -93,7 +93,7 @@ async def list_sandbox_scenarios() -> dict[str, str]:
         "POST /sandbox/safeguard-check": "TIER1_BUFFER_SYSTEM_PROMPT / TIER2_CRISIS_RESPONSE — 감정 세이프가드",
         "POST /sandbox/prose-reassembly": "PROSE_REASSEMBLY_SYSTEM_PROMPT — 대화 로그 → 1인칭 산문",
         "POST /sandbox/event-extraction": "EVENT_EXTRACTION_SYSTEM_PROMPT — 이벤트 1급 객체화 (Structured Outputs)",
-        "POST /sandbox/ocr-validity-check": "OCR_VALIDITY_CHECK_SYSTEM_PROMPT — Document Parse 결과 1차 검증",
+        "POST /sandbox/ocr-validity-check": "OCR_VALIDITY_CHECK_SYSTEM_PROMPT — 사진 텍스트 인식(Azure Vision) 결과 1차 검증",
         "POST /sandbox/ocr-date-extraction": "OCR_DATE_EXTRACTION_SYSTEM_PROMPT — OCR 텍스트 → 사진 시기(연도/나이) 추정",
         "POST /sandbox/style-bible": "STYLE_BIBLE_SYSTEM_PROMPT — Phase 3 화자 스타일 바이블",
         "POST /sandbox/event-merge-judge": "EVENT_MERGE_JUDGE_SYSTEM_PROMPT — Phase 3 이벤트 병합 판정",
@@ -281,7 +281,7 @@ async def sandbox_ocr_validity_check(payload: OcrValidityCheckRequest) -> OcrVal
 async def sandbox_ocr_date_extraction(payload: OcrDateExtractionRequest) -> OcrDateExtractionResponse:
     """app/services/media_service.py의 _guess_life_period_from_ocr_text와 동일한 호출.
 
-    실제 파이프라인도 사진 자체가 아니라 Document Parse가 이미 뽑아낸 텍스트만 입력으로
+    실제 파이프라인도 사진 자체가 아니라 Azure Vision이 이미 읽어낸 텍스트만 입력으로
     받는다(media_service._run_dual_track_analysis 참조) — 이 샌드박스가 사진 업로드를
     받지 않는 것은 그 실제 흐름을 그대로 반영한 것이다. 텍스트에 명시적 연도/나이가
     없으면 found=false가 정상이다(애매한 추측 금지, OCR_DATE_EXTRACTION_SYSTEM_PROMPT

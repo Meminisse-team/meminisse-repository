@@ -238,6 +238,8 @@ class MediaAssetRecord:
     life_period_mapped: LifePeriod | None
     analysis_track: MediaAnalysisTrack | None
     pre_extracted_labels: dict | None
+    image_caption: str | None
+    image_ocr_text: str | None
     user_comment: str | None
     created_at: datetime
 

@@ -388,7 +388,7 @@ def test_cannot_attach_media_to_another_users_session(client: TestClient) -> Non
         "/api/v1/auth/login", json={"email": "media-intruder@example.com", "password": "password123"}
     ).json()["access_token"]
 
-    # asset_type=document로 업로드해 듀얼 트랙 분석(Document Parse/Solar 실호출)을
+    # asset_type=document로 업로드해 듀얼 트랙 분석(Azure Vision/Solar 실호출)을
     # 건드리지 않는다 — 이 테스트의 관심사는 오직 session_id 소유권 검증이다.
     resp = client.post(
         "/api/v1/media-assets",

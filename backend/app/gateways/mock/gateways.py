@@ -49,7 +49,6 @@ from app.models.enums import (
     AutobiographyStatus,
     ConsentType,
     DraftStatus,
-    EventSourceType,
     LifePeriod,
     MessageRole,
     RiskClassification,
@@ -433,23 +432,6 @@ class MockEventGateway(EventGateway):
             event.importance_signals = update.importance_signals
             event.life_milestone_category = update.life_milestone_category
 
-    async def get_pending_document_confirmation(
-        self, media_asset_id: uuid.UUID
-    ) -> EventRecord | None:
-        candidates = [
-            e
-            for e in self._store.events.values()
-            if e.media_asset_id == media_asset_id
-            and e.source_type == EventSourceType.DOCUMENT
-            and not e.verified
-        ]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda e: e.created_at)
-
-    async def delete(self, event_id: uuid.UUID) -> None:
-        self._store.events.pop(event_id, None)
-
     def _require_event(self, event_id: uuid.UUID) -> EventRecord:
         event = self._store.events.get(event_id)
         if event is None:
@@ -475,6 +457,8 @@ class MockMediaAssetGateway(MediaAssetGateway):
             life_period_mapped=data.life_period_mapped,
             analysis_track=None,
             pre_extracted_labels=None,
+            image_caption=None,
+            image_ocr_text=None,
             user_comment=data.user_comment,
             created_at=datetime.now(timezone.utc),
         )
@@ -491,12 +475,16 @@ class MockMediaAssetGateway(MediaAssetGateway):
         analysis_track,
         pre_extracted_labels: dict | None,
         life_period_mapped: LifePeriod | None = None,
+        image_caption: str | None = None,
+        image_ocr_text: str | None = None,
     ) -> None:
         asset = self._store.media_assets.get(media_asset_id)
         if asset is None:
             raise KeyError(f"media asset not found in mock store: {media_asset_id}")
         asset.analysis_track = analysis_track
         asset.pre_extracted_labels = pre_extracted_labels
+        asset.image_caption = image_caption
+        asset.image_ocr_text = image_ocr_text
         if life_period_mapped is not None:
             asset.life_period_mapped = life_period_mapped
 

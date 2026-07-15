@@ -17,10 +17,12 @@ Meminisse 에이전트의 모든 시스템/유저 프롬프트를 한 곳에서 
   4. 꼬리 질문 (사건 단위 예산 관리)
   5. 다층 감정 세이프가드 (0~3층)
   6. 세션 종료 후처리: 산문 재조립 / 이벤트 분할·라벨 추출 (Structured Outputs)
-  7. Document Parse 1차 타당성 검증 + OCR 확인 질문
+  7. 사진 캡션/텍스트(Azure Vision) 1차 타당성 검증 + PHOTO 세션 오프닝 질문 생성
   8. Phase 3: 스타일 바이블 / 이벤트 병합 판정
   9. Phase 4: 동적 목차 / 하향식 집필 / 통일성 윤문 / 팩트체크 / 제3자 위해성 분류 / NER 스캔
   10. Phase 3 중요도 스코어링: 생애 이정표 카테고리 매칭(결정론적 키워드 분류)
+  11. 자서전 커스터마이징: 말투/구성/컨셉 선택지, 샘플 미리보기, 질문 태그 기반 및
+      콘텐츠 기반 추천
 """
 
 from __future__ import annotations
@@ -571,7 +573,7 @@ def build_event_extraction_prompt(
 
 
 # --------------------------------------------------------------------------- #
-# 7. Document Parse 1차 타당성 검증 + OCR 확인 질문                            #
+# 7. 사진 캡션/텍스트 1차 타당성 검증 + PHOTO 세션 오프닝 질문 생성              #
 # --------------------------------------------------------------------------- #
 
 OCR_VALIDITY_CHECK_SYSTEM_PROMPT = """\
@@ -597,27 +599,33 @@ def build_ocr_validity_check_prompt(*, ocr_text: str) -> list[dict[str, str]]:
     ]
 
 
-def build_ocr_confirmation_question(*, suspected_text: str, guessed_value: str) -> str:
-    """검증 대기 큐의 항목을 자연스러운 확인 질문 문구로 변환. 예/아니오로 답하게
-    만드는 별도 게이트가 아니라, PHOTO 세션을 여는 시작 질문(build_photo_session_
-    opening)에 실마리로 녹여 넣는 재료로 쓴다(docs/QUESTION_BANK_GUIDE.md 5절)."""
-    return f'일기장에 "{suspected_text}"라고 적혀 있는 것 같은데, {guessed_value}가 맞으신가요?'
-
-
-def build_photo_session_opening(*, ocr_suspected_text: str | None = None) -> str:
+def build_photo_session_opening(
+    *, image_caption: str | None = None, ocr_text: str | None = None
+) -> str:
     """PHOTO 세션(사진 자체가 하나의 독립된 인터뷰 주제)을 열 때 보여줄 시작 질문.
 
-    ocr_suspected_text가 있으면(이 사진에 OCR 오인식 의심으로 격리된 문서 이벤트가
-    있는 경우) 그 내용을 실마리로 자연스럽게 녹여 넣는다 — "~가 맞으신가요?"처럼
-    예/아니오를 강요하지 않고, 그 부분을 포함해 자유롭게 이야기하도록 초대한다.
-    이후 실제로 오간 대화가 정식 이벤트 추출·검증을 거치므로(사진 세션도 일반
-    인터뷰와 동일하게 슬롯 게이팅·꼬리질문이 적용된다) 이 시작 질문 자체가 검증을
-    대신하지는 않는다."""
-    if ocr_suspected_text:
+    image_caption(Azure Vision이 사진의 시각적 내용을 설명한 문장, 예: "집 앞에서
+    5명이 함께 찍은 사진")과 ocr_text(사진 속에서 읽어낸 손글씨/인쇄 텍스트, 예:
+    "1990년 집 앞에서 가족들과.")를 실마리로 자연스럽게 녹여 넣는다 — "~가
+    맞으신가요?"처럼 예/아니오를 강요하는 별도 확인 게이트를 두지 않고, 그 내용을
+    포함해 자유롭게 이야기하도록 초대한다(과거 이 방식을 대화 중간의 예/아니오
+    확인 질문으로 잘못 구현했다가 롤백한 이력이 있다 — docs/QUESTION_BANK_GUIDE.md
+    5절 참조). 이후 실제로 오간 대화가 정식 이벤트 추출·검증을 거치므로(사진
+    세션도 일반 인터뷰와 동일하게 슬롯 게이팅·꼬리질문이 적용된다) 이 시작 질문
+    자체가 검증을 대신하지는 않는다.
+
+    캡션의 실제 문구(자연스러운 한 문장인지, 명사구인지)는 Azure Vision 응답에
+    따라 달라질 수 있어, 프롬프트 초안 수준의 문구다 — 실제 캡션 톤을 확인한 뒤
+    다듬을 필요가 있을 수 있다."""
+    if image_caption and ocr_text:
         return (
-            f'이 사진 속에 "{ocr_suspected_text}"라고 적혀 있는 것 같아요. '
-            "이때 이야기를 좀 더 들려주시겠어요?"
+            f'이 사진, "{ocr_text}"라고 적혀 있고 {image_caption}인 것 같아요. '
+            "이때 이야기를 좀 더 자세히 들려주시겠어요?"
         )
+    if image_caption:
+        return f"{image_caption}인 것 같은데, 맞나요? 이 사진에 대해 더 자세한 이야기를 들려주시겠어요?"
+    if ocr_text:
+        return f'이 사진 속에 "{ocr_text}"라고 적혀 있는 것 같아요. 이때 이야기를 좀 더 들려주시겠어요?'
     return "이 사진에 대해 더 자세히 이야기를 들려주시겠어요?"
 
 

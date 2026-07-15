@@ -7,7 +7,7 @@ Supabase Auth(GoTrue) REST API 클라이언트.
 0행). Supabase Auth를 쓰면 이메일 인증·비밀번호 재설정·소셜 로그인이 기본 제공되고,
 이 프로젝트 DB에는 비밀번호 관련 값을 전혀 저장하지 않아도 된다.
 
-app/clients/solar.py, embeddings.py, document_parse.py와 같은 패턴이다 — 순수 HTTP
+app/clients/solar.py, embeddings.py, azure_vision.py와 같은 패턴이다 — 순수 HTTP
 래퍼이며 app/gateways/* 추상화 대상이 아니다(Gateway 패턴은 이 프로젝트의 자체 DB
 테이블만 mock/postgres로 바꿔치기하기 위한 것이고, Supabase Auth는 그 스위치와
 무관하게 항상 실제 서비스를 호출하는 외부 API다 — GATEWAY_BACKEND=mock으로 로컬을

@@ -35,13 +35,14 @@ class Event(Base):
     session_id = Column(
         UUID(as_uuid=True), ForeignKey("interview_sessions.id", ondelete="CASCADE"), nullable=True
     )
-    # source_type == DOCUMENT 전용 (Document Parse 결과 기반). SESSION_CHAT이면 null.
+    # source_type == DOCUMENT 전용 (Azure Vision이 사진 속에서 읽어낸 텍스트 기반).
+    # SESSION_CHAT이면 null.
     media_asset_id = Column(
         UUID(as_uuid=True), ForeignKey("media_assets.id", ondelete="SET NULL"), nullable=True
     )
     # 원문 대조 재생성을 위한 근거 포인터.
     # SESSION_CHAT 예: {"chat_log_id": "...", "char_start": 120, "char_end": 260}
-    # DOCUMENT 예:     {"element_id": 4, "page": 2}  (Document Parse elements[].id)
+    # DOCUMENT 예:     {"quoted_text": "..."}  (media_service._run_dual_track_analysis 참조)
     source_span = Column(JSONB, nullable=True)
 
     life_period = Column(str_enum(LifePeriod, name="lifeperiod"), nullable=True)

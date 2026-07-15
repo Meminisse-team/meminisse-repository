@@ -23,11 +23,29 @@ class Settings(BaseSettings):
     AWS_S3_BUCKET: str = "meminisse-media"
     AWS_REGION: str = "ap-northeast-2"
 
-    # Upstage — Solar LLM + Document Parse + Embeddings 통합 키 (3종 API 모두 이 키 하나로 인증)
+    # Upstage — Solar LLM + Embeddings 통합 키 (2종 API 모두 이 키 하나로 인증)
     # Solar:       AsyncOpenAI(base_url="https://api.upstage.ai/v1", api_key=...), model="solar-pro3"
     # Embeddings:  같은 클라이언트, model="embedding-query" | "embedding-passage"
-    # Document Parse: POST https://api.upstage.ai/v1/document-digitization (multipart/form-data)
     UPSTAGE_API_KEY: str = ""
+
+    # ── Azure Computer Vision (사진 캡셔닝 + 사진 속 텍스트 인식, Image Analysis 4.0) ──
+    # 사진 한 장당 API 호출 1번으로 캡션(예: "집 앞에서 5명이 함께 찍은 사진")과 사진
+    # 속 인쇄/손글씨 텍스트(예: "1990년 집 앞에서 가족들과.")를 동시에 받아온다
+    # (app/clients/azure_vision.py, features=caption,read). 예전에는 텍스트 인식만
+    # 가능한 Upstage Document Parse를 썼는데, 캡션 없이는 순수 추억 사진(글자가 없는
+    # 사진)에 대해 의미 있는 시작 질문을 만들 수 없었다 — Azure Vision 한 번의 호출로
+    # 캡션+텍스트를 함께 얻는 방식으로 교체했다(app/services/media_service.py 참조).
+    #
+    # 발급: https://portal.azure.com → "Computer Vision" 리소스 생성
+    #   AZURE_CV_ENDPOINT → 리소스 개요의 "엔드포인트"
+    #     (예: https://<resource-name>.cognitiveservices.azure.com)
+    #   AZURE_CV_API_KEY  → 리소스의 "키 및 엔드포인트" → KEY 1 또는 KEY 2
+    # 둘 다 비어 있으면(기본값) 사진 분석 자체를 건너뛰고 일반적인 오프닝 질문으로
+    # 대체된다(AzureVisionNotConfiguredError, media_service._run_dual_track_analysis
+    # 참조) — 앱이 죽지 않으므로 나중에 이 두 값만 채우면 별도 코드 수정 없이 바로
+    # 동작한다.
+    AZURE_CV_ENDPOINT: str = ""
+    AZURE_CV_API_KEY: str = ""
 
     # Celery + Redis (기획안 4절: 세션 후처리·최종 집필·PDF 조판 등 무거운 비동기 작업)
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"

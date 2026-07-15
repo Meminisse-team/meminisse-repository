@@ -18,7 +18,14 @@ import pytest
 
 from app.gateways.dto import EventCreateData, MediaAssetCreateData, UserCreateData
 from app.gateways.factory import _build_mock_gateways
-from app.models.enums import AssetType, EventSourceType, LifePeriod, SessionType
+from app.models.enums import (
+    AssetType,
+    EventSourceType,
+    LifePeriod,
+    MediaAnalysisTrack,
+    MessageRole,
+    SessionType,
+)
 from app.schemas.interview import SessionCreate
 from app.services import interview_service
 
@@ -268,7 +275,11 @@ async def test_no_remaining_questions_error_when_everything_exhausted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_photo_session_completion_cleans_up_pending_ocr_event_and_uses_hint() -> None:
+async def test_photo_session_opening_uses_caption_and_ocr_text_from_media_asset() -> None:
+    """PHOTO 세션 오프닝 질문은 media_asset에 이미 저장된 Azure Vision 분석 결과
+    (캡션 + 사진 속 텍스트)를 그대로 쓴다 — 더 이상 Event 스테이징을 거쳐 조회하지
+    않는다(media_service._run_dual_track_analysis가 update_analysis로 미리
+    채워둔 값을 interview_service._photo_session_opening_text가 직접 읽는다)."""
     p1, p2, p3 = _patches()
     with p1, p2, p3:
         gateways = _build_mock_gateways()
@@ -284,15 +295,63 @@ async def test_photo_session_completion_cleans_up_pending_ocr_event_and_uses_hin
                 life_period_mapped=LifePeriod.CHILDHOOD,
             )
         )
-        pending_event = await gateways.events.create(
+        # Azure Vision이 이미 분석을 마쳐뒀다고 가정한다(media_service.
+        # _run_dual_track_analysis가 실제로 하는 일을 여기서는 직접 흉내낸다).
+        await gateways.media_assets.update_analysis(
+            asset.id,
+            analysis_track=MediaAnalysisTrack.TEXT_DOCUMENT,
+            pre_extracted_labels={"captionResult": {"text": "raw"}},
+            image_caption="집 앞에서 여러 사람이 함께 찍은 사진",
+            image_ocr_text="1963년 겨울",
+        )
+        await gateways.commit()
+
+        await _complete_n_fixed_sessions(gateways, user.id, 25)
+
+        photo_session = await interview_service.create_session(
+            gateways, user.id, SessionCreate(session_type=SessionType.FIXED_QUESTION)
+        )
+        assert photo_session.session_type == SessionType.PHOTO
+
+        opened = await gateways.sessions.get_by_id(photo_session.id)
+        opening_log = next(log for log in opened.chat_logs if log.role == MessageRole.ASSISTANT)
+        assert "집 앞에서 여러 사람이 함께 찍은 사진" in opening_log.content
+        assert "1963년 겨울" in opening_log.content
+
+        _, updated = await _complete_one_session(gateways, photo_session)
+        assert updated.status.value == "completed"
+
+
+@pytest.mark.asyncio
+async def test_completing_photo_session_does_not_delete_vision_staged_event() -> None:
+    """Azure Vision이 사진 속 텍스트에서 미리 만들어 둔 검증된 Event(DOCUMENT)는
+    PHOTO 세션 완료로 인해 더 이상 삭제되지 않는다 — 예전에는 "OCR 확인 대기"
+    상태로 특별 취급해 대화 완료 시 지웠지만, 이제는 일반 이벤트와 동일하게
+    다뤄지고 실제 중복 여부는 Phase 3 병합(_merge_duplicate_events)이 판단한다."""
+    p1, p2, p3 = _patches()
+    with p1, p2, p3:
+        gateways = _build_mock_gateways()
+        user = await gateways.users.create(
+            UserCreateData(id=uuid.uuid4(), email=f"{uuid.uuid4()}@test.local", name="테스터")
+        )
+        asset = await gateways.media_assets.create(
+            MediaAssetCreateData(
+                user_id=user.id,
+                s3_key="k",
+                s3_url="https://example.com/k",
+                asset_type=AssetType.IMAGE,
+                life_period_mapped=LifePeriod.CHILDHOOD,
+            )
+        )
+        staged_event = await gateways.events.create(
             EventCreateData(
                 user_id=user.id,
                 source_type=EventSourceType.DOCUMENT,
                 media_asset_id=asset.id,
                 one_line_summary="1963년 겨울",
-                prose_paragraph="일기장에 남은 기록.",
+                prose_paragraph="1963년 겨울, 집 앞에서 가족들과.",
                 source_span={"quoted_text": "1963년 겨울"},
-                verified=False,
+                verified=True,
             )
         )
         await gateways.commit()
@@ -304,10 +363,8 @@ async def test_photo_session_completion_cleans_up_pending_ocr_event_and_uses_hin
         )
         assert photo_session.session_type == SessionType.PHOTO
 
-        # 사진 세션을 다시 열람할 때 OCR 힌트가 시작 질문에 녹아 있는지는 별도
-        # 헬퍼로 확인(add_user_turn의 "다음 항목 미리보기" 문구를 통해 간접 검증).
-        content, updated = await _complete_one_session(gateways, photo_session)
+        _, updated = await _complete_one_session(gateways, photo_session)
         assert updated.status.value == "completed"
 
-        # 촉발제였던 OCR 스테이징 이벤트는 정리(삭제)됐어야 한다.
-        assert (await gateways.events.list_by_ids([pending_event.id])) == []
+        remaining = await gateways.events.list_by_ids([staged_event.id])
+        assert [e.id for e in remaining] == [staged_event.id]

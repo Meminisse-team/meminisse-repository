@@ -2,13 +2,14 @@
 Phase 2 후처리 (세션 종료 즉시, Celery 비동기): 산문 재조립 → 왜곡 탐지 → 이벤트 분할·
 라벨 추출 → 임베딩. app/workers/tasks.py의 Celery 태스크가 이 서비스를 호출한다.
 
-SESSION_CHAT 출처 이벤트는 사용자가 인터뷰에서 직접 발화한 내용이므로, Document Parse
-경로(OCR 오인식 확인 질문을 거쳐야 승격되는 DOCUMENT 출처와 달리) 재조립본이 왜곡 탐지를
-통과하면 곧바로 verified=true로 저장한다. DOCUMENT 출처 이벤트의 verified 승격은
-media_service/추후 확인-질문 인터뷰 턴에서 처리한다(이 서비스의 책임이 아님) — 실제
-의도는 그 사진/문서가 별도의 PHOTO 세션 주제가 되는 것이라(대화 중간에 예/아니오로
-끼워 넣는 방식이 아니라), 사진 세션 오케스트레이션이 먼저 필요하다
-(docs/QUESTION_BANK_GUIDE.md 5절 참조, 2026-07-12 — 잘못된 방식으로 연결했다가 롤백).
+SESSION_CHAT 출처 이벤트는 사용자가 인터뷰에서 직접 발화한 내용이므로, 재조립본이
+왜곡 탐지를 통과하면 곧바로 verified=true로 저장한다. DOCUMENT 출처(사진 속 텍스트,
+Azure Vision) 이벤트의 verified는 이 서비스가 아니라 media_service._run_dual_track_
+analysis가 생성 시점에 1차 타당성 검증(_check_ocr_validity) 결과로 바로 정한다 — 별도
+"확인 질문을 거쳐 승격"하는 단계는 없다(그런 방식을 대화 중간에 예/아니오로 끼워 넣는
+잘못된 설계로 한 번 구현했다가 롤백한 이력이 있다, docs/QUESTION_BANK_GUIDE.md 5절
+참조, 2026-07-12). 그 사진/문서는 별도의 PHOTO 세션 주제가 되어, 오프닝 질문에
+캡션·텍스트를 자연스러운 실마리로 녹여 넣는 방식으로만 다뤄진다.
 """
 
 from __future__ import annotations

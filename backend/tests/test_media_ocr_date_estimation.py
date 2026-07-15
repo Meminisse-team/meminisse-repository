@@ -1,6 +1,9 @@
 """
-OCR 텍스트 기반 사진 시기(life_period_mapped) 자동 추정 회귀 테스트
+사진 속 텍스트 기반 시기(life_period_mapped) 자동 추정 회귀 테스트
 (docs/QUESTION_BANK_GUIDE.md 5절, media_service._guess_life_period_from_ocr_text).
+
+Azure Vision(app/clients/azure_vision.py)이 사진 속에서 읽어낸 텍스트를 대상으로
+한다 — 어떤 엔진이 텍스트를 추출했는지와 무관하게 시기 추정 로직 자체는 동일하다.
 
 핵심 규칙:
 - 텍스트에 명시적 연도가 있고 사용자 birth_year가 있으면 나이를 역산해 생애주기를 매핑한다.
@@ -21,25 +24,29 @@ from app.gateways.factory import _build_mock_gateways
 from app.models.enums import AssetType, LifePeriod
 from app.services import media_service
 
-_OCR_TEXT = "일기장에 적힌 글귀. 이 사진과 관련된 내용이 여기 담겨 있다." + "." * 10
+# _MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK(20자)보다 길어야 TEXT_DOCUMENT 트랙으로 분류된다.
+_READ_TEXT = "일기장에 적힌 글귀. 이 사진과 관련된 내용이 여기 담겨 있다." + "." * 10
 
 
-def _patches(*, structured_completion):
+def _make_analyze_image(*, read_text: str | None):
+    async def _analyze_image(image_bytes: bytes, language: str = "ko") -> dict:
+        return {
+            "captionResult": {"text": "사진 속 풍경", "confidence": 0.9},
+            "readResult": {"blocks": [{"lines": [{"text": read_text}]}] if read_text else []},
+        }
+
+    return _analyze_image
+
+
+def _patches(*, structured_completion, read_text: str | None = _READ_TEXT):
     return (
-        patch(
-            "app.clients.document_parse.parse_document_sync",
-            new=lambda file_bytes, filename, output_formats=None: _fake_parsed(),
-        ),
+        patch("app.clients.azure_vision.analyze_image", new=_make_analyze_image(read_text=read_text)),
         patch("app.clients.solar.structured_completion", new=structured_completion),
         patch(
             "app.clients.embeddings.embed_passages",
             new=lambda texts: _fake_embeddings(texts),
         ),
     )
-
-
-async def _fake_parsed() -> dict:
-    return {"content": {"text": _OCR_TEXT}}
 
 
 async def _fake_embeddings(texts: list[str]) -> list[list[float]]:
@@ -95,9 +102,7 @@ async def test_explicit_year_with_known_birth_year_maps_life_period() -> None:
         asset = await _create_asset(gateways, user.id)
         await gateways.commit()
 
-        await media_service._run_dual_track_analysis(
-            gateways, asset=asset, file_bytes=b"x", filename="f.png"
-        )
+        await media_service._run_dual_track_analysis(gateways, asset=asset, file_bytes=b"x")
 
         updated = await gateways.media_assets.get_by_id(asset.id)
         assert updated.life_period_mapped == LifePeriod.YOUTH
@@ -114,9 +119,7 @@ async def test_explicit_age_maps_life_period_directly() -> None:
         asset = await _create_asset(gateways, user.id)
         await gateways.commit()
 
-        await media_service._run_dual_track_analysis(
-            gateways, asset=asset, file_bytes=b"x", filename="f.png"
-        )
+        await media_service._run_dual_track_analysis(gateways, asset=asset, file_bytes=b"x")
 
         updated = await gateways.media_assets.get_by_id(asset.id)
         assert updated.life_period_mapped == LifePeriod.ADULTHOOD
@@ -131,9 +134,7 @@ async def test_no_clues_leaves_life_period_unmapped() -> None:
         asset = await _create_asset(gateways, user.id)
         await gateways.commit()
 
-        await media_service._run_dual_track_analysis(
-            gateways, asset=asset, file_bytes=b"x", filename="f.png"
-        )
+        await media_service._run_dual_track_analysis(gateways, asset=asset, file_bytes=b"x")
 
         updated = await gateways.media_assets.get_by_id(asset.id)
         assert updated.life_period_mapped is None
@@ -152,9 +153,7 @@ async def test_already_mapped_via_user_input_skips_ocr_estimation() -> None:
         asset = await _create_asset(gateways, user.id, life_period_mapped=LifePeriod.SENIOR)
         await gateways.commit()
 
-        await media_service._run_dual_track_analysis(
-            gateways, asset=asset, file_bytes=b"x", filename="f.png"
-        )
+        await media_service._run_dual_track_analysis(gateways, asset=asset, file_bytes=b"x")
 
         updated = await gateways.media_assets.get_by_id(asset.id)
         assert updated.life_period_mapped == LifePeriod.SENIOR

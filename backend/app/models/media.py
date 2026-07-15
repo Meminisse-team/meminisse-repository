@@ -40,11 +40,19 @@ class MediaAsset(Base):
     analysis_track = Column(
         str_enum(MediaAnalysisTrack, name="mediaanalysistrack"),
         nullable=True,
-        comment="text_document=Upstage Document Parse 경로, pure_memory=유저 코멘트 경로",
+        comment="text_document=Azure Vision이 사진 속 텍스트를 검출함, pure_memory=텍스트 없음(캡션만)",
     )
-    # Document Parse 원시 응답 캐시(디버깅/감사용 raw staging). 검증 게이트를 통과한 실제
-    # 사건 데이터는 이 필드가 아니라 Event(source_type=DOCUMENT, verified=true)에 저장된다.
+    # Azure Vision(Image Analysis) 원시 응답 캐시(디버깅/감사용 raw staging). 검증
+    # 게이트를 통과한 실제 사건 데이터는 이 필드가 아니라 Event(source_type=DOCUMENT,
+    # verified=true)에 저장된다.
     pre_extracted_labels = Column(JSONB, nullable=True)
+    # Azure Vision 캡션(사진의 시각적 내용을 설명하는 한 문장, 예: "집 앞에서 5명이
+    # 함께 찍은 사진"). PHOTO 세션 오프닝 질문을 만드는 데 쓴다(app/agents/
+    # prompts.py:build_photo_session_opening).
+    image_caption = Column(Text, nullable=True)
+    # Azure Vision이 사진 속에서 읽어낸 인쇄/손글씨 텍스트(예: "1990년 집 앞에서
+    # 가족들과."). analysis_track=TEXT_DOCUMENT일 때만 채워진다.
+    image_ocr_text = Column(Text, nullable=True)
     user_comment = Column(Text, nullable=True)           # 순수 추억 사진의 1차 유저 코멘트
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

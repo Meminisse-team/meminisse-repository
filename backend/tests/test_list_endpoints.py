@@ -184,7 +184,7 @@ def test_media_assets_router_scopes_by_current_user(client: TestClient) -> None:
     a_id, a_token = _signup_and_login(client, "photos-a@example.com")
     b_id, _ = _signup_and_login(client, "photos-b@example.com")
 
-    # 업로드 라우터는 Document Parse/Solar를 호출하므로(파일 업로드 파이프라인), 여기서는
+    # 업로드 라우터는 Azure Vision/Solar를 호출하므로(파일 업로드 파이프라인), 여기서는
     # 목록 엔드포인트의 소유권 스코프만 검증하기 위해 스토어에 직접 시드한다 — user_id는
     # 실제 로그인 사용자 id를 그대로 써서 라우터가 current_user.id로 필터링하는지 확인한다.
     gw = MockMediaAssetGateway(default_store)

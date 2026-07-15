@@ -1,21 +1,26 @@
 """
-Phase 1: 기록물 대량 스캔 — 업로드 즉시 S3(Layer 0)에 원본을 보존하고, 듀얼 트랙으로
-분기한다. 텍스트가 유의미하게 검출되면 TEXT_DOCUMENT 트랙(Document Parse → Solar
-1차 타당성 검증 → 미검증 Event 스테이징), 아니면 PURE_MEMORY 트랙(유저 코멘트만 저장).
+Phase 1: 기록물 대량 스캔 — 업로드 즉시 S3(Layer 0)에 원본을 보존하고, Azure Vision
+(Image Analysis, app/clients/azure_vision.py)으로 캡션과 사진 속 텍스트를 함께
+얻는다. 캡션(예: "집 앞에서 5명이 함께 찍은 사진")은 텍스트 유무와 무관하게 항상
+생성되어 PHOTO 세션 오프닝 질문의 재료가 된다(prompts.build_photo_session_opening).
+사진 속에 텍스트(손글씨 메모 등)까지 검출되면 TEXT_DOCUMENT 트랙으로 분류해 Solar
+1차 타당성 검증을 거친 뒤 Event(source_type=DOCUMENT)로도 스테이징한다 — 대화가
+아직 일어나지 않아도 그 자체로 검색 가능한 사실이 되고, 실제로 그 사진에 대해
+나눈 대화에서 비슷한 사실이 다시 추출되면 Phase 3 중복 병합(_merge_duplicate_events)
+이 자연스럽게 흡수한다(별도의 "대기 중 확인" 상태나 삭제 로직을 두지 않는다).
+텍스트가 없으면(PURE_MEMORY 트랙) 캡션에만 의존한다.
 
-TEXT_DOCUMENT 트랙에서 생성되는 Event는 verified=false로 스테이징되며, 해당 생애주기
-인터뷰 시점에 확인 질문(prompts.build_ocr_confirmation_question)으로 제시해 유저가
-확인해야 verified=true로 승격된다 — 그 인터뷰 턴 연동은 interview_service의 향후
-작업(TODO)이며, 이 서비스는 스테이징까지만 책임진다.
+예전에는 Upstage Document Parse(텍스트만 읽는 OCR)를 썼는데, 글자가 없는 순수
+추억 사진에서는 아무 단서도 얻지 못했다 — Azure Vision으로 교체해 캡션까지 함께
+받아오도록 바꿨다(2026-07-15).
 
-듀얼 트랙 분석(_run_dual_track_analysis)은 Document Parse 동기 API 호출을 포함하는데,
-공식 문서 기준 서버 사이드 타임아웃만 5분이다. 예전에는 이걸 업로드 요청 안에서
-그대로 await했더니 사진 한 장 올릴 때마다 응답이 몇십 초~수 분씩 걸리고(일반 사진도
-전부 Document Parse로 보내니 더 심하다), Upstage 쪽이 일시적으로 오류를 내면 업로드
-자체가 500으로 실패했다 — "사진을 올려도 처리가 끝나지 않는" 것처럼 보이는 버그였다
-(2026-07-12 재현). PDF 생성·자서전 집필과 동일하게 Celery 워커로 위임해, 업로드
-요청은 S3 저장 + DB row 생성까지만 하고 즉시 응답하도록 바꿨다
-(app/workers/tasks.py의 analyze_media_asset 참조).
+듀얼 트랙 분석(_run_dual_track_analysis)은 외부 동기 API 호출을 포함하는데, 예전에
+이걸 업로드 요청 안에서 그대로 await했더니 사진 한 장 올릴 때마다 응답이 몇십 초~수
+분씩 걸리고, 외부 API가 일시적으로 오류를 내면 업로드 자체가 500으로 실패했다 —
+"사진을 올려도 처리가 끝나지 않는" 것처럼 보이는 버그였다(2026-07-12 재현). PDF
+생성·자서전 집필과 동일하게 Celery 워커로 위임해, 업로드 요청은 S3 저장 + DB row
+생성까지만 하고 즉시 응답하도록 바꿨다(app/workers/tasks.py의 analyze_media_asset
+참조).
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ import logging
 import uuid
 
 from app.agents import prompts
-from app.clients import document_parse, solar
+from app.clients import azure_vision, solar
 from app.clients import embeddings as embeddings_client
 from app.gateways.dto import EventCreateData, MediaAssetCreateData, MediaAssetRecord
 from app.gateways.factory import Gateways
@@ -103,37 +108,47 @@ async def analyze_media_asset(gateways: Gateways, media_asset_id: uuid.UUID) -> 
     if asset is None:
         raise KeyError(f"media asset not found: {media_asset_id}")
     file_bytes = await gateways.storage.get_object(asset.s3_key)
-    filename = asset.s3_key.rsplit("/", 1)[-1].split("_", 1)[-1]
-    await _run_dual_track_analysis(gateways, asset=asset, file_bytes=file_bytes, filename=filename)
+    await _run_dual_track_analysis(gateways, asset=asset, file_bytes=file_bytes)
     await gateways.commit()
 
 
 async def _run_dual_track_analysis(
-    gateways: Gateways, *, asset: MediaAssetRecord, file_bytes: bytes, filename: str
+    gateways: Gateways, *, asset: MediaAssetRecord, file_bytes: bytes
 ) -> None:
-    parsed = await document_parse.parse_document_sync(file_bytes, filename, output_formats=["text"])
-    extracted_text = (parsed.get("content") or {}).get("text", "").strip()
-
-    if len(extracted_text) < _MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK:
-        await gateways.media_assets.update_analysis(
-            asset.id, analysis_track=MediaAnalysisTrack.PURE_MEMORY, pre_extracted_labels=None
+    try:
+        analysis = await azure_vision.analyze_image(file_bytes)
+    except azure_vision.AzureVisionNotConfiguredError:
+        logging.getLogger(__name__).info(
+            "Azure Computer Vision 키가 설정되지 않아 사진 %s 분석을 건너뜁니다 "
+            "(.env에 AZURE_CV_ENDPOINT/AZURE_CV_API_KEY를 채우면 다음 업로드부터 "
+            "별도 코드 수정 없이 자동으로 동작합니다).",
+            asset.id,
         )
         return
 
+    caption = azure_vision.extract_caption(analysis)
+    read_text = azure_vision.extract_read_text(analysis)
+    has_text = bool(read_text) and len(read_text) >= _MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK
+
     life_period_mapped = asset.life_period_mapped
-    if life_period_mapped is None:
+    if life_period_mapped is None and has_text:
         life_period_mapped = await _guess_life_period_from_ocr_text(
-            gateways, user_id=asset.user_id, extracted_text=extracted_text
+            gateways, user_id=asset.user_id, extracted_text=read_text
         )
 
     await gateways.media_assets.update_analysis(
         asset.id,
-        analysis_track=MediaAnalysisTrack.TEXT_DOCUMENT,
-        pre_extracted_labels=parsed,
+        analysis_track=MediaAnalysisTrack.TEXT_DOCUMENT if has_text else MediaAnalysisTrack.PURE_MEMORY,
+        pre_extracted_labels=analysis,
         life_period_mapped=life_period_mapped,
+        image_caption=caption,
+        image_ocr_text=read_text if has_text else None,
     )
 
-    validity = await _check_ocr_validity(extracted_text)
+    if not has_text:
+        return
+
+    validity = await _check_ocr_validity(read_text)
     verified = not validity["suspicious"]
     event = await gateways.events.create(
         EventCreateData(
@@ -141,9 +156,9 @@ async def _run_dual_track_analysis(
             source_type=EventSourceType.DOCUMENT,
             media_asset_id=asset.id,
             life_period=life_period_mapped,
-            one_line_summary=extracted_text[:100],
-            prose_paragraph=extracted_text,
-            source_span={"quoted_text": extracted_text[:200]},
+            one_line_summary=read_text[:100],
+            prose_paragraph=read_text,
+            source_span={"quoted_text": read_text[:200]},
             confidence={"ocr_validity_note": validity["note"]},
             verified=verified,
         )

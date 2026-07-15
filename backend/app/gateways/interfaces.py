@@ -281,18 +281,6 @@ class EventGateway(ABC):
     @abstractmethod
     async def bulk_update_importance(self, updates: Sequence[EventImportanceUpdate]) -> None: ...
 
-    @abstractmethod
-    async def get_pending_document_confirmation(self, media_asset_id: UUID) -> EventRecord | None:
-        """이 사진/문서에서 OCR 1차 검증이 오인식 의심으로 격리한(source_type=
-        DOCUMENT, verified=False) 이벤트가 있으면 반환한다. PHOTO 세션을 열 때
-        시작 질문에 실마리로 녹여 넣는 데 쓴다(docs/QUESTION_BANK_GUIDE.md 5절) —
-        여러 개면 가장 먼저 스테이징된 것(created_at 오름차순 첫 번째)."""
-
-    @abstractmethod
-    async def delete(self, event_id: UUID) -> None:
-        """PHOTO 세션의 대화에서 이미 정식 추출된 이벤트로 대체된, 격리 상태였던
-        OCR 스테이징 이벤트를 정리한다."""
-
 
 class MediaAssetGateway(ABC):
     @abstractmethod
@@ -311,14 +299,18 @@ class MediaAssetGateway(ABC):
         analysis_track: MediaAnalysisTrack,
         pre_extracted_labels: dict | None,
         life_period_mapped: LifePeriod | None = None,
+        image_caption: str | None = None,
+        image_ocr_text: str | None = None,
     ) -> None:
-        """Phase 1 듀얼 트랙 분석 결과(Document Parse 산출물)를 기록한다.
-        life_period_mapped는 None이면 "건드리지 않는다"는 뜻이다(다른 게이트웨이의
-        부분 갱신 관례와 동일) — OCR 텍스트에서 시기를 추정해냈을 때만 값을 넘긴다
-        (media_service._guess_life_period_from_ocr_text, docs/QUESTION_BANK_
-        GUIDE.md 5절). 사용자가 이미 age_at_time을 입력해 이 필드가 채워져
-        있으면 애초에 이 추정 자체를 시도하지 않으므로, 사용자 입력을 덮어쓸
-        일은 없다."""
+        """Phase 1 듀얼 트랙 분석 결과(Azure Vision 캡션 + 텍스트 인식 산출물)를
+        기록한다. life_period_mapped는 None이면 "건드리지 않는다"는 뜻이다(다른
+        게이트웨이의 부분 갱신 관례와 동일) — 사진 속 텍스트에서 시기를 추정해냈을
+        때만 값을 넘긴다(media_service._guess_life_period_from_ocr_text,
+        docs/QUESTION_BANK_GUIDE.md 5절). 사용자가 이미 age_at_time을 입력해 이
+        필드가 채워져 있으면 애초에 이 추정 자체를 시도하지 않으므로, 사용자
+        입력을 덮어쓸 일은 없다. image_caption/image_ocr_text는 (분석 자체가
+        None이면 그렇듯) 항상 이 호출로 실제 값이 갱신된다 — 부분 갱신 센티널이
+        아니다."""
 
     @abstractmethod
     async def list_by_user(self, user_id: UUID) -> list[MediaAssetRecord]:

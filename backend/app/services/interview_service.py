@@ -101,12 +101,13 @@ async def _resolve_next_item(gateways: Gateways, user_id: uuid.UUID) -> _NextInt
     return None
 
 
-async def _photo_session_opening_text(gateways: Gateways, media_asset: MediaAssetRecord) -> str:
-    pending_event = await gateways.events.get_pending_document_confirmation(media_asset.id)
-    ocr_hint = (
-        (pending_event.source_span or {}).get("quoted_text") if pending_event is not None else None
+def _photo_session_opening_text(media_asset: MediaAssetRecord) -> str:
+    """media_asset에 이미 저장된 Azure Vision 분석 결과(캡션 + 사진 속 텍스트,
+    media_service._run_dual_track_analysis 참조)를 그대로 오프닝 질문 재료로
+    쓴다 — 별도 조회 없이 순수 문자열 조립이라 동기 함수다."""
+    return prompts.build_photo_session_opening(
+        image_caption=media_asset.image_caption, ocr_text=media_asset.image_ocr_text
     )
-    return prompts.build_photo_session_opening(ocr_suspected_text=ocr_hint)
 
 
 @dataclass
@@ -146,7 +147,7 @@ async def preview_next_item(gateways: Gateways, user_id: uuid.UUID) -> NextItemP
         )
 
     assert next_item.media_asset is not None
-    opening = await _photo_session_opening_text(gateways, next_item.media_asset)
+    opening = _photo_session_opening_text(next_item.media_asset)
     return NextItemPreview(
         session_type=SessionType.PHOTO,
         linked_media_asset_id=next_item.media_asset.id,
@@ -168,7 +169,7 @@ async def _resolve_opening_content(gateways: Gateways, session: InterviewSession
         media_asset = await gateways.media_assets.get_by_id(session.linked_media_asset_id)
         if media_asset is None:
             return None
-        return await _photo_session_opening_text(gateways, media_asset)
+        return _photo_session_opening_text(media_asset)
     return None
 
 
@@ -362,15 +363,11 @@ async def add_user_turn(
     if is_crisis:
         await gateways.sessions.complete(session.id)
     elif should_complete:
-        if session.session_type == SessionType.PHOTO and session.linked_media_asset_id is not None:
-            # 이 사진 세션의 대화로 정식 이벤트가 곧 추출될 것이므로(Phase 2
-            # 후처리), 애초에 이 세션을 촉발한 OCR 스테이징 이벤트(오인식 의심,
-            # verified=false)는 역할을 다했다 — 정리한다.
-            pending_event = await gateways.events.get_pending_document_confirmation(
-                session.linked_media_asset_id
-            )
-            if pending_event is not None:
-                await gateways.events.delete(pending_event.id)
+        # PHOTO 세션이 촉발되기 전 Azure Vision이 사진 속 텍스트에서 이미 만들어둔
+        # Event(source_type=DOCUMENT)가 있어도 따로 정리하지 않는다 — 이 대화에서
+        # 비슷한 사실이 다시 추출되면 Phase 3 중복 병합(_merge_duplicate_events)이
+        # 임베딩 유사도 + LLM 판정으로 자연스럽게 흡수하므로, 별도의 "대기 중 삭제"
+        # 로직을 둘 필요가 없다(media_service.py 모듈 docstring 참조).
 
         # "한 세션 = 질문 하나" 관례(InterviewSession 모델 docstring)에 따라, 이
         # 세션의 슬롯이 충분히 채워졌으면 바로 완료 처리한다(Phase 2 후처리 큐잉

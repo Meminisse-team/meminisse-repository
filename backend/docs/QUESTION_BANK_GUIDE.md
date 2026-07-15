@@ -52,25 +52,46 @@ already_in_progress`가 이 케이스를 검증한다.
 이미 배정된 적 있는가"만 확인하므로 멱등하다 — 세션 완료 직후 미리보기 문구를
 만들 때와 실제로 다음 세션을 생성할 때 같은 함수를 그대로 재사용한다.
 
-### OCR 오인식 의심 텍스트 처리
+### 사진 캡션 + 텍스트 인식 — Azure Vision으로 교체 (2026-07-15)
 
-사진에 `Event(source_type=DOCUMENT, verified=false)`(OCR 1차 검증에서 격리된
-것, `media_service.py` 참조)가 있으면, `EventGateway.get_pending_document_
-confirmation`으로 찾아 그 `source_span.quoted_text`를 `build_photo_session_
-opening`의 실마리로 녹여 넣는다("이 사진 속에 '1975년 결혼'이라고 적혀 있는 것
-같아요. 이때 이야기를 좀 더 들려주시겠어요?") — 별도의 예/아니오 게이트가 아니라
-자연스러운 인터뷰 대화 자체가 확인 절차를 대신한다. 그 PHOTO 세션이 완료되면
-(대화 내용이 Phase 2 후처리로 정식 이벤트 추출을 거치므로) 촉발제였던 그 OCR
-스테이징 이벤트는 역할을 다한 것으로 보고 삭제한다.
+원래는 Upstage Document Parse(텍스트만 읽는 OCR)로 사진을 분석했다 — 글자가
+없는 순수 추억 사진(예: 집 앞에서 찍은 가족사진)에서는 아무 단서도 얻지 못해
+"이 사진에 대해 더 자세히 이야기를 들려주시겠어요?" 같은 일반적인 질문만 던질
+수 있었다. Azure AI Vision의 Image Analysis API는 `features=caption,read`
+하나의 호출로 캡션(사진의 시각적 내용을 설명하는 문장, 예: "집 앞에서 5명이
+함께 찍은 사진")과 사진 속 텍스트(손글씨/인쇄 메모, 예: "1990년 집 앞에서
+가족들과.")를 동시에 지원해서(`app/clients/azure_vision.py`), Document Parse를
+완전히 대체했다. 캡션은 텍스트 유무와 무관하게 항상 얻으므로, 순수 추억 사진도
+이제 캡션 기반의 구체적인 오프닝 질문을 받는다.
 
-### OCR 텍스트로 사진 시기 자동 추정 — 구현 완료 (2026-07-13)
+`media_service._run_dual_track_analysis`가 분석 결과를
+`MediaAsset.image_caption`/`image_ocr_text`에 직접 저장하고(사진 속 텍스트가
+`_MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK` 이상이면 `TEXT_DOCUMENT` 트랙, 아니면
+`PURE_MEMORY`), `interview_service._photo_session_opening_text`가 이 필드를
+그대로 읽어 `build_photo_session_opening(image_caption=..., ocr_text=...)`로
+오프닝 질문을 만든다("집 앞에서 5명이 함께 찍은 사진인 것 같은데, 맞나요? 이
+사진에 대해 더 자세한 이야기를 들려주시겠어요?") — 예전처럼 `Event`를 거쳐
+`quoted_text`를 조회하지 않는다(`EventGateway.get_pending_document_
+confirmation`은 이제 없다).
+
+사진 속 텍스트가 검출되면 여전히 `Event(source_type=DOCUMENT)`로도 스테이징해
+대화가 아직 일어나지 않아도 검색 가능한 사실이 되게 한다 — 다만 더 이상 "대기
+중 확인" 상태로 특별 취급하지 않는다. PHOTO 세션이 완료돼도 이 이벤트를 별도로
+삭제하지 않고, 실제 대화에서 비슷한 사실이 다시 추출되면 Phase 3 중복 병합
+(`autobiography_service._merge_duplicate_events`)이 임베딩 유사도 + LLM
+판정으로 자연스럽게 흡수한다(별도의 예/아니오 확인 게이트를 만들지 않는다는
+원칙은 그대로 유지 — 아래 "핵심 개념" 참조).
+
+### 사진 속 텍스트로 사진 시기 자동 추정 — 구현 완료 (2026-07-13, 2026-07-15 Azure Vision으로 전환)
 
 `life_period_mapped`는 원래 사용자가 입력한 `age_at_time`으로만 채워졌다
 (`media_service.map_age_to_life_period`). 이제 사용자가 그걸 입력하지 않은
 사진은, `media_service._run_dual_track_analysis`가 TEXT_DOCUMENT 트랙으로
-분류할 때(OCR 텍스트가 `_MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK` 이상일 때) 그
-텍스트에서 시기 단서를 뽑아 `media_service._guess_life_period_from_ocr_text`로
-추정을 시도한다.
+분류할 때(Azure Vision이 읽어낸 텍스트가 `_MIN_TEXT_LENGTH_FOR_DOCUMENT_TRACK`
+이상일 때) 그 텍스트에서 시기 단서를 뽑아
+`media_service._guess_life_period_from_ocr_text`로 추정을 시도한다 — 이
+로직 자체는 어떤 엔진이 텍스트를 추출했는지와 무관하므로 Azure Vision 전환
+이후에도 그대로다.
 
 - Solar(`prompts.build_ocr_date_extraction_prompt` /
   `OCR_DATE_EXTRACTION_SCHEMA`)에게 텍스트 안의 **명시적** 연도("1975년")나
