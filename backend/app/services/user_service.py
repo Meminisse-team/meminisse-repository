@@ -3,6 +3,7 @@ import uuid
 from app.clients import supabase_auth
 from app.gateways.dto import UserCreateData, UserRecord
 from app.gateways.factory import Gateways
+from app.models.enums import EducationLevel, MaritalStatus
 from app.schemas.user import UserCreate
 
 
@@ -45,6 +46,9 @@ async def create_user(gateways: Gateways, payload: UserCreate) -> UserRecord:
             name=payload.name,
             birth_year=payload.birth_year,
             hometown=payload.hometown,
+            education_level=payload.education_level,
+            marital_status=payload.marital_status,
+            has_children=payload.has_children,
         )
     )
     await gateways.commit()
@@ -95,9 +99,18 @@ async def update_profile(
     name: str | None = None,
     birth_year: int | None = None,
     hometown: str | None = None,
+    education_level: EducationLevel | None = None,
+    marital_status: MaritalStatus | None = None,
+    has_children: bool | None = None,
 ) -> UserRecord:
     user = await gateways.users.update(
-        user_id, name=name, birth_year=birth_year, hometown=hometown
+        user_id,
+        name=name,
+        birth_year=birth_year,
+        hometown=hometown,
+        education_level=education_level,
+        marital_status=marital_status,
+        has_children=has_children,
     )
     await gateways.commit()
     return user

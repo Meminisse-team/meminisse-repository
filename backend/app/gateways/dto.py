@@ -28,10 +28,12 @@ from app.models.enums import (
     ConsentGrantedBy,
     ConsentType,
     DraftStatus,
+    EducationLevel,
     EventRelationType,
     EventSourceType,
     LifeMilestoneCategory,
     LifePeriod,
+    MaritalStatus,
     MediaAnalysisTrack,
     MessageRole,
     RiskClassification,
@@ -55,6 +57,9 @@ class UserRecord:
     hometown: str | None
     current_stage: UserStage
     role: UserRole = UserRole.USER
+    education_level: EducationLevel | None = None
+    marital_status: MaritalStatus | None = None
+    has_children: bool | None = None
 
 
 @dataclass
@@ -69,6 +74,9 @@ class UserCreateData:
     name: str
     birth_year: int | None = None
     hometown: str | None = None
+    education_level: EducationLevel | None = None
+    marital_status: MaritalStatus | None = None
+    has_children: bool | None = None
 
 
 # --------------------------------------------------------------------------- #

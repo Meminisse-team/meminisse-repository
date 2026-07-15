@@ -76,7 +76,14 @@ from app.models import (
     SessionType,
     User,
 )
-from app.models.enums import AssetType, LifePeriod, MediaAnalysisTrack, UserStage
+from app.models.enums import (
+    AssetType,
+    EducationLevel,
+    LifePeriod,
+    MaritalStatus,
+    MediaAnalysisTrack,
+    UserStage,
+)
 
 
 class SqlAlchemyAuditGateway(AuditGateway):
@@ -112,6 +119,9 @@ class SqlAlchemyUserGateway(UserGateway):
             name=data.name,
             birth_year=data.birth_year,
             hometown=data.hometown,
+            education_level=data.education_level,
+            marital_status=data.marital_status,
+            has_children=data.has_children,
         )
         self._session.add(user)
         await self._session.flush()
@@ -134,6 +144,9 @@ class SqlAlchemyUserGateway(UserGateway):
         birth_year: int | None = None,
         hometown: str | None = None,
         current_stage: UserStage | None = None,
+        education_level: EducationLevel | None = None,
+        marital_status: MaritalStatus | None = None,
+        has_children: bool | None = None,
     ) -> UserRecord:
         user = await self._session.get(User, user_id)
         if user is None:
@@ -146,6 +159,12 @@ class SqlAlchemyUserGateway(UserGateway):
             user.hometown = hometown
         if current_stage is not None:
             user.current_stage = current_stage
+        if education_level is not None:
+            user.education_level = education_level
+        if marital_status is not None:
+            user.marital_status = marital_status
+        if has_children is not None:
+            user.has_children = has_children
         await self._session.flush()
         return _to_user_record(user)
 
@@ -205,6 +224,12 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
     async def complete(self, session_id: UUID) -> None:
         session_obj = await self._require_session(session_id)
         session_obj.status = SessionStatus.COMPLETED
+        session_obj.completed_at = datetime.now(timezone.utc)
+        await self._session.flush()
+
+    async def skip(self, session_id: UUID) -> None:
+        session_obj = await self._require_session(session_id)
+        session_obj.status = SessionStatus.SKIPPED
         session_obj.completed_at = datetime.now(timezone.utc)
         await self._session.flush()
 
@@ -870,6 +895,9 @@ def _to_user_record(user: User) -> UserRecord:
         id=user.id, email=user.email, name=user.name,
         birth_year=user.birth_year, hometown=user.hometown, current_stage=user.current_stage,
         role=user.role,
+        education_level=user.education_level,
+        marital_status=user.marital_status,
+        has_children=user.has_children,
     )
 
 

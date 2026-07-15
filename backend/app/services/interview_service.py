@@ -17,7 +17,8 @@ from dataclasses import dataclass
 
 from app.agents import prompts
 from app.clients import solar
-from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, MediaAssetRecord, QuestionRecord, SessionCreateData
+from app.data.question_bank import QUESTION_BANK_BY_SEQUENCE
+from app.gateways.dto import ChatLogRecord, InterviewSessionRecord, MediaAssetRecord, QuestionRecord, SessionCreateData, UserRecord
 from app.gateways.factory import Gateways
 from app.models.enums import LifePeriod, MessageRole, SessionStatus, SessionType, UserStage
 from app.schemas.interview import SessionCreate
@@ -53,6 +54,42 @@ class _NextInterviewItem:
     media_asset: MediaAssetRecord | None = None
 
 
+def _question_eligible(question: QuestionRecord, user: UserRecord) -> bool:
+    """question_bank.py의 "eligibility" 메타데이터로 이 질문이 이 유저에게
+    적합한지 판정한다. 조건이 없거나, 있어도 그 프로필 필드를 아직 모르면
+    (None — 응답하지 않음) 항상 통과시킨다: 모르면 안전하게 묻는 쪽이 기본값이고,
+    가입 시 명시적으로 입력받은 값과 명확히 어긋난다고 확인된 경우에만 건너뛴다
+    (2026-07-16 설계 — 대화 내용 추론이 아니라 온보딩 라디오 버튼 응답 기준)."""
+    entry = QUESTION_BANK_BY_SEQUENCE.get(question.sequence_order)
+    eligibility = entry.get("eligibility") if entry else None
+    if eligibility is None:
+        return True
+    user_value = getattr(user, eligibility["field"], None)
+    if user_value is None:
+        return True
+    normalized = user_value.value if hasattr(user_value, "value") else user_value
+    if "requires_one_of" in eligibility:
+        return normalized in eligibility["requires_one_of"]
+    if "requires" in eligibility:
+        return normalized == eligibility["requires"]
+    return True
+
+
+async def _auto_skip_question(
+    gateways: Gateways, *, user_id: uuid.UUID, question_id: uuid.UUID
+) -> None:
+    """사용자에게 한 번도 보여주지 않고(chat_log 없음) 곧바로 SKIPPED로 전이한다.
+    이 함수가 preview_next_item(GET, 커밋 없음) 안에서도 호출될 수 있어, 스킵
+    처리가 그 요청의 다른 부분과 무관하게 반드시 영속되도록 여기서 직접
+    커밋한다 — 안 그러면 GET 요청 종료 시 롤백돼 매번 같은 후보를 다시
+    건너뛰는 계산을 반복하게 된다."""
+    session = await gateways.sessions.create(
+        SessionCreateData(user_id=user_id, session_type=SessionType.FIXED_QUESTION, question_id=question_id)
+    )
+    await gateways.sessions.skip(session.id)
+    await gateways.commit()
+
+
 async def _resolve_next_item(gateways: Gateways, user_id: uuid.UUID) -> _NextInterviewItem | None:
     """다음으로 보여줄 세션 하나를 고른다 — 고정 질문 큐와 사진 큐를 합쳐, 생애주기
     경계마다(그 시기 고정 질문을 모두 마친 직후) 그 시기 사진을 먼저 끼워 넣고,
@@ -69,8 +106,23 @@ async def _resolve_next_item(gateways: Gateways, user_id: uuid.UUID) -> _NextInt
     불명 사진과 함께 전체 완료 후 몰아보기로 미룬다 — 그래서 아래 경계 확인은
     "next_question이 그 생애주기의 첫 질문이라 아직 한 번도 배정된 적 없을 때"
     (=지금 막 그 경계를 넘은 시점)에만 하고, 이미 그 생애주기 질문을 하나라도
-    시작했으면(설령 next_question이 그 생애주기 중이라도) 건너뛴다."""
+    시작했으면(설령 next_question이 그 생애주기 중이라도) 건너뛴다.
+
+    동적 질문 필터링(2026-07-16): get_next_unasked가 돌려준 후보가 이 유저의
+    프로필(가입 시 라디오 버튼으로 입력받은 education_level/marital_status/
+    has_children)과 맞지 않으면(_question_eligible 참조) 사용자에게 보여주지
+    않고 바로 SKIPPED 세션을 만들어(_auto_skip_question) "배정됨" 처리한 뒤
+    다음 후보를 다시 조회한다 — get_next_unasked는 status가 OPEN이 아닌 세션의
+    question_id를 제외하므로 이 루프는 매번 다른 후보로 수렴한다."""
+    user = await gateways.users.get_by_id(user_id)
     next_question = await gateways.questions.get_next_unasked(user_id)
+    while (
+        next_question is not None
+        and user is not None
+        and not _question_eligible(next_question, user)
+    ):
+        await _auto_skip_question(gateways, user_id=user_id, question_id=next_question.id)
+        next_question = await gateways.questions.get_next_unasked(user_id)
 
     if next_question is not None:
         idx = _LIFE_PERIOD_ORDER.index(next_question.life_period)

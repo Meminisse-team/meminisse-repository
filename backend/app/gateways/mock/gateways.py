@@ -49,7 +49,9 @@ from app.models.enums import (
     AutobiographyStatus,
     ConsentType,
     DraftStatus,
+    EducationLevel,
     LifePeriod,
+    MaritalStatus,
     MessageRole,
     RiskClassification,
     SessionStatus,
@@ -108,6 +110,9 @@ class MockUserGateway(UserGateway):
             hometown=data.hometown,
             current_stage=UserStage.ONBOARDING,
             role=UserRole.USER,
+            education_level=data.education_level,
+            marital_status=data.marital_status,
+            has_children=data.has_children,
         )
         self._store.users[user.id] = user
         return user
@@ -126,6 +131,9 @@ class MockUserGateway(UserGateway):
         birth_year: int | None = None,
         hometown: str | None = None,
         current_stage: UserStage | None = None,
+        education_level: EducationLevel | None = None,
+        marital_status: MaritalStatus | None = None,
+        has_children: bool | None = None,
     ) -> UserRecord:
         user = self._store.users.get(user_id)
         if user is None:
@@ -138,6 +146,12 @@ class MockUserGateway(UserGateway):
             user.hometown = hometown
         if current_stage is not None:
             user.current_stage = current_stage
+        if education_level is not None:
+            user.education_level = education_level
+        if marital_status is not None:
+            user.marital_status = marital_status
+        if has_children is not None:
+            user.has_children = has_children
         return user
 
 
@@ -196,6 +210,11 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
     async def complete(self, session_id: uuid.UUID) -> None:
         session = self._require_session(session_id)
         session.status = SessionStatus.COMPLETED
+        session.completed_at = datetime.now(timezone.utc)
+
+    async def skip(self, session_id: uuid.UUID) -> None:
+        session = self._require_session(session_id)
+        session.status = SessionStatus.SKIPPED
         session.completed_at = datetime.now(timezone.utc)
 
     async def list_session_prose_by_user(self, user_id: uuid.UUID) -> list[str]:

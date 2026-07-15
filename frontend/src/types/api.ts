@@ -6,6 +6,8 @@
 
 export type UserStage = "onboarding" | "interview" | "publishing" | "published";
 export type UserRole = "user" | "admin";
+export type EducationLevel = "elementary" | "middle_school" | "high_school" | "university" | "graduate_school";
+export type MaritalStatus = "single" | "married" | "divorced" | "widowed";
 export type LifePeriod = "childhood" | "youth" | "adulthood" | "senior";
 export type SessionType = "photo" | "fixed_question";
 export type SessionStatus = "open" | "completed" | "skipped";
@@ -34,6 +36,9 @@ export interface User {
   hometown: string | null;
   current_stage: UserStage;
   role: UserRole;
+  education_level: EducationLevel | null;
+  marital_status: MaritalStatus | null;
+  has_children: boolean | null;
 }
 
 /** POST /api/v1/auth/oauth-sync 응답. is_new=true면 방금 프로필이 생성된

@@ -50,7 +50,9 @@ from app.gateways.dto import (
 from app.models.enums import (
     AutobiographyStatus,
     ConsentType,
+    EducationLevel,
     LifePeriod,
+    MaritalStatus,
     MediaAnalysisTrack,
     MessageRole,
     RiskClassification,
@@ -103,11 +105,21 @@ class UserGateway(ABC):
         birth_year: int | None = None,
         hometown: str | None = None,
         current_stage: UserStage | None = None,
+        education_level: EducationLevel | None = None,
+        marital_status: MaritalStatus | None = None,
+        has_children: bool | None = None,
     ) -> UserRecord:
         """None인 인자는 "건드리지 않는다"는 뜻이다(부분 갱신). 소셜 로그인 온보딩
         완성 단계(PATCH /users/{id})와 일반 프로필 수정, 그리고 서비스 레이어가
         진행 단계 전환 시점(첫 인터뷰 세션 생성/Phase 3 완료/최종 윤문 완료)에
-        current_stage만 갱신할 때도 함께 쓰인다."""
+        current_stage만 갱신할 때도 함께 쓰인다.
+
+        education_level/marital_status/has_children도 같은 "None=건드리지 않음"
+        규칙을 따른다 — 알려진 한계: 이미 값을 넣은 사용자가 나중에 마음을 바꿔
+        "응답하지 않음"으로 되돌리고 싶어도 이 메서드로는 표현할 수 없다(온보딩은
+        1회성이라 가입 직후 미응답 상태에서 처음 값을 넣는 흐름만 지원하면 충분하다는
+        판단, 2026-07-16). 이후 실제로 필요해지면 별도 "명시적으로 null로 설정"
+        경로를 추가할 것."""
 
 
 class InterviewSessionGateway(ABC):
@@ -142,6 +154,16 @@ class InterviewSessionGateway(ABC):
     @abstractmethod
     async def complete(self, session_id: UUID) -> None:
         """status=COMPLETED, completed_at=now로 전이한다."""
+
+    @abstractmethod
+    async def skip(self, session_id: UUID) -> None:
+        """status=SKIPPED, completed_at=now로 전이한다. 사용자에게 한 번도 보여주지
+        않은 채(chat_logs 없음) 자동으로 건너뛴 고정 질문 세션에 쓴다 — 동적 질문
+        필터링(interview_service.py:_resolve_next_item, 2026-07-16)이 이 유저의
+        프로필과 맞지 않는 질문을 발견하면 즉시 이 상태로 만들어 "배정됨" 판정에서
+        빠지게 한다(get_next_unasked의 계약: status가 OPEN이 아닌 세션의 question_id는
+        더 이상 후보에 오르지 않음). COMPLETED가 아닌 SKIPPED를 쓰는 이유는 실제로
+        답변을 받은 게 아니라는 걸 구분해 남겨두기 위함이다."""
 
     @abstractmethod
     async def list_session_prose_by_user(self, user_id: UUID) -> list[str]:

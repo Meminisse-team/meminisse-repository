@@ -13,9 +13,72 @@ import { legalApi } from "@/lib/api/legal";
 import { oauthPendingProfile } from "@/lib/auth/oauthPendingProfile";
 import { session } from "@/lib/auth/session";
 import { signupDraft, type SignupDraft } from "@/lib/auth/signupDraft";
+import type { EducationLevel, MaritalStatus } from "@/types/api";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 7;
 const CONSENT_NOTICE_VERSION = "v1";
+
+// 셋 다 선택 응답이다 — 학력·혼인여부·자녀유무를 가입 시점부터 캐묻는 게 부담일
+// 수 있어(2026-07-16 설계), 각 단계마다 "응답하지 않음"을 명시적인 선택지로
+// 둔다. 대화 내용에서 추론하지 않고 이 라디오 버튼 응답만으로 동적 질문
+// 필터링(backend/app/data/question_bank.py의 eligibility)을 판정한다.
+const EDUCATION_OPTIONS: { value: EducationLevel; label: string }[] = [
+  { value: "elementary", label: "초등학교 졸업" },
+  { value: "middle_school", label: "중학교 졸업" },
+  { value: "high_school", label: "고등학교 졸업" },
+  { value: "university", label: "대학교 졸업" },
+  { value: "graduate_school", label: "대학원 졸업" },
+];
+
+const MARITAL_OPTIONS: { value: MaritalStatus; label: string }[] = [
+  { value: "single", label: "미혼" },
+  { value: "married", label: "기혼" },
+  { value: "divorced", label: "이혼" },
+  { value: "widowed", label: "사별" },
+];
+
+const CHILDREN_OPTIONS: { value: "yes" | "no"; label: string }[] = [
+  { value: "yes", label: "있음" },
+  { value: "no", label: "없음" },
+];
+
+function RadioGroup<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T | "";
+  onChange: (value: T | "") => void;
+}) {
+  return (
+    <div className="mt-10 flex flex-col gap-3">
+      {options.map((option) => (
+        <label
+          key={option.value}
+          className="flex items-center gap-3 text-xl text-black/80"
+        >
+          <input
+            type="radio"
+            checked={value === option.value}
+            onChange={() => onChange(option.value)}
+            className="h-5 w-5 accent-black"
+          />
+          {option.label}
+        </label>
+      ))}
+      <label className="mt-2 flex items-center gap-3 text-base text-black/40">
+        <input
+          type="radio"
+          checked={value === ""}
+          onChange={() => onChange("")}
+          className="h-5 w-5 accent-black"
+        />
+        응답하지 않음
+      </label>
+    </div>
+  );
+}
 
 /** 이메일/비밀번호 가입과 소셜 로그인 둘 다 이 화면을 함께 쓴다 — 물어볼 내용
  * (생년/고향/동의)은 같지만 "계정을 언제, 어떻게 만드는지"가 다르다:
@@ -32,6 +95,9 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [birthYear, setBirthYear] = useState("");
   const [hometown, setHometown] = useState("");
+  const [educationLevel, setEducationLevel] = useState<EducationLevel | "">("");
+  const [maritalStatus, setMaritalStatus] = useState<MaritalStatus | "">("");
+  const [hasChildren, setHasChildren] = useState<"yes" | "no" | "">("");
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +144,9 @@ export default function OnboardingPage() {
           name: source.draft.name,
           birth_year: birthYear ? Number(birthYear) : undefined,
           hometown: hometown || undefined,
+          education_level: educationLevel || undefined,
+          marital_status: maritalStatus || undefined,
+          has_children: hasChildren ? hasChildren === "yes" : undefined,
         });
         const { access_token, refresh_token } = await authApi.login({
           email: source.draft.email,
@@ -91,6 +160,9 @@ export default function OnboardingPage() {
         await usersApi.updateProfile(source.userId, {
           birth_year: birthYear ? Number(birthYear) : undefined,
           hometown: hometown || undefined,
+          education_level: educationLevel || undefined,
+          marital_status: maritalStatus || undefined,
+          has_children: hasChildren ? hasChildren === "yes" : undefined,
         });
         userId = source.userId;
       }
@@ -168,6 +240,39 @@ export default function OnboardingPage() {
           <>
             <Typewriter
               key="step3"
+              text={"최종 학력을 알려주세요."}
+              className="font-serif-kr text-2xl leading-relaxed text-black sm:text-3xl"
+            />
+            <p className="mt-3 text-sm text-black/40">
+              답변에 맞는 이야기만 골라 물어보는 데 참고할게요. 답하고 싶지 않으면 넘어가셔도 돼요.
+            </p>
+            <RadioGroup options={EDUCATION_OPTIONS} value={educationLevel} onChange={setEducationLevel} />
+          </>
+        )}
+        {step === 4 && (
+          <>
+            <Typewriter
+              key="step4"
+              text={"혼인 여부를 알려주세요."}
+              className="font-serif-kr text-2xl leading-relaxed text-black sm:text-3xl"
+            />
+            <RadioGroup options={MARITAL_OPTIONS} value={maritalStatus} onChange={setMaritalStatus} />
+          </>
+        )}
+        {step === 5 && (
+          <>
+            <Typewriter
+              key="step5"
+              text={"자녀가 있으신가요?"}
+              className="font-serif-kr text-2xl leading-relaxed text-black sm:text-3xl"
+            />
+            <RadioGroup options={CHILDREN_OPTIONS} value={hasChildren} onChange={setHasChildren} />
+          </>
+        )}
+        {step === 6 && (
+          <>
+            <Typewriter
+              key="step6"
               text={"소중한 이야기를 기록하기 위해\n동의가 필요해요."}
               className="font-serif-kr text-2xl leading-relaxed text-black sm:text-3xl"
             />
@@ -198,7 +303,7 @@ export default function OnboardingPage() {
           onClick={goNext}
           disabled={
             submitting ||
-            (step === 3 && !agreed) ||
+            (step === 6 && !agreed) ||
             (step === 1 && birthYear !== "" && Number(birthYear) < 1900)
           }
         >

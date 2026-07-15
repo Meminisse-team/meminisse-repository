@@ -15,6 +15,26 @@ class UserRole(str, PyEnum):
     ADMIN = "admin"
 
 
+class EducationLevel(str, PyEnum):
+    """가입 시 라디오 버튼으로 직접 입력받는 최종 학력(선택 응답, 2026-07-16 설계
+    변경 — 대화 내용 추론 대신 명시적 입력으로 확정). 질문 필터링(app/data/
+    question_bank.py의 eligibility)이 참조한다."""
+    ELEMENTARY = "elementary"
+    MIDDLE_SCHOOL = "middle_school"
+    HIGH_SCHOOL = "high_school"
+    UNIVERSITY = "university"
+    GRADUATE_SCHOOL = "graduate_school"
+
+
+class MaritalStatus(str, PyEnum):
+    """가입 시 라디오 버튼으로 직접 입력받는 혼인 여부(선택 응답). EducationLevel과
+    동일한 이유로 질문 필터링이 참조한다."""
+    SINGLE = "single"
+    MARRIED = "married"
+    DIVORCED = "divorced"
+    WIDOWED = "widowed"
+
+
 class LifePeriod(str, PyEnum):
     """질문/사건의 시간적 배경 분류. 타임라인 정렬용 메타데이터. 챕터 구분 기준 아님."""
     CHILDHOOD = "childhood"

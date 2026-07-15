@@ -1,5 +1,12 @@
 import { apiClient } from "@/lib/api/client";
-import type { ConsentGrantedBy, ConsentRecord, ConsentType, User } from "@/types/api";
+import type {
+  ConsentGrantedBy,
+  ConsentRecord,
+  ConsentType,
+  EducationLevel,
+  MaritalStatus,
+  User,
+} from "@/types/api";
 
 export interface CreateUserInput {
   email: string;
@@ -9,6 +16,11 @@ export interface CreateUserInput {
   password: string;
   birth_year?: number;
   hometown?: string;
+  /** 온보딩 라디오 버튼 선택 응답. 안 보내면 "응답하지 않음"과 동일하게 취급되어
+   * 동적 질문 필터링이 그 정보를 전제로 한 질문도 그대로 내보낸다. */
+  education_level?: EducationLevel;
+  marital_status?: MaritalStatus;
+  has_children?: boolean;
 }
 
 export interface CreateConsentInput {
@@ -24,6 +36,9 @@ export interface UpdateProfileInput {
   name?: string;
   birth_year?: number;
   hometown?: string;
+  education_level?: EducationLevel;
+  marital_status?: MaritalStatus;
+  has_children?: boolean;
 }
 
 export const usersApi = {

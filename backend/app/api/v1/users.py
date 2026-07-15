@@ -52,6 +52,9 @@ async def update_user(
         name=payload.name,
         birth_year=payload.birth_year,
         hometown=payload.hometown,
+        education_level=payload.education_level,
+        marital_status=payload.marital_status,
+        has_children=payload.has_children,
     )
     return UserRead.model_validate(user)
 

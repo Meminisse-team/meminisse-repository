@@ -1,3 +1,12 @@
+# 경고: `docker compose config`를 인자 없이 그냥 실행하면 worker 서비스의 env_file
+# (.env)이 완전히 해석(resolve)되어 AWS/Supabase/Upstage 키 등 실제 시크릿 값이
+# 평문으로 표준출력에 그대로 찍힌다(2026-07-16 확인) — `config`의 원래 목적 자체가
+# "실제로 컨테이너에 적용될 설정을 보여주는 것"이라 env_file 치환도 예외 없이 전부
+# 풀어서 보여주기 때문이다(버그가 아니라 의도된 동작). 문법만 검증하려면:
+#   docker compose config --quiet          # 성공 시 아무 것도 안 찍고 종료코드 0
+#   docker compose config --no-interpolate # 서비스 구조는 보여주되 env_file 값은 풀지 않음
+# 이 둘 중 하나만 쓰고, 인자 없는 `docker compose config`의 출력은 터미널에 남기거나
+# 로그/이슈에 붙여넣지 말 것.
 services:
   redis:
     image: redis:7-alpine
@@ -11,5 +20,46 @@ services:
       timeout: 3s
       retries: 5
 
+  # 2026-07-15 사고 재발 방지: 이전에는 Celery 워커를 Docker 밖에서 수동으로
+  # 띄웠어서(Windows --pool=solo 제약, Dockerfile 참조) `docker compose up`으로
+  # Redis만 켜지고 워커는 안 켜진 채 방치되는 일이 실제로 있었다. 이제 워커도 이
+  # compose 파일 안에서 관리되므로 `docker compose up -d`만으로 둘 다 뜬다.
+  worker:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # 컨테이너 안에서는 host.docker.internal이 아니라 이 compose 네트워크 안의
+      # 서비스명(redis)으로 접근한다 — .env의 localhost:6379는 호스트에서 직접
+      # celery를 띄울 때 쓰던 값이라 컨테이너 안에서는 그대로 못 쓴다.
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes:
+      # NLI 모델(수백MB) 캐시를 컨테이너 재기동 사이에 보존 — 매번 재기동될 때마다
+      # HuggingFace에서 다시 받으면 느리고 불필요한 네트워크 사용이다.
+      - hf-cache:/app/.cache/huggingface
+    healthcheck:
+      # 실 장애 대응(2026-07-15)에서 검증한 것과 동일한 명령 — 프로세스가 떠 있어도
+      # 브로커에 응답 못 하는 상태(예: DuplicateNodenameWarning으로 두 인스턴스가
+      # 겹친 경우)까지 잡아낸다. 다만 이 healthcheck는 `docker ps`/모니터링용
+      # 가시성만 제공하고, standalone Docker Compose에서는 unhealthy 판정만으로
+      # 자동 재기동을 트리거하지 않는다(Swarm/Kubernetes와의 차이) — 실제 자동
+      # 복구는 아래 restart_policy가 "프로세스가 죽어서 컨테이너가 종료됐을 때"만
+      # 담당한다.
+      test: ["CMD", "celery", "-A", "app.workers.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # 워커 프로세스가 죽어서 컨테이너가 종료되면(OOM, 처리되지 않은 예외 등) Docker가
+    # 자동으로 다시 띄운다. Docker Desktop을 아예 껐다 켜는 경우까지 포함해 컨테이너를
+    # 계속 살려두려면 restart_policy만으로는 부족하고 "Docker Desktop 시작 시 실행"
+    # 설정도 켜져 있어야 한다(OS 자체가 꺼지는 경우는 어떤 restart_policy로도 못 막음).
+    restart: unless-stopped
+
 volumes:
   redis-data:
+  hf-cache:

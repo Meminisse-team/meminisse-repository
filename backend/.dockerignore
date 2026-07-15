@@ -1,0 +1,14 @@
+# .env는 절대 이미지에 구워 넣지 않는다 — 시크릿이 이미지 레이어에 영구히 남아,
+# 나중에 키를 교체(rotate)해도 과거에 빌드된 이미지에서는 옛 값을 그대로 꺼내볼 수
+# 있게 된다. docker-compose.yml의 worker 서비스는 env_file로 런타임에만 주입한다.
+.env
+.env.example
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.deepeval/
+
+tests/
+evals/
+docs/

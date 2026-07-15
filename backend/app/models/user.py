@@ -1,10 +1,10 @@
-from sqlalchemy import Column, DateTime, ForeignKey, SmallInteger, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, SmallInteger, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.models.base import Base, str_enum
-from app.models.enums import UserRole, UserStage
+from app.models.enums import EducationLevel, MaritalStatus, UserRole, UserStage
 
 
 class User(Base):
@@ -48,6 +48,14 @@ class User(Base):
         default=UserRole.USER,
         server_default=UserRole.USER.value,
     )
+    # 가입 시 라디오 버튼으로 직접 입력받는 선택 응답(2026-07-16 설계 — 대화 내용
+    # 추론 대신 명시적 입력). null = 응답하지 않음("모름"과 동일하게 취급 — 그
+    # 정보를 전제로 한 질문도 필터링 없이 정상적으로 나간다). QuestionGateway.
+    # get_next_unasked의 자격 조건 평가(app/data/question_bank.py의 eligibility)가
+    # 참조한다.
+    education_level = Column(str_enum(EducationLevel, name="educationlevel"), nullable=True)
+    marital_status = Column(str_enum(MaritalStatus, name="maritalstatus"), nullable=True)
+    has_children = Column(Boolean, nullable=True)
     # 정수 인덱스 대신 FK를 사용하여 질문 비활성화 시 인덱스 깨짐 방지.
     current_question_id = Column(
         UUID(as_uuid=True),
