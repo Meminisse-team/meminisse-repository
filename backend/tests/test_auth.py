@@ -429,86 +429,24 @@ def test_cannot_read_another_users_interview_session(client: TestClient) -> None
 
 
 # --------------------------------------------------------------------------- #
-# 소셜 로그인(OAuth) 동기화 / 프로필 완성                                       #
+# 프로필 부분 수정 (PATCH /users/{user_id})                                    #
 # --------------------------------------------------------------------------- #
 
 
-def _issue_oauth_style_token(*, email: str, name: str | None) -> str:
-    """실제 Kakao/Google 로그인은 Supabase가 자체적으로 auth.users를 만들고 그
-    세션 토큰을 프론트로 돌려준다 — 이 프로젝트의 admin_create_user를 거치지
-    않는다. 그 상황을 흉내 내기 위해 _FakeSupabaseAuth를 우회하고 직접 서명한
-    JWT로 "이미 Supabase 쪽엔 계정이 있지만 public.users는 아직 없는" 상태를
-    만든다."""
-    now = int(time.time())
-    claims: dict[str, Any] = {
-        "sub": str(uuid.uuid4()),
-        "aud": "authenticated",
-        "email": email,
-        "iat": now,
-        "exp": now + 3600,
-    }
-    if name is not None:
-        claims["user_metadata"] = {"name": name}
-    return pyjwt.encode(claims, _TEST_JWT_SECRET, algorithm="HS256")
-
-
-def test_oauth_sync_creates_profile_on_first_login(client: TestClient) -> None:
-    token = _issue_oauth_style_token(email="oauth-new@example.com", name="카카오유저")
-    resp = client.post("/api/v1/auth/oauth-sync", headers={"Authorization": f"Bearer {token}"})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["is_new"] is True
-    assert body["user"]["email"] == "oauth-new@example.com"
-    assert body["user"]["name"] == "카카오유저"
-    assert body["user"]["birth_year"] is None  # 소셜 로그인은 생년/고향 없이 최소 프로필로 생성
-
-
-def test_oauth_sync_is_idempotent_on_repeat_login(client: TestClient) -> None:
-    """같은 유저가 다시 로그인해도(같은 sub) 두 번째부터는 is_new=False여야 하고,
-    프로필을 다시 만들려 하지 않아야 한다."""
-    now = int(time.time())
-    user_id = uuid.uuid4()
-
-    def _token_for(user_id: uuid.UUID) -> str:
-        return pyjwt.encode(
-            {
-                "sub": str(user_id),
-                "aud": "authenticated",
-                "email": "oauth-repeat@example.com",
-                "user_metadata": {"name": "반복유저"},
-                "iat": now,
-                "exp": now + 3600,
-            },
-            _TEST_JWT_SECRET,
-            algorithm="HS256",
-        )
-
-    token = _token_for(user_id)
-    first = client.post("/api/v1/auth/oauth-sync", headers={"Authorization": f"Bearer {token}"})
-    assert first.status_code == 200
-    assert first.json()["is_new"] is True
-
-    second = client.post("/api/v1/auth/oauth-sync", headers={"Authorization": f"Bearer {token}"})
-    assert second.status_code == 200
-    assert second.json()["is_new"] is False
-    assert second.json()["user"]["id"] == first.json()["user"]["id"]
-
-
-def test_oauth_sync_falls_back_to_email_local_part_when_no_name_metadata(client: TestClient) -> None:
-    """카카오 동의 항목에서 닉네임 제공에 동의하지 않는 등, user_metadata에 이름이
-    전혀 없는 경우에도 500 없이 이메일 로컬파트로 대체돼야 한다."""
-    token = _issue_oauth_style_token(email="noname@example.com", name=None)
-    resp = client.post("/api/v1/auth/oauth-sync", headers={"Authorization": f"Bearer {token}"})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["user"]["name"] == "noname"
+def _signup_and_login(client: TestClient, *, email: str, name: str) -> tuple[str, str]:
+    """POST /users로 가입한 뒤 로그인해 (user_id, access_token)을 돌려준다."""
+    signup = client.post(
+        "/api/v1/users", json={"email": email, "name": name, "password": "password123"}
+    )
+    assert signup.status_code == 201, signup.text
+    login = client.post("/api/v1/auth/login", json={"email": email, "password": "password123"})
+    assert login.status_code == 200, login.text
+    return signup.json()["id"], login.json()["access_token"]
 
 
 def test_update_profile_fills_birth_year_and_hometown(client: TestClient) -> None:
-    """소셜 로그인 온보딩(프로필 완성 단계)이 실제로 사용하는 경로 — 계정 생성
-    시점에 없던 생년/고향을 로그인 이후 PATCH로 채운다."""
-    token = _issue_oauth_style_token(email="patch-me@example.com", name="패치유저")
-    sync = client.post("/api/v1/auth/oauth-sync", headers={"Authorization": f"Bearer {token}"})
-    user_id = sync.json()["user"]["id"]
+    """가입 시점에 안 받은 생년/고향을 로그인 이후 PATCH로 채우는 경로."""
+    user_id, token = _signup_and_login(client, email="patch-me@example.com", name="패치유저")
 
     patched = client.patch(
         f"/api/v1/users/{user_id}",
@@ -522,13 +460,8 @@ def test_update_profile_fills_birth_year_and_hometown(client: TestClient) -> Non
 
 
 def test_cannot_patch_another_users_profile(client: TestClient) -> None:
-    token_a = _issue_oauth_style_token(email="patch-a@example.com", name="A")
-    sync_b = client.post(
-        "/api/v1/auth/oauth-sync",
-        headers={"Authorization": f"Bearer {_issue_oauth_style_token(email='patch-b@example.com', name='B')}"},
-    )
-    client.post("/api/v1/auth/oauth-sync", headers={"Authorization": f"Bearer {token_a}"})
-    user_b_id = sync_b.json()["user"]["id"]
+    _, token_a = _signup_and_login(client, email="patch-a@example.com", name="A")
+    user_b_id, _ = _signup_and_login(client, email="patch-b@example.com", name="B")
 
     resp = client.patch(
         f"/api/v1/users/{user_b_id}",

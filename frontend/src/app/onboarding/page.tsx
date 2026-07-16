@@ -10,7 +10,6 @@ import { authApi } from "@/lib/api/auth";
 import { usersApi } from "@/lib/api/users";
 import { ApiError } from "@/lib/api/client";
 import { legalApi } from "@/lib/api/legal";
-import { oauthPendingProfile } from "@/lib/auth/oauthPendingProfile";
 import { session } from "@/lib/auth/session";
 import { signupDraft, type SignupDraft } from "@/lib/auth/signupDraft";
 import type { EducationLevel, MaritalStatus } from "@/types/api";
@@ -80,18 +79,11 @@ function RadioGroup<T extends string>({
   );
 }
 
-/** 이메일/비밀번호 가입과 소셜 로그인 둘 다 이 화면을 함께 쓴다 — 물어볼 내용
- * (생년/고향/동의)은 같지만 "계정을 언제, 어떻게 만드는지"가 다르다:
- * - 이메일/비밀번호: 계정이 아직 없다. 이 화면 끝에서 POST /users로 한 번에 생성.
- * - 소셜 로그인: 이미 로그인된 상태다(auth/callback에서 oauth-sync 완료). 이름도
- *   이미 알고 있으니 다시 안 묻고, 끝에서 PATCH /users/{id}로 채우기만 한다. */
-type OnboardingSource =
-  | { kind: "password"; draft: SignupDraft }
-  | { kind: "oauth"; name: string; userId: string };
-
 export default function OnboardingPage() {
   const router = useRouter();
-  const [source, setSource] = useState<OnboardingSource | null>(null);
+  // 계정은 아직 없다 — 첫 화면에서 받은 이메일/비밀번호/이름(draft)에 이 화면의
+  // 생년/고향/동의까지 다 모은 뒤, 마지막 단계에서 POST /users로 한 번에 생성한다.
+  const [draft, setDraft] = useState<SignupDraft | null>(null);
   const [step, setStep] = useState(0);
   const [birthYear, setBirthYear] = useState("");
   const [hometown, setHometown] = useState("");
@@ -114,67 +106,46 @@ export default function OnboardingPage() {
   }, []);
 
   useEffect(() => {
-    const draft = signupDraft.get();
-    if (draft) {
-      setSource({ kind: "password", draft });
-      return;
-    }
-    const pending = oauthPendingProfile.get();
-    const userId = session.getUserId();
-    if (pending && userId) {
-      setSource({ kind: "oauth", name: pending.name, userId });
+    const stored = signupDraft.get();
+    if (stored) {
+      setDraft(stored);
       return;
     }
     router.replace("/");
   }, [router]);
 
-  if (!source) return null;
-  const displayName = source.kind === "password" ? source.draft.name : source.name;
+  if (!draft) return null;
+  const displayName = draft.name;
 
   async function handleFinish() {
-    if (!source) return;
+    if (!draft) return;
     setError(null);
     setSubmitting(true);
     try {
-      let userId: string;
-      if (source.kind === "password") {
-        const user = await usersApi.create({
-          email: source.draft.email,
-          password: source.draft.password,
-          name: source.draft.name,
-          birth_year: birthYear ? Number(birthYear) : undefined,
-          hometown: hometown || undefined,
-          education_level: educationLevel || undefined,
-          marital_status: maritalStatus || undefined,
-          has_children: hasChildren ? hasChildren === "yes" : undefined,
-        });
-        const { access_token, refresh_token } = await authApi.login({
-          email: source.draft.email,
-          password: source.draft.password,
-        });
-        session.setTokens(access_token, refresh_token);
-        session.setUserId(user.id);
-        userId = user.id;
-      } else {
-        // 이미 로그인돼 있다 — 생년/고향만 채운다(값을 안 넣은 필드는 그대로 유지).
-        await usersApi.updateProfile(source.userId, {
-          birth_year: birthYear ? Number(birthYear) : undefined,
-          hometown: hometown || undefined,
-          education_level: educationLevel || undefined,
-          marital_status: maritalStatus || undefined,
-          has_children: hasChildren ? hasChildren === "yes" : undefined,
-        });
-        userId = source.userId;
-      }
+      const user = await usersApi.create({
+        email: draft.email,
+        password: draft.password,
+        name: draft.name,
+        birth_year: birthYear ? Number(birthYear) : undefined,
+        hometown: hometown || undefined,
+        education_level: educationLevel || undefined,
+        marital_status: maritalStatus || undefined,
+        has_children: hasChildren ? hasChildren === "yes" : undefined,
+      });
+      const { access_token, refresh_token } = await authApi.login({
+        email: draft.email,
+        password: draft.password,
+      });
+      session.setTokens(access_token, refresh_token);
+      session.setUserId(user.id);
 
-      await usersApi.createConsent(userId, {
+      await usersApi.createConsent(user.id, {
         consent_type: "data_collection",
         notice_version: CONSENT_NOTICE_VERSION,
         granted_by: "self",
       });
 
       signupDraft.clear();
-      oauthPendingProfile.clear();
       router.push("/dashboard");
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {

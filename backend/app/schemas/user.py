@@ -45,10 +45,8 @@ class UserRead(BaseModel):
 
 
 class UserProfileUpdate(BaseModel):
-    """PATCH /api/v1/users/{user_id}. 소셜 로그인은 이메일/비밀번호 가입과 달리
-    생년/고향을 계정 생성과 동시에 받을 수 없어(app/services/user_service.py:
-    sync_oauth_user 참조) 로그인 직후 이 엔드포인트로 채운다 — 다만 일반 프로필
-    수정에도 그대로 쓸 수 있도록 범용으로 둔다. 전부 선택 필드이며 보낸 값만 갱신.
+    """PATCH /api/v1/users/{user_id}. 일반 프로필 수정에 그대로 쓸 수 있도록
+    범용으로 둔다. 전부 선택 필드이며 보낸 값만 갱신.
 
     education_level/marital_status/has_children도 같은 "보낸 값만 갱신" 규칙을
     따른다 — 알려진 한계: 한 번 값을 넣은 뒤 "응답하지 않음"으로 되돌리는 건 이
@@ -60,10 +58,3 @@ class UserProfileUpdate(BaseModel):
     education_level: EducationLevel | None = None
     marital_status: MaritalStatus | None = None
     has_children: bool | None = None
-
-
-class OAuthSyncResponse(BaseModel):
-    user: UserRead
-    is_new: bool = Field(
-        ..., description="이 서비스에 처음 로그인해 방금 프로필이 생성됐으면 true — 프론트가 이 값으로 프로필 완성 단계 진입 여부를 결정한다."
-    )

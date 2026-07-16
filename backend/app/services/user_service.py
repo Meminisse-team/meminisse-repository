@@ -63,35 +63,6 @@ async def get_user_by_email(gateways: Gateways, email: str) -> UserRecord | None
     return await gateways.users.get_by_email(email)
 
 
-async def sync_oauth_user(
-    gateways: Gateways, *, user_id: uuid.UUID, email: str, name: str
-) -> tuple[UserRecord, bool]:
-    """소셜 로그인(Kakao/Google 등 OAuth) 첫 콜백에서 호출된다.
-
-    비밀번호 기반 가입(create_user)과 달리 auth.users 행은 이미 Supabase가 OAuth
-    핸드셰이크 도중 만들어버린 뒤라, 이 함수가 호출되는 시점엔 우리가 관여할 여지
-    없이 계정이 이미 존재한다 — 여기서는 그 id로 public.users 프로필이 있는지만
-    확인하고, 없으면(=이 서비스 최초 로그인) 만든다. admin_create_user를 호출하지
-    않는다는 점이 create_user와의 유일한 차이다.
-
-    OAuth는 이메일/비밀번호 가입과 달리 "생년/고향/동의까지 한 번에 받은 뒤 계정을
-    만드는" 지연 생성이 불가능하다(제공자가 동의하는 순간 즉시 계정이 생겨버림) —
-    그래서 여기서는 이메일·이름만으로 최소 프로필을 만들고, 생년/고향은 프론트가
-    로그인 직후 별도 화면에서 PATCH /users/{id}(update_profile)로 채운다.
-
-    반환값의 두 번째 원소(is_new)로 프론트가 "이번이 최초 로그인인지"를 판단해
-    프로필 완성 단계로 보낼지 바로 대시보드로 보낼지 분기한다."""
-    existing = await gateways.users.get_by_id(user_id)
-    if existing is not None:
-        return existing, False
-
-    user = await gateways.users.create(
-        UserCreateData(id=user_id, email=email, name=name)
-    )
-    await gateways.commit()
-    return user, True
-
-
 async def update_profile(
     gateways: Gateways,
     user_id: uuid.UUID,

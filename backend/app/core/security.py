@@ -43,10 +43,7 @@ def _jwk_client() -> jwt.PyJWKClient:
 
 
 def decode_access_token_payload(token: str) -> dict:
-    """서명·만료를 검증한 뒤 JWT 클레임 전체를 반환한다. 소셜 로그인(OAuth) 첫
-    로그인 시 프로필 자동 생성(app/services/user_service.py:sync_oauth_user)에
-    이메일/표시 이름(user_metadata)이 필요해서 sub만 꺼내던 기존 함수 아래에
-    분리했다 — 검증 로직 자체는 그대로 재사용한다."""
+    """서명·만료를 검증한 뒤 JWT 클레임 전체를 반환한다."""
     try:
         alg = jwt.get_unverified_header(token).get("alg")
         if alg in _HS_ALGORITHMS:

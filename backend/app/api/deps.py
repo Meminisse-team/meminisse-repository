@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.security import InvalidTokenError, decode_access_token, decode_access_token_payload
+from app.core.security import InvalidTokenError, decode_access_token
 from app.gateways.dto import UserRecord
 from app.gateways.factory import Gateways, get_gateways
 from app.models.enums import UserRole
@@ -57,27 +57,6 @@ async def require_admin(current_user: CurrentUserDep) -> UserRecord:
 
 
 AdminUserDep = Annotated[UserRecord, Depends(require_admin)]
-
-
-async def get_verified_token_payload(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
-) -> dict:
-    """get_current_user와 달리 public.users 프로필 조회를 하지 않는다 — 토큰
-    자체(서명·만료·aud)만 검증하고 클레임 전체를 그대로 돌려준다. 소셜 로그인
-    (OAuth) 첫 콜백 시점에는 auth.users는 이미 있어도 아직 public.users 프로필이
-    없는 게 정상이므로(app/api/v1/auth.py의 POST /auth/oauth-sync가 바로 이
-    시점에 프로필을 만든다), 그 엔드포인트는 CurrentUserDep을 쓸 수 없다."""
-    try:
-        return decode_access_token_payload(credentials.credentials)
-    except InvalidTokenError as exc:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED,
-            "인증 토큰이 유효하지 않거나 만료되었습니다. 다시 로그인해 주세요.",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-
-
-VerifiedTokenPayloadDep = Annotated[dict, Depends(get_verified_token_payload)]
 
 
 def require_self(current_user: UserRecord, target_user_id: uuid.UUID) -> None:
