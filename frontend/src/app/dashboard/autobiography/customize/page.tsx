@@ -370,6 +370,15 @@ function OptionCategory({
               <p className={`mt-1 text-sm leading-relaxed ${selected ? "text-white/70" : "text-black/50"}`}>
                 {item.description}
               </p>
+              {item.example && (
+                <p
+                  className={`mt-3 border-l-2 pl-3 font-serif-kr text-sm leading-relaxed ${
+                    selected ? "border-white/30 text-white/60" : "border-black/15 text-black/45"
+                  }`}
+                >
+                  {item.example}
+                </p>
+              )}
             </button>
           );
         })}
