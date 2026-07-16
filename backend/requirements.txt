@@ -3,7 +3,10 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Web framework
-fastapi==0.115.5
+# [standard] extra가 fastapi-cli를 포함한다 — run-backend.bat이 `fastapi dev`
+# CLI로 서버를 띄우므로 이것 없이는 새 가상환경에서 백엔드가 시작되지 않는다
+# (RuntimeError: To use the fastapi command..., 2026-07-16 확인).
+fastapi[standard]==0.115.5
 uvicorn[standard]==0.32.1
 python-multipart==0.0.17
 
