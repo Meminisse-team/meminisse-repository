@@ -649,6 +649,10 @@ async def _previous_chapter_summary(
     return previous.content[-1000:]
 
 
+def _total_flag_count(factcheck_report: dict, groundedness_report: dict) -> int:
+    return len(factcheck_report.get("flags", [])) + len(groundedness_report.get("flags", []))
+
+
 async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> ChapterDraftRecord:
     """
     Phase 4 하향식 집필의 챕터 단위 실행: [챕터 시놉시스 생성 → 하이브리드 RAG 소환 →
@@ -694,6 +698,38 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         content, source_events=retrieved_events, birth_year=birth_year
     )
     groundedness_report = await _run_groundedness_check(content, source_events=retrieved_events)
+
+    if _total_flag_count(factcheck_report, groundedness_report) > 0:
+        # 팩트체크/근거검증에 걸리면 한 번 더 같은 자료로 재집필을 시도한다 — 결과가
+        # 확정적이지 않은 LLM 생성물이라, 다시 쓰면 지어낸 문장 없이 나올 가능성이
+        # 있다(2026-07-16, factcheck_report/groundedness_report가 계산만 되고 아무
+        # 데도 노출되지 않던 문제의 해결책 중 하나로 도입 — session_prose 큐잉의
+        # 즉시 재시도 패턴과 같은 발상). 재시도 결과가 원래보다 flag가 적을 때만
+        # 채택한다 — 생성은 확률적이라 재시도가 오히려 나빠질 수도 있어서, "무조건
+        # 재시도 결과 사용"이 아니라 "더 나은 쪽을 채택"으로 안전하게 판단한다.
+        retry_content = await _generate_chapter_content(
+            style_bible=style_bible_text,
+            book_synopsis=autobiography.book_synopsis,
+            chapter_synopsis=chapter_synopsis,
+            previous_chapter_summary=previous_summary,
+            retrieved_event_paragraphs=[event.prose_paragraph for event in retrieved_events],
+            tone_key=confirmed["tone"] if confirmed else None,
+            concept_key=confirmed["concept"] if confirmed else None,
+        )
+        retry_factcheck = await _run_factcheck(
+            retry_content, source_events=retrieved_events, birth_year=birth_year
+        )
+        retry_groundedness = await _run_groundedness_check(
+            retry_content, source_events=retrieved_events
+        )
+        if _total_flag_count(retry_factcheck, retry_groundedness) < _total_flag_count(
+            factcheck_report, groundedness_report
+        ):
+            content, factcheck_report, groundedness_report = (
+                retry_content,
+                retry_factcheck,
+                retry_groundedness,
+            )
 
     chapter = await gateways.chapters.save_write_result(
         chapter_draft_id,

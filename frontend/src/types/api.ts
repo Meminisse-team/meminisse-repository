@@ -9,7 +9,7 @@ export type UserRole = "user" | "admin";
 export type EducationLevel = "elementary" | "middle_school" | "high_school" | "university" | "graduate_school";
 export type MaritalStatus = "single" | "married" | "divorced" | "widowed";
 export type LifePeriod = "childhood" | "youth" | "adulthood" | "senior";
-export type SessionType = "photo" | "fixed_question";
+export type SessionType = "photo" | "fixed_question" | "episode";
 export type SessionStatus = "open" | "completed" | "skipped";
 export type MessageRole = "user" | "assistant" | "system";
 export type AssetType = "image" | "audio" | "video" | "document";
@@ -294,6 +294,23 @@ export interface CustomizationState {
 
 export type DraftStatus = "draft" | "reviewed" | "finalized";
 
+/** 원문 대조 팩트체크(정밀도) 결과 — backend/app/services/autobiography_service.py:_run_factcheck. */
+export interface FactcheckReport {
+  checked_at: string;
+  total_facts: number;
+  unchecked_facts: number;
+  flags: { fact_type: string; raw_text: string; reason: string }[];
+}
+
+/** 근거 검증(재현율) 결과 — backend/app/services/autobiography_service.py:_run_groundedness_check. */
+export interface GroundednessReport {
+  checked: boolean;
+  flags: { sentence: string; entailment_score?: number; reason: string }[];
+  total_sentences?: number;
+  source_event_count: number;
+  note?: string;
+}
+
 /** GET /api/v1/autobiographies/{id}/chapters 응답 단위
  * (backend/app/schemas/autobiography.py:ChapterDraftRead). */
 export interface ChapterDraft {
@@ -304,8 +321,8 @@ export interface ChapterDraft {
   chapter_synopsis: string | null;
   content: string | null;
   source_event_ids: string[];
-  factcheck_report: Record<string, unknown> | null;
-  groundedness_report: Record<string, unknown> | null;
+  factcheck_report: FactcheckReport | null;
+  groundedness_report: GroundednessReport | null;
   status: DraftStatus;
   created_at: string;
   updated_at: string;

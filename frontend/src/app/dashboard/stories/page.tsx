@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError } from "@/lib/api/client";
@@ -119,9 +120,24 @@ export default function StoriesPage() {
           {refreshing ? "새로고침 중..." : "새로고침"}
         </button>
       </div>
-      <p className="mb-6 -mt-4 text-sm text-black/40">
+      <p className="mb-3 -mt-4 text-sm text-black/40">
         방금 나눈 이야기는 정리되는 데 잠시 시간이 걸려요. 잠깐 기다리시면 자동으로 나타납니다.
       </p>
+      {/* '나의 이야기'(session_prose)와 최종 자서전 원고(챕터 집필)를 사용자가 혼동하지
+      않도록 명확히 구분해서 알려준다 — 여기 있는 글은 실제로 하신 말씀을 사실 그대로
+      정리만 한 것이지, 자서전 문체로 다시 쓰는 AI가 아직 개입하지 않았다는 걸 강조한다
+      (2026-07-16 피드백 — 이 화면의 산문이 매끄럽게 읽혀서 최종본으로 오인할 수 있음). */}
+      <div className="mb-6 rounded-2xl border border-black/10 bg-black/[0.02] p-4">
+        <p className="text-sm leading-relaxed text-black/60">
+          여기 담긴 글은 나눈 대화를 사실 그대로 정리한 기록이에요. 문장만 다듬었을 뿐
+          없는 내용을 더하거나 지어내지 않았어요 — 아직 자서전 문체로 다시 쓰는 AI는
+          거치지 않은, 있는 그대로의 사실 정리입니다. 실제 책으로 엮이는 최종 원고는{" "}
+          <Link href="/dashboard/autobiography" className="underline underline-offset-2 hover:text-black">
+            나의 자서전
+          </Link>
+          에서 확인하실 수 있어요.
+        </p>
+      </div>
 
       {loading && <p className="text-black/50">불러오는 중...</p>}
       {error && <p className="text-black/50">{error}</p>}

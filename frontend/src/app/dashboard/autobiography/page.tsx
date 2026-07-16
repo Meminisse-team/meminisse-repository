@@ -11,6 +11,13 @@ import type { Autobiography, ChapterDraft, TocCandidate } from "@/types/api";
 
 const POLL_INTERVAL_MS = 4000;
 
+/** 이 챕터에 확인이 필요하다고 표시된(팩트체크+근거검증) 항목 총 개수 — 0이면 표시할 게 없다. */
+function chapterFlagCount(chapter: ChapterDraft): number {
+  return (
+    (chapter.factcheck_report?.flags.length ?? 0) + (chapter.groundedness_report?.flags.length ?? 0)
+  );
+}
+
 /** 자서전 진행 상태에 따라 이야기 정리(Phase 3) → 목차 만들기 → 목차 선택 → 챕터 집필
  * 진행 → 최종본 열람까지 한 화면에서 이어서 보여준다(기획안 5절 흐름 그대로, 별도
  * 페이지로 쪼개지 않는다 — 시니어 사용자가 "지금 자서전이 어디까지 왔는지"를 한 곳에서
@@ -166,6 +173,15 @@ export default function AutobiographyPage() {
 
   async function handleFinalize() {
     if (!autobiography) return;
+    const flaggedCount = chapters.reduce((sum, c) => sum + chapterFlagCount(c), 0);
+    if (
+      flaggedCount > 0 &&
+      !window.confirm(
+        `아직 확인이 필요하다고 표시된 부분이 ${flaggedCount}곳 있어요. 그래도 최종본을 만들까요?`
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -350,25 +366,11 @@ function ChapterProgress({
   onWriteAll: () => void;
   onFinalize: () => void;
 }) {
-  const STATUS_LABEL: Record<ChapterDraft["status"], string> = {
-    draft: "집필 전",
-    reviewed: "집필 완료",
-    finalized: "최종 확정",
-  };
-
   return (
     <div className="flex flex-col gap-6">
       <ol className="flex flex-col gap-3">
         {chapters.map((chapter) => (
-          <li
-            key={chapter.id}
-            className="flex items-center justify-between gap-4 rounded-2xl border border-black/10 p-5"
-          >
-            <span className="min-w-0 flex-1 text-base text-black">
-              {chapter.chapter_index}장. {chapter.title ?? "제목 준비 중"}
-            </span>
-            <span className="shrink-0 text-sm text-black/40">{STATUS_LABEL[chapter.status]}</span>
-          </li>
+          <ChapterReviewItem key={chapter.id} chapter={chapter} />
         ))}
       </ol>
 
@@ -391,6 +393,73 @@ function ChapterProgress({
         <p className="text-sm text-black/40">최종 원고를 다듬고 있어요. 잠시만 기다려주세요...</p>
       )}
     </div>
+  );
+}
+
+const STATUS_LABEL: Record<ChapterDraft["status"], string> = {
+  draft: "집필 전",
+  reviewed: "집필 완료",
+  finalized: "최종 확정",
+};
+
+/** 챕터 하나 — 접었다 폈다 하며 본문과, 팩트체크/근거검증에 걸린 부분을 사람이
+ * 직접 확인할 수 있게 보여준다. factcheck_report/groundedness_report는 write_chapter가
+ * 이미 계산해두지만(autobiography_service.py) 지금까지 이 화면 어디에도 노출되지
+ * 않아 사실상 죽은 데이터였다(2026-07-16) — 이 카드가 그걸 실제로 보여주는 첫 자리다. */
+function ChapterReviewItem({ chapter }: { chapter: ChapterDraft }) {
+  const [expanded, setExpanded] = useState(false);
+  const flagCount = chapterFlagCount(chapter);
+  const canExpand = chapter.content !== null;
+
+  return (
+    <li className="rounded-2xl border border-black/10 p-5">
+      <button
+        type="button"
+        onClick={() => canExpand && setExpanded((v) => !v)}
+        disabled={!canExpand}
+        className="flex w-full items-center justify-between gap-4 text-left disabled:cursor-default"
+      >
+        <span className="min-w-0 flex-1 text-base text-black">
+          {chapter.chapter_index}장. {chapter.title ?? "제목 준비 중"}
+        </span>
+        <span className="flex shrink-0 items-center gap-2 text-sm">
+          {flagCount > 0 && (
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-amber-800">
+              확인 필요 {flagCount}곳
+            </span>
+          )}
+          <span className="text-black/40">{STATUS_LABEL[chapter.status]}</span>
+          {canExpand && <span className="text-black/30">{expanded ? "▲" : "▼"}</span>}
+        </span>
+      </button>
+
+      {expanded && chapter.content && (
+        <div className="mt-4 flex flex-col gap-4 border-t border-black/10 pt-4">
+          <p className="whitespace-pre-wrap text-base leading-relaxed text-black/80">
+            {chapter.content}
+          </p>
+          {flagCount > 0 && (
+            <div className="flex flex-col gap-2 rounded-xl bg-amber-50 p-4">
+              <p className="text-sm font-medium text-amber-900">
+                아래 부분은 원래 이야기와 다를 수 있어요 — 직접 읽어보고 확인해주세요.
+              </p>
+              <ul className="flex flex-col gap-2">
+                {chapter.groundedness_report?.flags.map((flag, i) => (
+                  <li key={`g-${i}`} className="text-sm text-amber-900/80">
+                    &ldquo;{flag.sentence}&rdquo;
+                  </li>
+                ))}
+                {chapter.factcheck_report?.flags.map((flag, i) => (
+                  <li key={`f-${i}`} className="text-sm text-amber-900/80">
+                    &ldquo;{flag.raw_text}&rdquo; — 원래 이야기에서 일치하는 내용을 찾지 못했어요.
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </li>
   );
 }
 
