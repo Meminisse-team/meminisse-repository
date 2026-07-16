@@ -39,8 +39,9 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
         raise ValueError(f"InterviewSession {session_id} not found")
 
     chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
+    reassembly_turns = _exclude_wrap_up_exchange(chat_turns)
     prose_response = await solar.chat_completion(
-        prompts.build_prose_reassembly_prompt(chat_turns=chat_turns),
+        prompts.build_prose_reassembly_prompt(chat_turns=reassembly_turns),
         # "low"에서는 세션 안에 사건이 2개 이상이고 각각 후속 질문 병합이 필요할 때
         # 원본 문장과 병합 문장을 중복으로 남기는 오류가 실사용 검증(4회 중 약 2~3회)
         # 재현됐다. "medium"으로 올리면 같은 검증에서 대부분 정상 병합되고(4회 중
@@ -140,6 +141,29 @@ async def _extract_events_from_prose(
         gateways, events=events, relations=extraction.get("relations", []), index_map=index_map
     )
     return events
+
+
+def _exclude_wrap_up_exchange(chat_turns: list[dict[str, str]]) -> list[dict[str, str]]:
+    """마무리 확인 질문(WRAP_UP_CHECK_IN_MESSAGE)과 그에 대한 사용자 응답("넘어가자",
+    "없어요" 등)은 이 사건에 대한 서술이 아니라 순수한 대화 진행 신호이므로, 산문
+    재조립에 넘기기 전에 코드 레벨에서 통째로 제외한다 — PROSE_REASSEMBLY_SYSTEM_
+    PROMPT의 "진행 신호는 옮기지 말라"는 지시만으로는 실제로 "다음으로 넘어가자"가
+    산문 문장에 그대로 새어 들어가는 사고가 실사용 대화에서 재현됐다(2026-07-16).
+    WRAP_UP_CHECK_IN_MESSAGE는 세션당 한 번, 고정 문구로만 등장하므로(interview_
+    service.py:_finalize_wrap_up_or_complete) 문자열 완전 일치로 안전하게 찾아낼 수
+    있다 — _strip_leaked_assistant_sentences와 같은 "프롬프트만으론 못 미더우니
+    코드로 한 번 더 막는다"는 이 파일의 기존 패턴을 따른다."""
+    filtered: list[dict[str, str]] = []
+    skip_next_user_turn = False
+    for turn in chat_turns:
+        if skip_next_user_turn and turn.get("role") == "user":
+            skip_next_user_turn = False
+            continue
+        if turn.get("role") == "assistant" and turn.get("content") == prompts.WRAP_UP_CHECK_IN_MESSAGE:
+            skip_next_user_turn = True
+            continue
+        filtered.append(turn)
+    return filtered
 
 
 def _strip_leaked_assistant_sentences(*, prose: str, chat_turns: list[dict[str, str]]) -> str:
