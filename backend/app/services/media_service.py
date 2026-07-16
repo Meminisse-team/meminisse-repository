@@ -30,7 +30,6 @@ Azure Vision의 Caption 기능(자연어 한 문장 요약)은 쓰지 않는다 
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 
@@ -88,19 +87,14 @@ async def upload_media_asset(
     if payload.asset_type == AssetType.IMAGE:
         # 세션 커밋이 이미 끝난 뒤에 큐잉한다 — 브로커(Redis)가 잠깐 응답하지 않아도
         # 업로드 자체는 사용자에게 성공으로 보여야 한다(interview_service.complete_session
-        # 의 동일한 패턴 참조). delay()는 브로커에 동기적으로 연결을 시도하는 블로킹
-        # 호출이라 asyncio.to_thread로 이벤트 루프 밖에서 돌린다.
+        # 의 동일한 패턴 참조). 큐잉은 요청/응답 흐름과 분리해서(enqueue_in_background)
+        # 실행한다 — 업로드 응답이 큐잉 재시도의 백오프 대기만큼 늦어질 이유가 없다.
+        from app.workers.enqueue import enqueue_in_background
         from app.workers.tasks import analyze_media_asset  # 순환 임포트 방지용 지연 임포트
 
-        try:
-            await asyncio.to_thread(analyze_media_asset.delay, str(asset.id))
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "analyze_media_asset 큐잉 실패 (media_asset_id=%s) — 업로드 자체는 "
-                "이미 완료됐으나 듀얼 트랙 분석이 예약되지 못했다.",
-                asset.id,
-                exc_info=True,
-            )
+        enqueue_in_background(
+            analyze_media_asset, str(asset.id), log_context=f"media_asset_id={asset.id}"
+        )
 
     return asset
 

@@ -44,3 +44,33 @@ async def list_crisis_sessions(
     )
     await gateways.commit()
     return sessions
+
+
+async def reconcile_stale_sessions(gateways: Gateways) -> int:
+    """처리 지연 세션(list_stale_sessions과 동일한 기준)을 찾아 Phase 2 후처리를
+    다시 큐잉한다 — Celery Beat가 주기적으로 호출하는 자동 복구 태스크다
+    (app/workers/tasks.py:reconcile_stale_sessions, app/workers/celery_app.py의
+    beat_schedule). "나의 이야기" 산문이 큐잉 실패(브로커 순간 다운 등)로 영구
+    유실되던 사고(2026-07-15)를 사람 개입 없이 스스로 복구하기 위한 2차
+    방어선이다 — 1차 방어선은 큐잉 시점의 즉시 재시도(app/workers/enqueue.py).
+    사람이 개인 서사 데이터를 열람하는 게 아니라 세션 ID만 다루는 자동화된
+    시스템 동작이라 감사 로그는 남기지 않는다(admin_audit_logs는 관리자의
+    콘텐츠 열람만 추적한다).
+
+    반환값은 이번 실행에서 재큐잉을 시도한 세션 개수 — Celery 태스크가 로그로
+    남긴다."""
+    threshold = datetime.now(timezone.utc) - _STALE_THRESHOLD
+    stale = await gateways.sessions.list_stale_completed(older_than=threshold)
+    if not stale:
+        return 0
+
+    from app.workers.enqueue import enqueue_with_retry
+    from app.workers.tasks import process_session_completion  # 순환 임포트 방지용 지연 임포트
+
+    for session in stale:
+        await enqueue_with_retry(
+            process_session_completion,
+            str(session.id),
+            log_context=f"session_id={session.id} (reconcile)",
+        )
+    return len(stale)

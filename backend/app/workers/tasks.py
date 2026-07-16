@@ -22,9 +22,11 @@ import uuid
 from collections.abc import Coroutine
 from typing import Any
 
+import logging
+
 from app.database import engine
 from app.gateways.factory import gateways_context
-from app.services import autobiography_service, event_extraction_service, media_service, pdf_service
+from app.services import admin_service, autobiography_service, event_extraction_service, media_service, pdf_service
 from app.workers.celery_app import celery_app
 
 
@@ -104,6 +106,25 @@ def generate_manuscript_pdf(autobiography_id: str) -> None:
 async def _generate_manuscript_pdf_async(autobiography_id: uuid.UUID) -> None:
     async with gateways_context() as gateways:
         await pdf_service.generate_manuscript_pdf(gateways, autobiography_id)
+
+
+@celery_app.task(name="reconcile_stale_sessions")
+def reconcile_stale_sessions() -> None:
+    """Celery Beat가 주기적으로(app/workers/celery_app.py의 beat_schedule) 실행하는
+    자동 복구 태스크 — 완료됐지만 Phase 2 후처리가 안 끝난 세션을 찾아 다시
+    큐잉한다(app/services/admin_service.py:reconcile_stale_sessions 참조).
+    "나의 이야기" 산문이 큐잉 실패로 영구 유실되던 사고(2026-07-15)의 2차
+    방어선 — 사람이 관리자 대시보드를 열어봐야만 발견·복구되던 것을 자동화한다."""
+    _run(_reconcile_stale_sessions_async())
+
+
+async def _reconcile_stale_sessions_async() -> None:
+    async with gateways_context() as gateways:
+        count = await admin_service.reconcile_stale_sessions(gateways)
+        if count:
+            logging.getLogger(__name__).info(
+                "reconcile_stale_sessions: 처리 지연 세션 %d개를 재큐잉했다.", count
+            )
 
 
 @celery_app.task(name="analyze_media_asset")

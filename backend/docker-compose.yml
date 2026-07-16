@@ -60,6 +60,24 @@ services:
     # 설정도 켜져 있어야 한다(OS 자체가 꺼지는 경우는 어떤 restart_policy로도 못 막음).
     restart: unless-stopped
 
+  # 2026-07-16: reconcile_stale_sessions(app/workers/celery_app.py의 beat_schedule)를
+  # 실제로 5분마다 발행하는 스케줄러. worker와 같은 이미지를 쓰지만 별도 프로세스로
+  # 띄운다 — Celery의 표준 구성으로, beat는 스케줄대로 메시지를 발행만 하고 실행은
+  # worker가 한다(하나가 죽어도 다른 하나의 책임 범위를 침범하지 않음). NLI 모델을
+  # 로드하지 않는 가벼운 프로세스라 hf-cache 볼륨은 필요 없다.
+  beat:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
+    restart: unless-stopped
+
 volumes:
   redis-data:
   hf-cache:

@@ -26,4 +26,18 @@ celery_app.conf.update(
     timezone="Asia/Seoul",
     enable_utc=True,
     task_track_started=True,
+    # reconcile_stale_sessions(app/workers/tasks.py)를 5분마다 실행 — 세션 완료
+    # 처리 큐잉이 실패한 채(브로커 순간 다운 등, app/workers/enqueue.py의 즉시
+    # 재시도까지 전부 실패한 경우) 방치되는 걸 사람 개입 없이 스스로 복구한다
+    # (2026-07-15 사고: 세션 6개가 방치돼 관리자가 수동으로 찾아 재큐잉해야
+    # 했음 — 이제 최악의 경우에도 5분 안에 자동 복구된다). docker-compose.yml의
+    # 별도 beat 서비스가 이 스케줄을 실제로 발행한다 — worker 프로세스 자체는
+    # Beat를 겸하지 않는다(Celery의 표준 구성: beat는 스케줄대로 메시지를
+    # 발행만 하고, worker가 그 메시지를 받아 실행한다).
+    beat_schedule={
+        "reconcile-stale-sessions": {
+            "task": "reconcile_stale_sessions",
+            "schedule": 300.0,  # 5분
+        },
+    },
 )

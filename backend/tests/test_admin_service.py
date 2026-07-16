@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -118,3 +119,30 @@ async def test_require_admin_passes_admin_user_through() -> None:
 
     result = await require_admin(admin)
     assert result is admin
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stale_sessions_requeues_only_stale_ones() -> None:
+    """2026-07-16 아키텍처 개선: 큐잉 실패(브로커 순간 다운 등)로 방치된 세션을
+    관리자가 대시보드를 열어봐야만 발견하던 것을, Celery Beat가 이 함수를
+    주기적으로 호출해 사람 개입 없이 스스로 복구한다.
+
+    list_stale_completed는 관리자 전체 조회용이라 user_id로 스코프하지 않는다
+    (의도된 설계) — 그래서 이 테스트는 default_store를 공유하는 다른 테스트가
+    남긴 stale 세션이 섞여 있어도 안전하도록 정확한 총 개수 대신 "내가 만든
+    세션이 포함/제외됐는가"만 확인한다."""
+    gateways = _build_mock_gateways()
+    user = await _make_user(gateways)
+    now = datetime.now(timezone.utc)
+    stale = await _make_stale_completed_session(gateways, user.id, completed_at=now - timedelta(minutes=30))
+    recent = await _make_stale_completed_session(gateways, user.id, completed_at=now - timedelta(minutes=1))
+
+    requeued_ids: list[str] = []
+    with patch(
+        "app.workers.tasks.process_session_completion.delay",
+        new=lambda session_id: requeued_ids.append(session_id),
+    ):
+        await admin_service.reconcile_stale_sessions(gateways)
+
+    assert str(stale.id) in requeued_ids
+    assert str(recent.id) not in requeued_ids
