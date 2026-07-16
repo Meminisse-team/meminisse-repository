@@ -33,4 +33,8 @@ alembic/versions/*.pyc
 # 파일 — 평가 결과 자체(backend/evals/results/)와는 별개로, 이건 순수 도구 부산물이다.
 backend/.deepeval/
 
+# 호스트에서 직접 `celery beat`를 띄우면 실행 디렉토리에 생기는 스케줄 상태 파일
+# (Docker의 beat 서비스는 컨테이너 안에서 생성하므로 호스트에는 안 남음).
+backend/celerybeat-schedule*
+
 # frontend/.gitignore가 node_modules, .next 등 Next.js 산출물을 별도로 관리한다.

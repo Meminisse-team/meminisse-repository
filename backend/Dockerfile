@@ -12,14 +12,17 @@ FROM python:3.13-slim
 # include=["app.workers.tasks"]가 워커 시작 시 그 모듈을 즉시 로드한다) — PDF를 한
 # 번도 안 만들어도 이 네이티브 라이브러리들이 없으면 워커 자체가 뜨지 못하고
 # ImportError로 즉시 죽는다. requirements.txt의 WeasyPrint 주석(Windows GTK3 요구)과
-# 동일한 이유의 Linux(Debian) 대응.
+# 동일한 이유의 Linux(Debian) 대응. libgdk-pixbuf-2.0-0(하이픈 위치 주의)는
+# python:3.13-slim의 베이스가 Debian trixie로 넘어가며 패키지명이 바뀐 결과다 —
+# 예전 이름 libgdk-pixbuf2.0-0으로 두면 "has no installation candidate"로 빌드가
+# 깨진다(2026-07-16 재현).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libcairo2 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libpangoft2-1.0-0 \
-    libgdk-pixbuf2.0-0 \
+    libgdk-pixbuf-2.0-0 \
     libffi-dev \
     shared-mime-info \
     fonts-noto-cjk \
