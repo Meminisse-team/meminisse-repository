@@ -15,21 +15,41 @@ export default function AdminPage() {
   const [staleSessions, setStaleSessions] = useState<AdminSession[]>([]);
   const [crisisSessions, setCrisisSessions] = useState<AdminSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([adminApi.listStaleSessions(), adminApi.listCrisisSessions()])
+  const fetchData = () => {
+    return Promise.all([adminApi.listStaleSessions(), adminApi.listCrisisSessions()])
       .then(([stale, crisis]) => {
         setStaleSessions(stale);
         setCrisisSessions(crisis);
+        setError(null);
       })
-      .catch(() => setError("관리자 데이터를 불러오지 못했어요."))
-      .finally(() => setLoading(false));
+      .catch(() => setError("관리자 데이터를 불러오지 못했어요."));
+  };
+
+  useEffect(() => {
+    fetchData().finally(() => setLoading(false));
   }, []);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    fetchData().finally(() => setRefreshing(false));
+  };
 
   return (
     <main className="px-6 pb-10 pt-6">
-      <h1 className="mb-8 font-serif-kr text-2xl text-black">관리자 대시보드</h1>
+      <div className="mb-8 flex items-center justify-between">
+        <h1 className="font-serif-kr text-2xl text-black">관리자 대시보드</h1>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={loading || refreshing}
+          className="rounded-full border border-black/10 px-4 py-1.5 text-sm text-black/60 disabled:opacity-40"
+        >
+          {refreshing ? "새로고침 중..." : "새로고침"}
+        </button>
+      </div>
 
       {loading && <p className="text-black/50">불러오는 중...</p>}
       {error && <p className="text-black/50">{error}</p>}
@@ -37,10 +57,19 @@ export default function AdminPage() {
       {!loading && !error && (
         <div className="flex flex-col gap-8">
           <section>
-            <h2 className="mb-1 text-lg font-semibold text-black">처리 지연 세션</h2>
+            <div className="mb-1 flex items-baseline gap-2">
+              <h2 className="text-lg font-semibold text-black">처리 지연 세션</h2>
+              {staleSessions.length > 0 && (
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-sm font-medium text-amber-800">
+                  {staleSessions.length}개 남음
+                </span>
+              )}
+            </div>
             <p className="mb-4 text-sm text-black/40">
               완료됐지만 10분 넘게 산문 재조립이 끝나지 않은 세션 — Celery 워커가
-              내려가 있는 등 처리가 아예 시작되지 못했을 가능성이 있어요.
+              내려가 있는 등 처리가 아예 시작되지 못했을 가능성이 있어요. 대량
+              처리 중(예: 테스트 데이터 시딩)이라면 이 숫자가 자연스럽게 줄어드는
+              중일 수 있어요 — 새로고침해서 계속 확인해보세요.
             </p>
             <SessionList sessions={staleSessions} emptyLabel="처리 지연 세션이 없어요." />
           </section>
