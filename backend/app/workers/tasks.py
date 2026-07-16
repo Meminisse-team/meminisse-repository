@@ -24,6 +24,9 @@ from typing import Any
 
 import logging
 
+import redis.asyncio as redis_asyncio
+
+from app.config import settings
 from app.database import engine
 from app.gateways.factory import gateways_context
 from app.services import admin_service, autobiography_service, event_extraction_service, media_service, pdf_service
@@ -118,13 +121,46 @@ def reconcile_stale_sessions() -> None:
     _run(_reconcile_stale_sessions_async())
 
 
+# 정상 스케줄 주기(300초, celery_app.py의 beat_schedule)보다 짧게 잡아 정상적인
+# 5분 주기 실행은 항상 통과시키되, 이 태스크가 짧은 시간 안에 중복 실행되는
+# 경우만 걸러낸다. 2026-07-16 실사용 중 재현: Redis 컨테이너가 죽었다가 다시
+# 뜬 직후 Celery Beat가 수 초 안에 이 태스크를 여러 번(관찰상 8회 이상) 몰아서
+# 재발행했고, 매 실행이 그 시점의 모든 "처리 지연" 세션을 다시 통째로 재큐잉
+# 하면서 완료 세션 100개가 평균 6배(총 622개 메시지)까지 중복 큐잉되는 사고로
+# 이어졌다 — 원인이 Beat/브로커 재연결 쪽의 정확히 어떤 재시도 동작인지와
+# 무관하게, 이 태스크 자체가 "짧은 시간 안에 두 번 이상 실제로 일할 수 없게"
+# 막는 것이 가장 확실한 방어선이라 판단했다.
+_RECONCILE_LOCK_KEY = "reconcile_stale_sessions:lock"
+_RECONCILE_LOCK_TTL_SECONDS = 240
+
+
 async def _reconcile_stale_sessions_async() -> None:
+    if not await _acquire_reconcile_lock():
+        logging.getLogger(__name__).info(
+            "reconcile_stale_sessions: 최근 %d초 이내 이미 실행됨 — 중복 실행을 건너뛴다.",
+            _RECONCILE_LOCK_TTL_SECONDS,
+        )
+        return
     async with gateways_context() as gateways:
         count = await admin_service.reconcile_stale_sessions(gateways)
         if count:
             logging.getLogger(__name__).info(
                 "reconcile_stale_sessions: 처리 지연 세션 %d개를 재큐잉했다.", count
             )
+
+
+async def _acquire_reconcile_lock() -> bool:
+    """Redis `SET NX EX`(원자적 락 획득)로 이 태스크의 동시/연속 중복 실행을
+    막는다. 이미 이 프로젝트의 필수 인프라인 브로커(Redis)를 그대로 재사용해
+    별도 락 저장소를 새로 두지 않는다."""
+    client = redis_asyncio.from_url(settings.CELERY_BROKER_URL)
+    try:
+        acquired = await client.set(
+            _RECONCILE_LOCK_KEY, "1", nx=True, ex=_RECONCILE_LOCK_TTL_SECONDS
+        )
+        return bool(acquired)
+    finally:
+        await client.aclose()
 
 
 @celery_app.task(name="analyze_media_asset")
