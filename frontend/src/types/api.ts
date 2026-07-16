@@ -149,6 +149,9 @@ export interface StoryCard {
   subtitle: string | null;
   prose: string;
   completed_at: string | null;
+  /** true면 세션은 끝났지만 산문 재조립(Celery)이 아직 안 끝난 placeholder 카드
+   * — prose는 빈 문자열이다. "생성 중..." 임시 셀로 표시한다. */
+  is_generating: boolean;
 }
 
 export interface MediaAsset {

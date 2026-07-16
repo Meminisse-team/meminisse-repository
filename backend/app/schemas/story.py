@@ -15,6 +15,10 @@ class StoryCardRead(BaseModel):
     subtitle: str | None
     prose: str
     completed_at: datetime | None
+    # True면 세션은 끝났지만(status=COMPLETED) Celery 산문 재조립이 아직 안 끝나
+    # prose가 빈 문자열인 placeholder 카드다 — 프론트가 "생성 중..." 임시 셀로
+    # 표시한다(story_service.py:list_story_cards 참조).
+    is_generating: bool = False
 
 
 class StoryProseUpdate(BaseModel):

@@ -1,8 +1,10 @@
 """'나의 이야기' 세션 카드 조회(story_service.py) 테스트.
 
 핵심 계약: 카드 제목은 그 세션이 다룬 질문/사진 오프닝 문구 그 자체(첫 chat_log),
-부제는 그 세션에서 재조립된 산문으로부터 재추출한 이벤트 요약(여러 개면 이어붙임),
-아직 산문 재조립이 안 끝난 세션은 목록에서 빠진다(2026-07-15 피드백).
+부제는 그 세션에서 재조립된 산문으로부터 재추출한 이벤트 요약(여러 개면 이어붙임).
+아직 대화 중(OPEN)이거나 보여준 적 없이 건너뛴(SKIPPED) 세션은 목록에서 빠지지만,
+완료(COMPLETED)됐는데 산문 재조립만 안 끝난 세션은 is_generating=True인 placeholder
+카드로 나타난다(2026-07-16 — "생성 중" 임시 셀 요청, 이전엔 이 경우도 통째로 빠졌음).
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ async def test_story_card_uses_opening_question_as_title_and_event_summary_as_su
     assert card.title == "대학을 어디 다녔나요?"
     assert card.subtitle == "화자는 서울대학교에 다녔다."
     assert card.prose == "나는 서울대학교에 다녔다."
+    assert card.is_generating is False
 
 
 @pytest.mark.asyncio
@@ -159,9 +162,8 @@ async def test_legacy_session_without_question_id_falls_back_to_generic_title() 
 
 
 @pytest.mark.asyncio
-async def test_sessions_without_reassembled_prose_are_excluded() -> None:
-    """Phase 2 후처리(Celery)가 아직 안 끝나 session_prose가 비어 있으면 목록에서
-    빠진다 — 보여줄 산문 자체가 없으므로."""
+async def test_open_sessions_are_excluded() -> None:
+    """아직 대화 중(status=OPEN)인 세션은 "끝난 이야기"가 아니므로 목록에서 빠진다."""
     gateways = _build_mock_gateways()
     user = await _make_user(gateways)
     session = await gateways.sessions.create(
@@ -175,6 +177,33 @@ async def test_sessions_without_reassembled_prose_are_excluded() -> None:
     cards = await story_service.list_story_cards(gateways, user.id)
 
     assert cards == []
+
+
+@pytest.mark.asyncio
+async def test_completed_session_without_prose_yet_shows_as_generating_placeholder() -> None:
+    """2026-07-16: 완료(status=COMPLETED)됐지만 Phase 2 후처리(Celery)가 아직 안
+    끝나 session_prose가 비어 있는 세션은 더 이상 목록에서 통째로 빠지지 않고,
+    is_generating=True인 placeholder 카드로 나타난다 — 제목은 이미 알 수 있으니
+    보여주고, 본문·부제는 비워둔다."""
+    gateways = _build_mock_gateways()
+    user = await _make_user(gateways)
+    session = await gateways.sessions.create(
+        SessionCreateData(user_id=user.id, session_type=SessionType.FIXED_QUESTION)
+    )
+    await gateways.sessions.add_chat_log(
+        session.id, role=MessageRole.ASSISTANT, content="질문 내용"
+    )
+    await gateways.sessions.complete(session.id)
+    await gateways.commit()
+
+    cards = await story_service.list_story_cards(gateways, user.id)
+
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.is_generating is True
+    assert card.title == "질문 내용"
+    assert card.subtitle is None
+    assert card.prose == ""
 
 
 @pytest.mark.asyncio

@@ -145,7 +145,14 @@ export default function StoriesPage() {
               {/* 부제 = 재조립된 산문으로부터 재추출한 요약 라벨. */}
               {story.subtitle && <p className="mt-1 text-sm text-black/50">{story.subtitle}</p>}
 
-              {isEditing ? (
+              {story.is_generating ? (
+                // 세션은 끝났지만 산문 재조립(Celery)이 아직 안 끝난 상태 — 대화가
+                // 유실된 게 아니라 정상적으로 처리 중임을 보여주는 임시 셀. 폴링
+                // (POLL_INTERVAL_MS)이 돌다가 완성되면 이 자리가 실제 카드로 바뀐다.
+                <p className="mt-3 animate-pulse text-base leading-relaxed text-black/40">
+                  이야기를 정리하고 있어요...
+                </p>
+              ) : isEditing ? (
                 <div className="mt-3 flex flex-col gap-2">
                   <textarea
                     value={draft}

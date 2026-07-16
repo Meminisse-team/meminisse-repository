@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.gateways.dto import InterviewSessionRecord
 from app.gateways.factory import Gateways
-from app.models.enums import MessageRole, SessionType
+from app.models.enums import MessageRole, SessionStatus, SessionType
 from app.services import event_extraction_service
 
 _SUBTITLE_SEPARATOR = " · "
@@ -63,20 +63,31 @@ class StoryCard:
     subtitle: str | None
     prose: str
     completed_at: datetime | None
+    is_generating: bool = False
 
 
 async def list_story_cards(gateways: Gateways, user_id: uuid.UUID) -> list[StoryCard]:
-    """본인의 완료된 세션 중 산문 재조립이 끝난 것만, 최신순(started_at 내림차순,
-    InterviewSessionGateway.list_by_user 정렬 계약 참조)으로 카드를 만들어 반환한다.
-    아직 Phase 2 후처리(Celery)가 끝나지 않아 session_prose가 비어 있는 세션은
-    보여줄 내용이 없으므로 건너뛴다 — 프론트가 폴링으로 자동 갱신한다
-    (frontend/src/app/dashboard/stories/page.tsx)."""
+    """본인의 완료된 세션을, 최신순(started_at 내림차순, InterviewSessionGateway.
+    list_by_user 정렬 계약 참조)으로 카드를 만들어 반환한다.
+
+    완료(status=COMPLETED)됐지만 아직 Phase 2 후처리(Celery)가 안 끝나 session_prose가
+    비어 있는 세션도 건너뛰지 않고 is_generating=True인 placeholder 카드로 포함한다 —
+    예전엔 통째로 목록에서 빠져, 방금 나눈 대화가 정말 저장됐는지 사용자가 확인할
+    길이 없었다(2026-07-16 피드백 — "생성 중" 임시 셀 요청). 프론트가 폴링으로
+    자동 갱신하다가(frontend/src/app/dashboard/stories/page.tsx) prose가 채워지면
+    이 placeholder를 완성된 카드로 자연스럽게 교체한다.
+
+    아직 대화 중(OPEN)이거나 사용자에게 보여준 적도 없이 건너뛴(SKIPPED) 세션은
+    "끝난 이야기"가 아니므로 제외한다."""
     sessions = await gateways.sessions.list_by_user(user_id)
     cards: list[StoryCard] = []
     for session in sessions:
-        if session.session_prose is None:
+        if session.status != SessionStatus.COMPLETED:
             continue
-        cards.append(await _to_story_card(gateways, session))
+        if session.session_prose is None:
+            cards.append(await _to_placeholder_card(gateways, session))
+        else:
+            cards.append(await _to_story_card(gateways, session))
     return cards
 
 
@@ -122,6 +133,22 @@ async def _to_story_card(gateways: Gateways, session: InterviewSessionRecord) ->
         subtitle=subtitle,
         prose=session.session_prose,
         completed_at=session.completed_at,
+        is_generating=False,
+    )
+
+
+async def _to_placeholder_card(gateways: Gateways, session: InterviewSessionRecord) -> StoryCard:
+    """세션은 끝났지만(status=COMPLETED) 산문 재조립이 아직 안 끝난 경우의 임시 카드.
+    제목은 chat_logs에 이미 저장돼 있어(세션 생성 시점) 정상적으로 보여줄 수 있지만,
+    부제·본문은 Celery 작업이 끝나야 알 수 있으므로 비워둔다."""
+    title = await _resolve_title(gateways, session)
+    return StoryCard(
+        session_id=session.id,
+        title=title,
+        subtitle=None,
+        prose="",
+        completed_at=session.completed_at,
+        is_generating=True,
     )
 
 
