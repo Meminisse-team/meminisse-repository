@@ -38,6 +38,19 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     if session is None:
         raise ValueError(f"InterviewSession {session_id} not found")
 
+    if session.session_prose is not None:
+        # 멱등성 가드: admin_service.reconcile_stale_sessions(5분마다 실행)는 "완료됐는데
+        # 아직 산문이 없는 세션"을 무조건 다시 큐잉한다 — 원래는 브로커 유실을 복구하기
+        # 위한 안전망이지만, 처리 대기열이 밀린 상황(대량 시딩 등)에서는 "아직 처리 순서를
+        # 못 받았을 뿐인 세션"까지 똑같이 다시 큐잉해버린다. 그 결과 같은 세션이 여러 번
+        # 큐에 들어가 워커가 프롬프트 재조립·이벤트 추출을 통째로 반복 실행하면서, 시간을
+        # 낭비하고 이벤트가 중복 생성되는 사고가 실사용 중 확인됐다(2026-07-16, 세션 12개에서
+        # 중복 이벤트 재현). 이 함수는 세션당 한 번만 의미가 있으므로, 이미 산문이 있으면
+        # (재조립이 이미 끝났다는 뜻) 아무것도 다시 하지 않고 기존 이벤트만 반환한다.
+        # --pool=solo(app/workers/celery_app.py)라 태스크가 절대 동시 실행되지 않으므로
+        # 이 확인-후-처리 사이에 경쟁 상태가 끼어들 여지가 없다.
+        return await gateways.events.list_by_session(session_id)
+
     chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
     reassembly_turns = _exclude_wrap_up_exchange(chat_turns)
     prose_response = await solar.chat_completion(
