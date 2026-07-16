@@ -237,8 +237,8 @@ export interface Autobiography {
 }
 
 /** GET /customization/options 응답 항목 하나 — 말투/구성/컨셉 선택지 공통 형태
- * (backend/app/schemas/autobiography.py:CustomizationOptionItem). CONCEPT_OPTIONS의
- * 일부 항목은 example이 없어(backend/app/agents/prompts.py) null일 수 있다. */
+ * (backend/app/schemas/autobiography.py:CustomizationOptionItem). 현재 모든 옵션에
+ * example(서술 예문)이 채워져 있지만 스키마상으로는 null일 수 있다. */
 export interface CustomizationOptionItem {
   key: string;
   name: string;
