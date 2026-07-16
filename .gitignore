@@ -37,4 +37,8 @@ backend/.deepeval/
 # (Docker의 beat 서비스는 컨테이너 안에서 생성하므로 호스트에는 안 남음).
 backend/celerybeat-schedule*
 
+# 파일 로깅(app/core/logging_config.py) 산출물 — 관리자 대시보드 로그 열람용이며
+# 커밋 대상이 아니다.
+backend/logs/
+
 # frontend/.gitignore가 node_modules, .next 등 Next.js 산출물을 별도로 관리한다.

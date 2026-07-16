@@ -41,6 +41,10 @@ services:
       # NLI 모델(수백MB) 캐시를 컨테이너 재기동 사이에 보존 — 매번 재기동될 때마다
       # HuggingFace에서 다시 받으면 느리고 불필요한 네트워크 사용이다.
       - hf-cache:/app/.cache/huggingface
+      # 관리자 대시보드 로그 열람(app/services/admin_service.py:get_app_log_lines)이
+      # 읽는 파일을 호스트로 내보낸다 — 로컬에서 도는 backend(uvicorn)가 쓰는
+      # backend/logs/와 같은 디렉터리로 합쳐진다(app/core/logging_config.py).
+      - ./logs:/app/logs
     healthcheck:
       # 실 장애 대응(2026-07-15)에서 검증한 것과 동일한 명령 — 프로세스가 떠 있어도
       # 브로커에 응답 못 하는 상태(예: DuplicateNodenameWarning으로 두 인스턴스가
@@ -75,6 +79,8 @@ services:
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes:
+      - ./logs:/app/logs
     command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
     restart: unless-stopped
 

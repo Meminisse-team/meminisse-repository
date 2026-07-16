@@ -5,6 +5,9 @@ from openai import APIStatusError
 
 from app.api.v1.router import api_router
 from app.config import settings
+from app.core.logging_config import configure_file_logging
+
+configure_file_logging("backend")
 
 app = FastAPI(title="Meminisse API")
 

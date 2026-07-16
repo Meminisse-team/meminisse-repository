@@ -110,6 +110,41 @@ export interface InterviewSessionDetail extends InterviewSession {
  * SessionRead와 형태가 같다(backend/app/schemas/admin.py:AdminSessionRead). */
 export type AdminSession = InterviewSession;
 
+/** GET /api/v1/admin/users/lookup 응답의 sessions 원소 — AdminSession에
+ * session_prose가 더해진 형태(backend/app/schemas/admin.py:AdminSessionDetailRead). */
+export interface AdminSessionDetail extends AdminSession {
+  session_prose: string | null;
+}
+
+/** GET /api/v1/admin/users/lookup 응답(backend/app/schemas/admin.py:AdminUserDetail). */
+export interface AdminUserDetail extends User {
+  sessions: AdminSessionDetail[];
+}
+
+export type AdminDbTable = "users" | "sessions" | "events" | "autobiographies" | "chapter_drafts";
+
+/** GET /api/v1/admin/db/{table} 응답 — 테이블마다 형태가 달라 느슨하게 dict로
+ * 받는다(backend/app/api/v1/admin.py:list_db_table 참조, 내부 관리자 도구라
+ * 엄격한 타입 계약을 고정하지 않는다). */
+export type AdminDbRow = Record<string, unknown>;
+
+/** GET /api/v1/admin/audit-logs 응답 단위(backend/app/schemas/admin.py:AdminAuditLogRead). */
+export interface AdminAuditLog {
+  id: string;
+  admin_id: string;
+  action: string;
+  target_user_id: string | null;
+  target_session_id: string | null;
+  created_at: string;
+}
+
+export type AdminLogService = "backend" | "worker" | "beat";
+
+/** GET /api/v1/admin/logs 응답(backend/app/schemas/admin.py:AdminLogLinesRead). */
+export interface AdminLogLines {
+  lines: string[];
+}
+
 /** GET /api/v1/events 응답 단위 — '나의 이야기' 탭(backend/app/schemas/event.py:EventRead). */
 export interface EventItem {
   id: string;

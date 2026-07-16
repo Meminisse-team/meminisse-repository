@@ -85,6 +85,11 @@ class AuditGateway(ABC):
     @abstractmethod
     async def record(self, data: AdminAuditLogCreateData) -> AdminAuditLogRecord: ...
 
+    @abstractmethod
+    async def list_recent(self, *, limit: int, offset: int) -> list[AdminAuditLogRecord]:
+        """created_at 내림차순(최근 기록이 먼저). 관리자 대시보드의 감사 로그
+        열람 화면(app/api/v1/admin.py)이 사용한다."""
+
 
 class UserGateway(ABC):
     @abstractmethod
@@ -95,6 +100,20 @@ class UserGateway(ABC):
 
     @abstractmethod
     async def get_by_email(self, email: str) -> UserRecord | None: ...
+
+    @abstractmethod
+    async def list_all(self, *, limit: int, offset: int) -> list[UserRecord]:
+        """created_at 내림차순. 관리자 대시보드의 DB 열람(구조화된 읽기 전용
+        뷰어) 화면 전용 — 특정 유저가 아니라 전체 유저를 훑어보기 위함이라
+        get_by_id/get_by_email과는 용도가 다르다."""
+
+    @abstractmethod
+    async def update_email(self, user_id: UUID, new_email: str) -> UserRecord:
+        """관리자가 Supabase Auth 쪽 이메일을 먼저 바꾼 뒤(app/clients/
+        supabase_auth.py:admin_update_user), 이 앱 자체 users 테이블에 미러링된
+        이메일도 맞춰 갱신할 때만 쓴다(app/services/admin_service.py). 일반
+        사용자의 자기 이메일 변경 플로우는 아직 없다 — 있다면 이 메서드를
+        그대로 재사용하면 된다."""
 
     @abstractmethod
     async def update(
@@ -201,6 +220,12 @@ class InterviewSessionGateway(ABC):
         대응 로그 조회(prompts.TIER2_CRISIS_RESPONSE 문구 매칭)에 쓰인다 — 게이트웨이는
         어떤 문구를 찾는지 모르고 호출부(admin_service)가 결정한다."""
 
+    @abstractmethod
+    async def list_all(self, *, limit: int, offset: int) -> list[InterviewSessionRecord]:
+        """전체 유저를 통틀어 started_at 내림차순. 관리자 DB 열람 화면 전용 —
+        list_by_user와 달리 특정 유저로 좁히지 않는다. chat_logs는 채우지 않는다
+        (list_by_user와 동일한 이유: 목록 조회 페이로드를 가볍게 유지)."""
+
 
 class EventGateway(ABC):
     """Layer 1(검증 계층)의 실체. Event/EventRelation을 다룬다."""
@@ -303,6 +328,12 @@ class EventGateway(ABC):
     @abstractmethod
     async def bulk_update_importance(self, updates: Sequence[EventImportanceUpdate]) -> None: ...
 
+    @abstractmethod
+    async def list_all(self, *, limit: int, offset: int) -> list[EventRecord]:
+        """전체 유저를 통틀어 created_at 내림차순, verified 여부 무관. 관리자 DB
+        열람 화면 전용 — search_verified 등 Layer 1 검증 게이트가 걸린 다른
+        조회 메서드와 달리 검토 목적이므로 verified=False인 것도 포함한다."""
+
 
 class MediaAssetGateway(ABC):
     @abstractmethod
@@ -380,6 +411,10 @@ class AutobiographyGateway(ABC):
         이 도메인에서는 위 필드들을 의도적으로 null로 되돌리는 경우가 없으므로
         None을 미지정 센티널로 사용해도 안전하다."""
 
+    @abstractmethod
+    async def list_all(self, *, limit: int, offset: int) -> list[AutobiographyRecord]:
+        """전체 유저를 통틀어 created_at 내림차순. 관리자 DB 열람 화면 전용."""
+
 
 class ChapterDraftGateway(ABC):
     """Autobiography 산하 챕터 초안. Phase 4 하향식 집필의 단위."""
@@ -387,6 +422,11 @@ class ChapterDraftGateway(ABC):
     @abstractmethod
     async def list_by_autobiography(self, autobiography_id: UUID) -> list[ChapterDraftRecord]:
         """chapter_index 오름차순."""
+
+    @abstractmethod
+    async def list_all(self, *, limit: int, offset: int) -> list[ChapterDraftRecord]:
+        """전체 autobiography를 통틀어 created_at 내림차순. 관리자 DB 열람 화면
+        전용 — list_by_autobiography와 달리 특정 자서전으로 좁히지 않는다."""
 
     @abstractmethod
     async def get(self, chapter_draft_id: UUID) -> ChapterDraftRecord | None: ...

@@ -94,6 +94,33 @@ async def admin_create_user(*, email: str, password: str, user_metadata: dict[st
     return UUID(response.json()["id"])
 
 
+async def admin_update_user(
+    user_id: UUID, *, email: str | None = None, password: str | None = None
+) -> None:
+    """관리자 대시보드 전용 — 로그인 자격증명(이메일/비밀번호)을 관리자가 직접
+    바꾼다. `admin_create_user`와 동일한 `_admin_headers()`(service_role 키) 패턴.
+    email만/password만/둘 다 넘길 수 있다(None은 "건드리지 않는다"는 뜻, 이
+    프로젝트의 다른 게이트웨이 update 메서드들과 동일한 부분 갱신 관례)."""
+    body: dict[str, Any] = {}
+    if email is not None:
+        body["email"] = email
+    if password is not None:
+        body["password"] = password
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        response = await client.put(
+            f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+            headers=_admin_headers(),
+            json=body,
+        )
+    if response.status_code in (400, 422):
+        message = _error_message(response)
+        if "already" in message.lower() or "exists" in message.lower() or "registered" in message.lower():
+            raise SupabaseAuthError(409, "이미 등록된 이메일입니다.")
+        raise SupabaseAuthError(response.status_code, message)
+    if not response.is_success:
+        raise SupabaseAuthError(response.status_code, _error_message(response))
+
+
 async def sign_in_with_password(*, email: str, password: str) -> dict[str, Any]:
     """성공 시 {"access_token", "refresh_token", "expires_in", "token_type", "user": {...}}."""
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

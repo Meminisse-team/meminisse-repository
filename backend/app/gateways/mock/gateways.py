@@ -96,6 +96,11 @@ class MockAuditGateway(AuditGateway):
         self._store.audit_logs.append(record)
         return record
 
+    async def list_recent(self, *, limit: int, offset: int) -> list[AdminAuditLogRecord]:
+        logs = sorted(self._store.audit_logs, key=lambda a: a.created_at)
+        logs.reverse()
+        return logs[offset : offset + limit]
+
 
 class MockUserGateway(UserGateway):
     def __init__(self, store: MockStore) -> None:
@@ -122,6 +127,17 @@ class MockUserGateway(UserGateway):
 
     async def get_by_email(self, email: str) -> UserRecord | None:
         return next((u for u in self._store.users.values() if u.email == email), None)
+
+    async def list_all(self, *, limit: int, offset: int) -> list[UserRecord]:
+        users = sorted(self._store.users.values(), key=lambda u: u.id.int, reverse=True)
+        return users[offset : offset + limit]
+
+    async def update_email(self, user_id: uuid.UUID, new_email: str) -> UserRecord:
+        user = self._store.users.get(user_id)
+        if user is None:
+            raise KeyError(f"user not found in mock store: {user_id}")
+        user.email = new_email
+        return user
 
     async def update(
         self,
@@ -262,6 +278,11 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
             s for s in self._store.sessions.values()
             if any(log.content == content for log in s.chat_logs)
         ]
+
+    async def list_all(self, *, limit: int, offset: int) -> list[InterviewSessionRecord]:
+        sessions = sorted(self._store.sessions.values(), key=lambda s: s.started_at)
+        sessions.reverse()
+        return sessions[offset : offset + limit]
 
     def _require_session(self, session_id: uuid.UUID) -> InterviewSessionRecord:
         session = self._store.sessions.get(session_id)
@@ -451,6 +472,11 @@ class MockEventGateway(EventGateway):
             event.importance_signals = update.importance_signals
             event.life_milestone_category = update.life_milestone_category
 
+    async def list_all(self, *, limit: int, offset: int) -> list[EventRecord]:
+        events = sorted(self._store.events.values(), key=lambda e: e.created_at)
+        events.reverse()
+        return events[offset : offset + limit]
+
     def _require_event(self, event_id: uuid.UUID) -> EventRecord:
         event = self._store.events.get(event_id)
         if event is None:
@@ -593,6 +619,11 @@ class MockAutobiographyGateway(AutobiographyGateway):
         autobiography.updated_at = datetime.now(timezone.utc)
         return autobiography
 
+    async def list_all(self, *, limit: int, offset: int) -> list[AutobiographyRecord]:
+        items = sorted(self._store.autobiographies.values(), key=lambda a: a.created_at)
+        items.reverse()
+        return items[offset : offset + limit]
+
 
 class MockChapterDraftGateway(ChapterDraftGateway):
     def __init__(self, store: MockStore) -> None:
@@ -604,6 +635,11 @@ class MockChapterDraftGateway(ChapterDraftGateway):
         ]
         chapters.sort(key=lambda c: c.chapter_index)
         return chapters
+
+    async def list_all(self, *, limit: int, offset: int) -> list[ChapterDraftRecord]:
+        items = sorted(self._store.chapter_drafts.values(), key=lambda c: c.created_at)
+        items.reverse()
+        return items[offset : offset + limit]
 
     async def get(self, chapter_draft_id: uuid.UUID) -> ChapterDraftRecord | None:
         return self._store.chapter_drafts.get(chapter_draft_id)

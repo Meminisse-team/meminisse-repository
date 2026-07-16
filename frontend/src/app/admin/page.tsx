@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
+import { LazySection } from "@/app/admin/_components/LazySection";
+import { AppLogSection } from "@/app/admin/_components/AppLogSection";
+import { DbViewerSection } from "@/app/admin/_components/DbViewerSection";
+import { UserLookupSection } from "@/app/admin/_components/UserLookupSection";
 import { adminApi } from "@/lib/api/admin";
-import type { AdminSession } from "@/types/api";
+import type { AdminAuditLog, AdminSession } from "@/types/api";
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
   photo: "사진",
@@ -12,77 +14,55 @@ const SESSION_TYPE_LABEL: Record<string, string> = {
 };
 
 export default function AdminPage() {
-  const [staleSessions, setStaleSessions] = useState<AdminSession[]>([]);
-  const [crisisSessions, setCrisisSessions] = useState<AdminSession[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = () => {
-    return Promise.all([adminApi.listStaleSessions(), adminApi.listCrisisSessions()])
-      .then(([stale, crisis]) => {
-        setStaleSessions(stale);
-        setCrisisSessions(crisis);
-        setError(null);
-      })
-      .catch(() => setError("관리자 데이터를 불러오지 못했어요."));
-  };
-
-  useEffect(() => {
-    fetchData().finally(() => setLoading(false));
-  }, []);
-
-  const handleRefresh = () => {
-    setRefreshing(true);
-    fetchData().finally(() => setRefreshing(false));
-  };
-
   return (
     <main className="px-6 pb-10 pt-6">
-      <div className="mb-8 flex items-center justify-between">
-        <h1 className="font-serif-kr text-2xl text-black">관리자 대시보드</h1>
-        <button
-          type="button"
-          onClick={handleRefresh}
-          disabled={loading || refreshing}
-          className="rounded-full border border-black/10 px-4 py-1.5 text-sm text-black/60 disabled:opacity-40"
+      <h1 className="mb-8 font-serif-kr text-2xl text-black">관리자 대시보드</h1>
+
+      <div className="flex flex-col gap-8">
+        <LazySection
+          title="처리 지연 세션"
+          description="완료됐지만 10분 넘게 산문 재조립이 끝나지 않은 세션 — Celery 워커가
+            내려가 있는 등 처리가 아예 시작되지 못했을 가능성이 있어요. 대량
+            처리 중(예: 테스트 데이터 시딩)이라면 이 숫자가 자연스럽게 줄어드는
+            중일 수 있어요 — 다시 눌러서 확인해보세요."
+          load={adminApi.listStaleSessions}
         >
-          {refreshing ? "새로고침 중..." : "새로고침"}
-        </button>
-      </div>
-
-      {loading && <p className="text-black/50">불러오는 중...</p>}
-      {error && <p className="text-black/50">{error}</p>}
-
-      {!loading && !error && (
-        <div className="flex flex-col gap-8">
-          <section>
-            <div className="mb-1 flex items-baseline gap-2">
-              <h2 className="text-lg font-semibold text-black">처리 지연 세션</h2>
-              {staleSessions.length > 0 && (
-                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-sm font-medium text-amber-800">
-                  {staleSessions.length}개 남음
+          {(sessions: AdminSession[]) => (
+            <>
+              {sessions.length > 0 && (
+                <span className="mb-2 inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-sm font-medium text-amber-800">
+                  {sessions.length}개 남음
                 </span>
               )}
-            </div>
-            <p className="mb-4 text-sm text-black/40">
-              완료됐지만 10분 넘게 산문 재조립이 끝나지 않은 세션 — Celery 워커가
-              내려가 있는 등 처리가 아예 시작되지 못했을 가능성이 있어요. 대량
-              처리 중(예: 테스트 데이터 시딩)이라면 이 숫자가 자연스럽게 줄어드는
-              중일 수 있어요 — 새로고침해서 계속 확인해보세요.
-            </p>
-            <SessionList sessions={staleSessions} emptyLabel="처리 지연 세션이 없어요." />
-          </section>
+              <SessionList sessions={sessions} emptyLabel="처리 지연 세션이 없어요." />
+            </>
+          )}
+        </LazySection>
 
-          <section>
-            <h2 className="mb-1 text-lg font-semibold text-black">위기 대응 로그</h2>
-            <p className="mb-4 text-sm text-black/40">
-              위기 대응 문구가 발화된 세션이에요. 사후 검토가 필요할 수 있어요.
-            </p>
-            <SessionList sessions={crisisSessions} emptyLabel="위기 대응 기록이 없어요." />
-          </section>
-        </div>
-      )}
+        <LazySection
+          title="위기 대응 로그"
+          description="위기 대응 문구가 발화된 세션이에요. 사후 검토가 필요할 수 있어요."
+          load={adminApi.listCrisisSessions}
+        >
+          {(sessions: AdminSession[]) => (
+            <SessionList sessions={sessions} emptyLabel="위기 대응 기록이 없어요." />
+          )}
+        </LazySection>
+
+        <UserLookupSection />
+
+        <DbViewerSection />
+
+        <LazySection
+          title="관리자 감사 로그"
+          description="관리자가 언제 어떤 열람/수정을 했는지 기록한 로그예요."
+          load={() => adminApi.listAuditLogs(50, 0)}
+        >
+          {(logs: AdminAuditLog[]) => <AuditLogList logs={logs} />}
+        </LazySection>
+
+        <AppLogSection />
+      </div>
     </main>
   );
 }
@@ -101,6 +81,26 @@ function SessionList({ sessions, emptyLabel }: { sessions: AdminSession[]; empty
           <p className="mt-1 text-black/40">
             시작 {new Date(s.started_at).toLocaleString("ko-KR")}
             {s.completed_at && ` · 완료 ${new Date(s.completed_at).toLocaleString("ko-KR")}`}
+          </p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AuditLogList({ logs }: { logs: AdminAuditLog[] }) {
+  if (logs.length === 0) {
+    return <p className="text-base text-black/50">감사 로그가 없어요.</p>;
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {logs.map((log) => (
+        <li key={log.id} className="rounded-xl border border-black/10 p-3 text-sm">
+          <p className="text-black/70">{log.action}</p>
+          <p className="mt-1 text-black/40">
+            {new Date(log.created_at).toLocaleString("ko-KR")}
+            {log.target_user_id && ` · user ${log.target_user_id.slice(0, 8)}`}
+            {log.target_session_id && ` · session ${log.target_session_id.slice(0, 8)}`}
           </p>
         </li>
       ))}

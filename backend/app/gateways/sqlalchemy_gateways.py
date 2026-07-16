@@ -105,6 +105,22 @@ class SqlAlchemyAuditGateway(AuditGateway):
             created_at=obj.created_at,
         )
 
+    async def list_recent(self, *, limit: int, offset: int) -> list[AdminAuditLogRecord]:
+        result = await self._session.execute(
+            select(AdminAuditLog)
+            .order_by(AdminAuditLog.created_at.desc(), AdminAuditLog.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return [
+            AdminAuditLogRecord(
+                id=obj.id, admin_id=obj.admin_id, action=obj.action,
+                target_user_id=obj.target_user_id, target_session_id=obj.target_session_id,
+                created_at=obj.created_at,
+            )
+            for obj in result.scalars().all()
+        ]
+
 
 class SqlAlchemyUserGateway(UserGateway):
     def __init__(self, session: AsyncSession) -> None:
@@ -135,6 +151,20 @@ class SqlAlchemyUserGateway(UserGateway):
         result = await self._session.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         return _to_user_record(user) if user else None
+
+    async def list_all(self, *, limit: int, offset: int) -> list[UserRecord]:
+        result = await self._session.execute(
+            select(User).order_by(User.created_at.desc(), User.id.desc()).limit(limit).offset(offset)
+        )
+        return [_to_user_record(user) for user in result.scalars().all()]
+
+    async def update_email(self, user_id: UUID, new_email: str) -> UserRecord:
+        user = await self._session.get(User, user_id)
+        if user is None:
+            raise KeyError(f"user not found: {user_id}")
+        user.email = new_email
+        await self._session.flush()
+        return _to_user_record(user)
 
     async def update(
         self,
@@ -284,6 +314,15 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
             .join(ChatLog, ChatLog.session_id == InterviewSession.id)
             .where(ChatLog.content == content)
             .distinct()
+        )
+        return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
+
+    async def list_all(self, *, limit: int, offset: int) -> list[InterviewSessionRecord]:
+        result = await self._session.execute(
+            select(InterviewSession)
+            .order_by(InterviewSession.started_at.desc(), InterviewSession.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
 
@@ -511,6 +550,12 @@ class SqlAlchemyEventGateway(EventGateway):
             obj.life_milestone_category = update.life_milestone_category
         await self._session.flush()
 
+    async def list_all(self, *, limit: int, offset: int) -> list[EventRecord]:
+        result = await self._session.execute(
+            select(Event).order_by(Event.created_at.desc(), Event.id.desc()).limit(limit).offset(offset)
+        )
+        return [_to_event_record(obj) for obj in result.scalars().all()]
+
 
 class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
     def __init__(self, session: AsyncSession) -> None:
@@ -649,6 +694,15 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
         await self._session.flush()
         return _to_autobiography_record(obj)
 
+    async def list_all(self, *, limit: int, offset: int) -> list[AutobiographyRecord]:
+        result = await self._session.execute(
+            select(Autobiography)
+            .order_by(Autobiography.created_at.desc(), Autobiography.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return [_to_autobiography_record(obj) for obj in result.scalars().all()]
+
 
 class SqlAlchemyChapterDraftGateway(ChapterDraftGateway):
     def __init__(self, session: AsyncSession) -> None:
@@ -659,6 +713,15 @@ class SqlAlchemyChapterDraftGateway(ChapterDraftGateway):
             select(ChapterDraft)
             .where(ChapterDraft.autobiography_id == autobiography_id)
             .order_by(ChapterDraft.chapter_index.asc())
+        )
+        return [_to_chapter_draft_record(obj) for obj in result.scalars().all()]
+
+    async def list_all(self, *, limit: int, offset: int) -> list[ChapterDraftRecord]:
+        result = await self._session.execute(
+            select(ChapterDraft)
+            .order_by(ChapterDraft.created_at.desc(), ChapterDraft.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return [_to_chapter_draft_record(obj) for obj in result.scalars().all()]
 
