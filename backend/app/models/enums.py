@@ -54,6 +54,8 @@ class MediaAnalysisTrack(str, PyEnum):
 class SessionType(str, PyEnum):
     PHOTO = "photo"                    # 사진 핀셋 대화 (linked_media_asset_id 기반)
     FIXED_QUESTION = "fixed_question"  # 고정 템플릿 질문 (question_id 기반)
+    EPISODE = "episode"                # 자유 에피소드 — question_id/linked_media_asset_id 둘 다
+                                        # null, 자동 배정 큐를 거치지 않고 사용자가 직접 시작
 
 
 class SessionStatus(str, PyEnum):

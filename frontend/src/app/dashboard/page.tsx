@@ -14,6 +14,7 @@ const DEFAULT_PREVIEW = "아직 나눈 이야기가 없어요. 눌러서 첫 대
 export default function DashboardHomePage() {
   const { user } = useCurrentUser();
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatMode, setChatMode] = useState<"queue" | "episode">("queue");
   const [latestSession, setLatestSession] = useState<InterviewSession | null>(null);
   const [preview, setPreview] = useState(DEFAULT_PREVIEW);
 
@@ -45,6 +46,17 @@ export default function DashboardHomePage() {
     void refreshPreview();
   }
 
+  function handleAddEpisode() {
+    // "권장"이지 "차단"은 아니다 — 준비된 질문과 내용이 겹칠 수 있다는 것만 알리고,
+    // 계속할지는 사용자가 정한다(2026-07-16 요청).
+    const confirmed = window.confirm(
+      "이미 준비된 질문과 겹칠 수 있어요. 질문에 먼저 모두 답한 뒤 추가하시는 걸 권장해요. 그래도 새 에피소드를 시작할까요?"
+    );
+    if (!confirmed) return;
+    setChatMode("episode");
+    setChatOpen(true);
+  }
+
   // 열려 있는(미완료) 세션만 이어간다 — 이미 완료된 세션에 다시 발화를 얹으면
   // Phase 2 후처리 파이프라인이 잘못 재실행될 수 있어, 완료된 세션은 미리보기로만
   // 보여주고 새로 시작할 때는 첫 발화 시점에 새 세션을 만든다(ChatOverlay 참조).
@@ -62,12 +74,25 @@ export default function DashboardHomePage() {
 
       <button
         type="button"
-        onClick={() => setChatOpen(true)}
+        onClick={() => {
+          setChatMode("queue");
+          setChatOpen(true);
+        }}
         className="w-full max-w-md rounded-3xl border border-black/10 p-6 text-left transition-colors hover:border-black/30"
       >
         <p className="text-sm text-black/40">오늘의 대화</p>
         <p className="mt-2 text-lg leading-relaxed text-black">{preview}</p>
         <p className="mt-4 text-sm text-black/40">눌러서 이어가기 →</p>
+      </button>
+
+      <button
+        type="button"
+        onClick={handleAddEpisode}
+        className="w-full max-w-md rounded-3xl border border-black/10 p-6 text-left transition-colors hover:border-black/30"
+      >
+        <p className="text-sm text-black/40">에피소드 추가</p>
+        <p className="mt-2 text-lg leading-relaxed text-black">질문에 없는 나만의 이야기를 자유롭게 들려주세요</p>
+        <p className="mt-4 text-sm text-black/40">눌러서 시작하기 →</p>
       </button>
 
       <Link
@@ -84,6 +109,7 @@ export default function DashboardHomePage() {
         onClose={handleChatClose}
         resumeSessionId={resumeSessionId}
         onSessionChanged={() => void refreshPreview()}
+        startMode={chatMode}
       />
     </main>
   );

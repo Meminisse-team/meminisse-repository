@@ -212,6 +212,8 @@ async def _resolve_opening_content(gateways: Gateways, session: InterviewSession
     로컬 상태(previewNext 응답)로만 보여지고 실제로는 저장되지 않아, 예를 들어
     "대학을 어디 다녔나요?"라는 질문에 "서울대"라고만 답해도 DB에는 "서울대"
     한 마디만 남아 무엇에 대한 답인지 알 수 없는 문제가 있었다."""
+    if session.session_type == SessionType.EPISODE:
+        return prompts.EPISODE_SESSION_OPENING
     if session.session_type == SessionType.FIXED_QUESTION and session.question_id is not None:
         question = await gateways.questions.get_by_id(session.question_id)
         return question.content if question is not None else None
@@ -336,7 +338,13 @@ async def add_user_turn(
         newly_filled = await _run_slot_gating(content=content, slots_filled=session.slots_filled)
         updated_slots = {**session.slots_filled, **{slot: True for slot in newly_filled}}
         missing_required = [key for key in prompts.REQUIRED_SLOTS if not updated_slots.get(key)]
-        is_fixed_or_photo = session.session_type in (SessionType.FIXED_QUESTION, SessionType.PHOTO)
+        # "한 세션 = 사건 하나" 관례를 따르는 세션 타입 전부 — 슬롯 충족 후 마무리
+        # 확인을 거쳐 자동 완료되고, 맥락 기반 꼬리질문도 이 타입들에서만 시도한다.
+        # EPISODE(사용자가 직접 시작한 자유 에피소드, 2026-07-16)도 같은 관례를
+        # 따른다 — 여기 빠지면 세션이 에러 없이 영원히 OPEN 상태로 남는다.
+        is_single_event_session = session.session_type in (
+            SessionType.FIXED_QUESTION, SessionType.PHOTO, SessionType.EPISODE,
+        )
 
         def _finalize_wrap_up_or_complete() -> str:
             """슬롯·풍부함·맥락 기반 꼬리질문까지 다 거친 뒤 도달하는 마지막 갈림길
@@ -354,7 +362,7 @@ async def add_user_turn(
             # (2026-07-15 — 이전엔 여기서 미리 다음 질문을 만들어 보여줘, 세션이
             # 끝나도 새 채팅이 열리는 느낌 없이 한 세션 안에서 여러 질문을 받는
             # 것처럼 보인다는 피드백이 있었다).
-            should_complete = is_fixed_or_photo
+            should_complete = is_single_event_session
             return (
                 "네, 잘 들었어요. 소중한 이야기 들려주셔서 감사해요."
                 if should_complete
@@ -381,7 +389,7 @@ async def add_user_turn(
         elif (
             not updated_slots.get(_CONTEXTUAL_FOLLOWUP_OFFERED_KEY)
             and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
-            and is_fixed_or_photo
+            and is_single_event_session
         ):
             # 슬롯(필수 정보)과 풍부함(길이)은 기계적 기준이었다 — 여기서는 그와
             # 별개로, 진짜 전기 작가라면 자연스럽게 캐물었을 만한 지점이 대화 속에

@@ -15,9 +15,14 @@ interface ChatOverlayProps {
   resumeSessionId: string | null;
   /** 세션이 새로 생성되거나 종료돼 부모(대시보드 미리보기)가 갱신해야 할 때 호출. */
   onSessionChanged?: (sessionId: string) => void;
+  /** "queue"(기본) = 자동 배정 큐(고정 질문/사진), "episode" = 사용자가 직접 시작하는
+   * 자유 에피소드(대시보드 "에피소드 추가", 2026-07-16). 오버레이가 열려 있는 동안은
+   * 고정값 — 부모가 여는 시점에만 정한다. */
+  startMode?: "queue" | "episode";
 }
 
 const FALLBACK_OPENING_LINE = "오늘은 어떤 기억을 함께 떠올려볼까요? 편하게 말씀해주세요.";
+const EPISODE_OPENING_LINE = "편하게 시작해볼까요? 들려주고 싶은 이야기를 자유롭게 적어주세요.";
 
 /**
  * '오늘의 대화' 클릭 시 뜨는 채팅 컴포넌트. lib/api/interviews.ts를 통해 실제
@@ -27,8 +32,18 @@ const FALLBACK_OPENING_LINE = "오늘은 어떤 기억을 함께 떠올려볼까
  * 대신 세션을 만들기 전에도 GET next-preview로 "다음 질문이 뭔지"는 미리 보여준다
  * (2026-07-14: 이전엔 "어떤 대화를 해볼까요?" 같은 정적 문구만 보이던 문제 수정).
  */
-export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }: ChatOverlayProps) {
+export function ChatOverlay({
+  open,
+  onClose,
+  resumeSessionId,
+  onSessionChanged,
+  startMode = "queue",
+}: ChatOverlayProps) {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  /** 지금 이 대화가 실제로 어떤 타입인지(헤더 표시용) — resume 시엔 서버가 알려준
+   * session_type, 새로 만든 직후엔 생성 응답의 session_type을 따른다. null이면
+   * 아직 세션이 없는 상태라 startMode로 대신 판단한다(handleSubmit 이전). */
+  const [activeSessionType, setActiveSessionType] = useState<"queue" | "episode" | null>(null);
   const [linkedMediaAssetId, setLinkedMediaAssetId] = useState<string | null>(null);
   const [linkedPhoto, setLinkedPhoto] = useState<MediaAsset | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -67,9 +82,16 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
   // 보이는 문제가 있었다. "다음 이야기 계속하기" = 진짜 새 채팅이 열리는 경험).
   function loadFreshPreview() {
     setMessages([]);
-    setOpeningLine(FALLBACK_OPENING_LINE);
+    setActiveSessionType(null);
     setLinkedMediaAssetId(null);
     setLinkedPhoto(null);
+    if (startMode === "episode") {
+      // 에피소드는 자동 배정 큐와 무관하므로 next-preview를 조회할 필요가 없다 —
+      // 세션도 아직 안 만드니(첫 발화 시점에 생성) 로컬 문구만 바로 보여준다.
+      setOpeningLine(EPISODE_OPENING_LINE);
+      return;
+    }
+    setOpeningLine(FALLBACK_OPENING_LINE);
     setLoading(true);
     interviewsApi
       .previewNext()
@@ -87,6 +109,7 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
     setError(null);
     setJustCompleted(false);
     setSessionId(initialResumeId);
+    setActiveSessionType(null);
     setLinkedMediaAssetId(null);
     setLinkedPhoto(null);
     if (!initialResumeId) {
@@ -100,6 +123,7 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
       .then((detail) => {
         setMessages(detail.chat_logs);
         setLinkedMediaAssetId(detail.session_type === "photo" ? detail.linked_media_asset_id : null);
+        setActiveSessionType(detail.session_type === "episode" ? "episode" : "queue");
       })
       .catch(() => setError("이전 대화를 불러오지 못했어요."))
       .finally(() => setLoading(false));
@@ -163,13 +187,17 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
     try {
       let activeSessionId = sessionId;
       if (!activeSessionId) {
-        // 서버가 상황에 따라 session_type을 PHOTO로 자동 전환할 수 있다(고정 질문 큐와
-        // 사진 큐를 합쳐 다음 항목을 고르는 백엔드 오케스트레이션, docs/QUESTION_BANK_
-        // GUIDE.md 5절 참조) — 요청 바디는 그대로 fixed_question이어도 무방하다.
-        const created = await interviewsApi.create({ session_type: "fixed_question" });
+        // startMode가 "episode"면 큐와 무관한 자유 에피소드로 만든다. 큐 모드에서는
+        // 서버가 상황에 따라 session_type을 PHOTO로 자동 전환할 수 있다(고정 질문
+        // 큐와 사진 큐를 합쳐 다음 항목을 고르는 백엔드 오케스트레이션, docs/
+        // QUESTION_BANK_GUIDE.md 5절 참조) — 요청 바디는 그대로 fixed_question이어도 무방하다.
+        const created = await interviewsApi.create({
+          session_type: startMode === "episode" ? "episode" : "fixed_question",
+        });
         activeSessionId = created.id;
         setSessionId(created.id);
         setLinkedMediaAssetId(created.session_type === "photo" ? created.linked_media_asset_id : null);
+        setActiveSessionType(created.session_type === "episode" ? "episode" : "queue");
         onSessionChanged?.(created.id);
       }
       const turn = await interviewsApi.sendMessage(activeSessionId, content);
@@ -224,7 +252,9 @@ export function ChatOverlay({ open, onClose, resumeSessionId, onSessionChanged }
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white animate-fade-up">
       <header className="flex items-center justify-between border-b border-black/10 px-6 py-4">
-        <span className="font-serif-kr text-lg text-black">오늘의 대화</span>
+        <span className="font-serif-kr text-lg text-black">
+          {(activeSessionType ?? startMode) === "episode" ? "에피소드" : "오늘의 대화"}
+        </span>
         <button
           type="button"
           onClick={() => void handleEnd()}

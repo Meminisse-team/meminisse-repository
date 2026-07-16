@@ -21,9 +21,11 @@ from app.models.enums import MessageRole, SessionStatus, SessionType
 class InterviewSession(Base):
     """
     하나의 메인 질문(fixed_question) 또는 사진(photo)에 대해 열리는 대화 단위.
+    사용자가 큐와 무관하게 직접 시작하는 자유 에피소드(episode)도 있다.
 
-    session_type == PHOTO        → linked_media_asset_id 필수, question_id null
+    session_type == PHOTO          → linked_media_asset_id 필수, question_id null
     session_type == FIXED_QUESTION → question_id 필수, linked_media_asset_id null
+    session_type == EPISODE        → 둘 다 null(자동 배정 큐를 거치지 않음)
     """
     __tablename__ = "interview_sessions"
 

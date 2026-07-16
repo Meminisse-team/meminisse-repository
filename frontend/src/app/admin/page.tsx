@@ -8,6 +8,7 @@ import type { AdminSession } from "@/types/api";
 const SESSION_TYPE_LABEL: Record<string, string> = {
   photo: "사진",
   fixed_question: "고정 질문",
+  episode: "에피소드",
 };
 
 export default function AdminPage() {
