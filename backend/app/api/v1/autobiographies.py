@@ -42,17 +42,41 @@ async def get_autobiography(
 ) -> AutobiographyRead:
     require_self(current_user, user_id)
     autobiography = await autobiography_service.get_or_create_autobiography(gateways, user_id)
-    return AutobiographyRead.model_validate(autobiography)
+    completed_session_count = await gateways.sessions.count_completed_by_user(user_id)
+    data = AutobiographyRead.model_validate(autobiography)
+    return data.model_copy(update={"completed_session_count": completed_session_count})
+
+
+@router.get("/{user_id}/finished", response_model=list[AutobiographyRead])
+async def list_finished_autobiographies(
+    user_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> list[AutobiographyRead]:
+    """"나의 책장" 전용 — 이 유저가 완성한 자서전 전체(최신순)."""
+    require_self(current_user, user_id)
+    autobiographies = await autobiography_service.list_finished_autobiographies(gateways, user_id)
+    return [AutobiographyRead.model_validate(a) for a in autobiographies]
 
 
 @router.post("/{user_id}/consolidate", status_code=status.HTTP_202_ACCEPTED)
-async def consolidate(user_id: uuid.UUID, current_user: CurrentUserDep) -> dict:
+async def consolidate(user_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep) -> dict:
     """
     Phase 3(이벤트 병합·중요도 산정·스타일 바이블) 트리거. 여러 차례의 LLM 호출이
     이어지는 무거운 연산이라 Celery 워커에 위임하고 즉시 202를 반환한다. 완료 여부는
     GET /{user_id}의 status 필드가 CONSOLIDATED로 바뀌는 것으로 폴링한다.
+
+    재료(완료된 세션)가 너무 적으면 애초에 큐잉하지 않는다 — Celery 태스크
+    안에서 실패시키면 프론트에 즉시 전달할 방법이 없어, 여기 라우터 레벨에서
+    먼저 막는다(2026-07-17 제품 결정 — 최소 50개).
     """
     require_self(current_user, user_id)
+    completed_session_count = await gateways.sessions.count_completed_by_user(user_id)
+    if completed_session_count < autobiography_service.MIN_COMPLETED_SESSIONS_FOR_AUTOBIOGRAPHY:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"아직 이야기가 충분히 쌓이지 않았어요. 최소 "
+            f"{autobiography_service.MIN_COMPLETED_SESSIONS_FOR_AUTOBIOGRAPHY}개 이상 답변한 뒤 다시 시도해주세요"
+            f"(현재 {completed_session_count}개).",
+        )
     from app.workers.tasks import consolidate_autobiography as consolidate_task
 
     consolidate_task.delay(str(user_id))

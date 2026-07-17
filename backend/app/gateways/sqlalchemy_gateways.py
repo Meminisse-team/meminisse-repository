@@ -666,12 +666,23 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_by_user_id(self, user_id: UUID) -> AutobiographyRecord | None:
+    async def get_latest_unfinished_by_user(self, user_id: UUID) -> AutobiographyRecord | None:
         result = await self._session.execute(
-            select(Autobiography).where(Autobiography.user_id == user_id)
+            select(Autobiography)
+            .where(Autobiography.user_id == user_id, Autobiography.final_content.is_(None))
+            .order_by(Autobiography.created_at.desc())
+            .limit(1)
         )
         obj = result.scalar_one_or_none()
         return _to_autobiography_record(obj) if obj else None
+
+    async def list_finished_by_user(self, user_id: UUID) -> list[AutobiographyRecord]:
+        result = await self._session.execute(
+            select(Autobiography)
+            .where(Autobiography.user_id == user_id, Autobiography.final_content.is_not(None))
+            .order_by(Autobiography.created_at.desc())
+        )
+        return [_to_autobiography_record(obj) for obj in result.scalars().all()]
 
     async def get_by_id(self, autobiography_id: UUID) -> AutobiographyRecord | None:
         obj = await self._session.get(Autobiography, autobiography_id)

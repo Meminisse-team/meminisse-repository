@@ -83,14 +83,22 @@ async def test_generate_manuscript_pdf_renders_part_divider_pages() -> None:
                             },
                             {
                                 "chapter_index": 2, "title": "2장. 방황", "theme_keywords": [],
+                                "connecting_thread": "결핍이 이어진다.", "part_index": 1,
+                            },
+                            {
+                                "chapter_index": 3, "title": "3장. 바닥", "theme_keywords": [],
                                 "connecting_thread": "결핍이 절정에 이른다.", "part_index": 1,
                             },
                             {
-                                "chapter_index": 3, "title": "3장. 도전", "theme_keywords": [],
+                                "chapter_index": 4, "title": "4장. 도전", "theme_keywords": [],
                                 "connecting_thread": "도약이 시작된다.", "part_index": 2,
                             },
                             {
-                                "chapter_index": 4, "title": "4장. 성취", "theme_keywords": [],
+                                "chapter_index": 5, "title": "5장. 성장", "theme_keywords": [],
+                                "connecting_thread": "도약이 이어진다.", "part_index": 2,
+                            },
+                            {
+                                "chapter_index": 6, "title": "6장. 성취", "theme_keywords": [],
                                 "connecting_thread": "성취를 회수한다.", "part_index": 2,
                             },
                         ],

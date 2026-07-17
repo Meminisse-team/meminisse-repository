@@ -588,6 +588,201 @@ async def test_select_toc_candidate_generates_and_persists_part_synopses() -> No
     assert saved_parts[1]["part_synopsis"] == "Part 시놉시스 3"
 
 
+# --------------------------------------------------------------------------- #
+# Part 시놉시스 근거 확보 — 2026-07-17 실사용 중 발견된 환각("옥스퍼드에서       #
+# 태어났다"는 근거가 "도서관에서 태어났다"로 구체화되어 지어내진 사고)의 수정.   #
+# part_synopsis가 실제 사건 자료 없이 만들어지던 게 원인이었으므로, 이제       #
+# select_toc_candidate가 이미 검색해 둔 챕터별 사건을 Part 시놉시스 프롬프트에  #
+# 실제 근거로 전달하는지 확인한다.                                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_part_synopsis_prompt_includes_event_summaries_as_grounding() -> None:
+    messages = prompts.build_part_synopsis_prompt(
+        book_synopsis="책 시놉시스",
+        part_title="1부",
+        part_arc_seed="씨앗",
+        chapter_titles=["1장"],
+        event_summaries=["부산에서 태어남", "학교에 입학함"],
+    )
+    user_content = messages[1]["content"]
+    assert "부산에서 태어남" in user_content
+    assert "학교에 입학함" in user_content
+
+
+def test_part_synopsis_prompt_falls_back_to_abstract_notice_when_no_events() -> None:
+    """근거 사건이 하나도 없으면(빈 검색 결과 등) 구체적 장면을 지어내지 말라는
+    안내로 폴백해야 한다 — 빈 [근거 사건 요약] 블록만 두면 모델이 오히려 자유
+    창작으로 채워 넣을 위험이 있다."""
+    messages = prompts.build_part_synopsis_prompt(
+        book_synopsis="책 시놉시스",
+        part_title="1부",
+        part_arc_seed="씨앗",
+        chapter_titles=["1장"],
+        event_summaries=[],
+    )
+    user_content = messages[1]["content"]
+    assert "근거 사건 없음" in user_content
+
+
+class _FakeEventForPartSynopsis:
+    def __init__(self, event_id: uuid.UUID, one_line_summary: str) -> None:
+        self.id = event_id
+        self.one_line_summary = one_line_summary
+
+
+@pytest.mark.asyncio
+async def test_generate_part_synopses_groups_events_by_part_and_dedupes() -> None:
+    """같은 사건이 한 Part 안의 여러 챕터에서 검색돼도 그 Part의 근거에는 한 번만
+    들어가야 하고(event.id 기준 중복 제거), 다른 Part의 근거가 섞여 들어가면
+    안 된다 — Part별로 정확히 분리된 근거만 봐야 그 Part 시놉시스가 실제로
+    그 Part의 사건에 기반해 만들어진다."""
+    chosen = _make_two_part_toc()  # 1,2장 = Part 1 / 3,4장 = Part 2
+    event_a = _FakeEventForPartSynopsis(uuid.uuid4(), "사건 A")
+    event_b = _FakeEventForPartSynopsis(uuid.uuid4(), "사건 B")
+    event_c = _FakeEventForPartSynopsis(uuid.uuid4(), "사건 C")
+    # chosen["chapters"]와 같은 순서(1,2,3,4장). 1장·2장(둘 다 Part 1)이 event_a를
+    # 공유하도록 해 중복 제거가 실제로 동작하는지 확인한다.
+    chapter_events = [
+        [event_a],
+        [event_a, event_b],
+        [event_c],
+        [],
+    ]
+
+    captured_prompts: list[list[dict]] = []
+
+    async def _fake_chat_completion(messages, **kwargs):
+        captured_prompts.append(messages)
+        return _FakeCompletion("생성된 시놉시스")
+
+    with patch("app.clients.solar.chat_completion", new=_fake_chat_completion):
+        result = await autobiography_service._generate_part_synopses(
+            "책 시놉시스", chosen, chapter_events
+        )
+
+    assert result[1] == "생성된 시놉시스"
+    part1_prompt_content = captured_prompts[0][1]["content"]
+    assert "사건 A" in part1_prompt_content
+    assert "사건 B" in part1_prompt_content
+    assert part1_prompt_content.count("사건 A") == 1  # 중복 제거 확인
+
+    part2_prompt_content = captured_prompts[1][1]["content"]
+    assert "사건 C" in part2_prompt_content
+    assert "사건 A" not in part2_prompt_content  # 다른 Part의 근거가 섞이면 안 됨
+
+
+# --------------------------------------------------------------------------- #
+# _normalize_toc_parts — Part 최소 챕터 수(3개) 강제 병합 + "N부"/"Part N"     #
+# 중복 표기 방지. 2026-07-17 실사용 중 프롬프트 지시만으로는 LLM이 이 두      #
+# 제약을 어기는 사례(Part 5가 챕터 1개, "1부. Part 1: ..." 중복 표기)가       #
+# 확인돼 결정론적 후처리로 보강했다.                                          #
+# --------------------------------------------------------------------------- #
+
+
+def _chapter(index: int, part_index: int) -> dict:
+    return {
+        "chapter_index": index,
+        "title": f"{index}장",
+        "theme_keywords": [],
+        "connecting_thread": "",
+        "part_index": part_index,
+    }
+
+
+@pytest.mark.parametrize(
+    "raw_title,expected",
+    [
+        ("Part 1: Childhood Curiosity", "Childhood Curiosity"),
+        ("1부: 유년기의 기억", "유년기의 기억"),
+        ("제1부 유년기", "유년기"),
+        ("유년기", "유년기"),  # 접두어가 없으면 그대로.
+    ],
+)
+def test_strip_part_title_prefix_handles_various_formats(raw_title: str, expected: str) -> None:
+    assert autobiography_service._strip_part_title_prefix(raw_title) == expected
+
+
+def test_normalize_toc_parts_strips_redundant_part_number_prefix() -> None:
+    candidate = {
+        "narrative_arc": "...",
+        "parts": [{"part_index": 1, "part_title": "Part 1: Childhood Curiosity", "part_arc": "..."}],
+        "chapters": [_chapter(1, 1), _chapter(2, 1), _chapter(3, 1)],
+    }
+    result = autobiography_service._normalize_toc_parts(candidate)
+    assert result["parts"][0]["part_title"] == "Childhood Curiosity"
+
+
+def test_normalize_toc_parts_merges_undersized_first_part_into_next() -> None:
+    candidate = {
+        "narrative_arc": "...",
+        "parts": [
+            {"part_index": 1, "part_title": "짧은 시작", "part_arc": "..."},
+            {"part_index": 2, "part_title": "본편", "part_arc": "..."},
+        ],
+        "chapters": [_chapter(1, 1), _chapter(2, 2), _chapter(3, 2), _chapter(4, 2)],
+    }
+    result = autobiography_service._normalize_toc_parts(candidate)
+
+    assert len(result["parts"]) == 1
+    assert result["parts"][0]["part_index"] == 1
+    assert result["parts"][0]["part_title"] == "본편"
+    assert all(c["part_index"] == 1 for c in result["chapters"])
+
+
+def test_normalize_toc_parts_merges_undersized_middle_part_into_previous() -> None:
+    candidate = {
+        "narrative_arc": "...",
+        "parts": [
+            {"part_index": 1, "part_title": "1부", "part_arc": "..."},
+            {"part_index": 2, "part_title": "2부", "part_arc": "..."},
+            {"part_index": 3, "part_title": "3부", "part_arc": "..."},
+        ],
+        "chapters": [
+            _chapter(1, 1), _chapter(2, 1), _chapter(3, 1),
+            _chapter(4, 2),  # Part 2는 챕터 1개뿐 — 병합 대상.
+            _chapter(5, 3), _chapter(6, 3), _chapter(7, 3),
+        ],
+    }
+    result = autobiography_service._normalize_toc_parts(candidate)
+
+    assert [p["part_index"] for p in result["parts"]] == [1, 2]
+    assert result["parts"][0]["part_title"] == "1부"
+    assert result["parts"][1]["part_title"] == "3부"  # 2부가 사라지고 3부가 새 2번이 됨.
+    ch4 = next(c for c in result["chapters"] if c["chapter_index"] == 4)
+    assert ch4["part_index"] == 1  # 4장(원래 2부)이 1부로 흡수됨.
+
+
+def test_normalize_toc_parts_does_not_merge_when_only_one_part() -> None:
+    candidate = {
+        "narrative_arc": "...",
+        "parts": [{"part_index": 1, "part_title": "Part 1: 전체", "part_arc": "..."}],
+        "chapters": [_chapter(1, 1)],
+    }
+    result = autobiography_service._normalize_toc_parts(candidate)
+    assert len(result["parts"]) == 1
+    assert result["parts"][0]["part_title"] == "전체"  # 접두어는 제거되지만 병합 로직은 스킵.
+
+
+def test_normalize_toc_parts_cascades_without_error_when_too_few_chapters() -> None:
+    """극단 케이스: Part 3개 모두 챕터가 1개씩뿐이면 연쇄 병합돼 결국 Part 1개로
+    수렴해야 하고, 이 과정에서 에러가 나면 안 된다."""
+    candidate = {
+        "narrative_arc": "...",
+        "parts": [
+            {"part_index": 1, "part_title": "1부", "part_arc": "..."},
+            {"part_index": 2, "part_title": "2부", "part_arc": "..."},
+            {"part_index": 3, "part_title": "3부", "part_arc": "..."},
+        ],
+        "chapters": [_chapter(1, 1), _chapter(2, 2), _chapter(3, 3)],
+    }
+    result = autobiography_service._normalize_toc_parts(candidate)
+
+    assert len(result["parts"]) == 1
+    assert len(result["chapters"]) == 3
+    assert all(c["part_index"] == 1 for c in result["chapters"])
+
+
 @pytest.mark.asyncio
 async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_repair() -> None:
     """수리(팩트체크/근거검증 flag로 촉발)가 걸려도 챕터 시놉시스는 한 번만

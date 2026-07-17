@@ -10,12 +10,14 @@ from app.models.enums import AutobiographyStatus, DraftStatus
 
 
 class Autobiography(Base):
-    """MVP: 유저 1인당 자서전 1권 (user_id UNIQUE 제약)."""
+    """유저 1인당 자서전 여러 권(버전) 가능 — 완성(final_content 有)된 버전은
+    "나의 책장"에 남고, 미완성 버전이 없으면 "자서전 집필" 진입 시 새로 만들어진다
+    (2026-07-17, migration 015 이전엔 user_id UNIQUE 제약으로 1인당 1권만 가능했다)."""
     __tablename__ = "autobiographies"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title = Column(String(512), nullable=True)
     status = Column(

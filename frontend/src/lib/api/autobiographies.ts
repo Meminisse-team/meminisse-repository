@@ -2,8 +2,12 @@ import { apiClient } from "@/lib/api/client";
 import type { Autobiography, ChapterDraft, PhotoPlacement } from "@/types/api";
 
 export const autobiographiesApi = {
-  /** get-or-create — 처음 호출하는 순간 in_progress 상태로 자동 생성된다. */
+  /** get-or-create — 미완성(final_content 없음) 버전이 있으면 이어서, 없으면(전부
+   * 완성됐거나 하나도 없으면) 새로 자동 생성된다. */
   get: (userId: string) => apiClient.get<Autobiography>(`/api/v1/autobiographies/${userId}`),
+  /** "나의 책장" 전용 — 이 유저가 완성한 자서전 전체(최신순). */
+  listFinished: (userId: string) =>
+    apiClient.get<Autobiography[]>(`/api/v1/autobiographies/${userId}/finished`),
   /** 202 — Celery 큐잉만 하고 즉시 반환한다(중복 이벤트 병합 + 중요도 산정 + 스타일
    * 바이블 생성). 완료되면 get()의 status가 "consolidated"로 바뀐다. */
   consolidate: (userId: string) =>

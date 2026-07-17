@@ -581,8 +581,21 @@ class MockAutobiographyGateway(AutobiographyGateway):
     def __init__(self, store: MockStore) -> None:
         self._store = store
 
-    async def get_by_user_id(self, user_id: uuid.UUID) -> AutobiographyRecord | None:
-        return next((a for a in self._store.autobiographies.values() if a.user_id == user_id), None)
+    async def get_latest_unfinished_by_user(self, user_id: uuid.UUID) -> AutobiographyRecord | None:
+        candidates = [
+            a for a in self._store.autobiographies.values()
+            if a.user_id == user_id and a.final_content is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda a: a.created_at)
+
+    async def list_finished_by_user(self, user_id: uuid.UUID) -> list[AutobiographyRecord]:
+        finished = [
+            a for a in self._store.autobiographies.values()
+            if a.user_id == user_id and a.final_content is not None
+        ]
+        return sorted(finished, key=lambda a: a.created_at, reverse=True)
 
     async def get_by_id(self, autobiography_id: uuid.UUID) -> AutobiographyRecord | None:
         return self._store.autobiographies.get(autobiography_id)

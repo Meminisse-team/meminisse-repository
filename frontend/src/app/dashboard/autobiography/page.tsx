@@ -19,6 +19,12 @@ import type {
 
 const POLL_INTERVAL_MS = 4000;
 
+// 자서전 집필 진행률 게이트 — 백엔드 상수(app/services/autobiography_service.py:
+// MIN_COMPLETED_SESSIONS_FOR_AUTOBIOGRAPHY 등)와 반드시 같은 값으로 유지할 것.
+const MIN_COMPLETED_SESSIONS = 50;
+const RECOMMENDED_COMPLETED_SESSIONS = 80;
+const PROGRESS_TOTAL = 130;
+
 /** 이 챕터에 확인이 필요하다고 표시된(팩트체크+근거검증) 항목 총 개수 — 0이면 표시할 게 없다. */
 function chapterFlagCount(chapter: ChapterDraft): number {
   return (
@@ -43,6 +49,17 @@ export default function AutobiographyPage() {
   const [consolidateTriggered, setConsolidateTriggered] = useState(false);
   const [finalizeTriggered, setFinalizeTriggered] = useState(false);
   const [pdfTriggered, setPdfTriggered] = useState(false);
+  // "각 장 집필 시작"을 눌렀는지 — 개별 챕터에 "생성 중" 신호가 없어서(백엔드에
+  // is_generating 같은 필드가 없음), 이 화면 방문 동안 사용자가 실제로 집필을
+  // 트리거했는지를 프론트에서만 기억해 미완료 챕터에 "집필하고 있어요..." 표시를
+  // 보여준다(새로고침하면 초기화되지만, Promise.all로 전 챕터를 한 번에 큐잉하는
+  // 현재 방식과 맞물려 이 화면에 머무는 동안은 항상 정확하다).
+  const [chaptersWriteTriggered, setChaptersWriteTriggered] = useState(false);
+  // "확인 필요 N곳" 배지를 사용자가 직접 읽어보고 넘겨도 되겠다고 표시한 챕터
+  // id 집합. 백엔드 데이터(factcheck_report/groundedness_report)는 그대로 두고
+  // 화면에서만 감추는 것이라 새로고침하면 다시 나타난다 — 영구적으로 지우려면
+  // 별도 백엔드 필드가 필요해 이번 범위에서는 프론트 상태로만 구현했다.
+  const [acknowledgedChapterIds, setAcknowledgedChapterIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [selecting, setSelecting] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -73,6 +90,9 @@ export default function AutobiographyPage() {
       // "몇 장에 넣을지" 선택지를 그리는 재료다(PhotoPlacementPanel 참조).
       const list = await autobiographiesApi.listChapters(bio.id);
       setChapters(list);
+      if (list.length > 0 && list.every((c) => c.content !== null)) {
+        setChaptersWriteTriggered(false);
+      }
     } else {
       setChapters([]);
     }
@@ -173,6 +193,7 @@ export default function AutobiographyPage() {
     setError(null);
     try {
       await Promise.all(unwritten.map((c) => autobiographiesApi.writeChapter(autobiography.id, c.id)));
+      setChaptersWriteTriggered(true);
       startPolling(() => void load());
     } catch {
       setError("챕터 집필을 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
@@ -183,7 +204,10 @@ export default function AutobiographyPage() {
 
   async function handleFinalize() {
     if (!autobiography) return;
-    const flaggedCount = chapters.reduce((sum, c) => sum + chapterFlagCount(c), 0);
+    // "확인했어요"를 누른 챕터는 사용자가 이미 검토했다는 뜻이므로 이 경고에서 뺀다.
+    const flaggedCount = chapters
+      .filter((c) => !acknowledgedChapterIds.has(c.id))
+      .reduce((sum, c) => sum + chapterFlagCount(c), 0);
     if (
       flaggedCount > 0 &&
       !window.confirm(
@@ -242,7 +266,7 @@ export default function AutobiographyPage() {
 
   return (
     <main className="px-6 pb-10 pt-14">
-      <h1 className="mb-8 font-serif-kr text-2xl text-black">나의 자서전</h1>
+      <h1 className="mb-8 font-serif-kr text-2xl text-black">자서전 집필</h1>
 
       {error && <p className="mb-6 text-base text-black/60">{error}</p>}
 
@@ -262,11 +286,19 @@ export default function AutobiographyPage() {
           allWritten={chaptersAllWritten}
           busy={busy}
           finalizeTriggered={finalizeTriggered}
+          writeTriggered={chaptersWriteTriggered}
+          acknowledgedChapterIds={acknowledgedChapterIds}
+          onAcknowledge={(chapterId) =>
+            setAcknowledgedChapterIds((current) => new Set(current).add(chapterId))
+          }
           onWriteAll={handleWriteAll}
           onFinalize={handleFinalize}
         />
       ) : candidates.length > 0 ? (
         <TocSelection candidates={candidates} selecting={selecting} onSelect={handleSelectToc} />
+      ) : autobiography.status === "in_progress" &&
+        autobiography.completed_session_count < MIN_COMPLETED_SESSIONS ? (
+        <ProgressGate completedCount={autobiography.completed_session_count} />
       ) : autobiography.status === "in_progress" ? (
         <NeedsConsolidate
           busy={busy}
@@ -277,6 +309,18 @@ export default function AutobiographyPage() {
         <NoTocYet busy={busy} onGenerate={handleGenerateToc} />
       )}
     </main>
+  );
+}
+
+/** CSS만으로 그리는 작은 회전 스피너 — 이 프로젝트엔 별도 스피너 컴포넌트가
+ * 없어서, "정리하고 있어요"/"집필하고 있어요" 같은 문구 앞에 붙여 "지금 뭔가
+ * 진행 중"이라는 걸 정적인 텍스트 한 줄보다 눈에 띄게 만든다. */
+function Spinner() {
+  return (
+    <span
+      className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-black/20 border-t-black"
+      aria-hidden="true"
+    />
   );
 }
 
@@ -295,12 +339,69 @@ function NeedsConsolidate({
         지금까지 나눈 이야기를 하나로 모아 정리할게요. 정리가 끝나면 목차를 만들 수 있어요.
       </p>
       {triggered ? (
-        <p className="text-sm text-black/40">이야기를 정리하고 있어요. 이 화면을 열어두면 자동으로 넘어가요...</p>
+        <div className="flex items-center gap-2">
+          <Spinner />
+          <p className="animate-pulse text-sm text-black/40">
+            이야기를 정리하고 있어요. 이 화면을 열어두면 자동으로 다음 화면(목차 만들기)으로
+            넘어가요...
+          </p>
+        </div>
       ) : (
         <Button onClick={onConsolidate} disabled={busy}>
           {busy ? "시작하는 중..." : "이야기 정리하기"}
         </Button>
       )}
+    </div>
+  );
+}
+
+/** 완료된 세션(재조립 산문)이 최소 기준(MIN_COMPLETED_SESSIONS) 미만이면 "이야기
+ * 정리하기"조차 보여주지 않고 이 진행률 화면을 대신 보여준다(2026-07-17 제품
+ * 결정 — 재료가 너무 적으면 자서전 자체가 부실해지므로 아예 시작을 막는다). */
+function ProgressGate({ completedCount }: { completedCount: number }) {
+  const pct = Math.min(100, (completedCount / PROGRESS_TOTAL) * 100);
+  const minPct = (MIN_COMPLETED_SESSIONS / PROGRESS_TOTAL) * 100;
+  const recommendedPct = (RECOMMENDED_COMPLETED_SESSIONS / PROGRESS_TOTAL) * 100;
+
+  return (
+    <div className="flex flex-col items-start gap-6 rounded-2xl border border-black/10 p-6">
+      <p className="text-lg leading-relaxed text-black">
+        아직 자서전을 시작하기엔 나눈 이야기가 조금 부족해요. 조금 더 이야기를 들려주시면
+        훨씬 풍성한 자서전을 만들 수 있어요.
+      </p>
+
+      <div className="w-full">
+        <div className="relative h-2 w-full rounded-full bg-black/10">
+          <div
+            className="h-2 rounded-full bg-black transition-all duration-500"
+            style={{ width: `${pct}%` }}
+          />
+          <div
+            className="absolute top-0 h-2 w-px bg-white/70"
+            style={{ left: `${minPct}%` }}
+            aria-hidden="true"
+          />
+          <div
+            className="absolute top-0 h-2 w-px bg-white/70"
+            style={{ left: `${recommendedPct}%` }}
+            aria-hidden="true"
+          />
+        </div>
+        <div className="mt-2 flex justify-between text-xs text-black/40">
+          <span>{completedCount}개 답변</span>
+          <span>
+            시작 가능 {MIN_COMPLETED_SESSIONS} · 권장 {RECOMMENDED_COMPLETED_SESSIONS} · 총{" "}
+            {PROGRESS_TOTAL}
+          </span>
+        </div>
+      </div>
+
+      <Link
+        href="/dashboard"
+        className="text-base text-black/50 underline underline-offset-4 hover:text-black/70"
+      >
+        오늘의 대화로 돌아가기
+      </Link>
     </div>
   );
 }
@@ -393,6 +494,9 @@ function ChapterProgress({
   allWritten,
   busy,
   finalizeTriggered,
+  writeTriggered,
+  acknowledgedChapterIds,
+  onAcknowledge,
   onWriteAll,
   onFinalize,
 }: {
@@ -401,6 +505,9 @@ function ChapterProgress({
   allWritten: boolean;
   busy: boolean;
   finalizeTriggered: boolean;
+  writeTriggered: boolean;
+  acknowledgedChapterIds: Set<string>;
+  onAcknowledge: (chapterId: string) => void;
   onWriteAll: () => void;
   onFinalize: () => void;
 }) {
@@ -423,7 +530,13 @@ function ChapterProgress({
                 {chapters
                   .filter((chapter) => partIndexByChapterIndex.get(chapter.chapter_index) === part.part_index)
                   .map((chapter) => (
-                    <ChapterReviewItem key={chapter.id} chapter={chapter} />
+                    <ChapterReviewItem
+                      key={chapter.id}
+                      chapter={chapter}
+                      writing={writeTriggered && chapter.content === null}
+                      acknowledged={acknowledgedChapterIds.has(chapter.id)}
+                      onAcknowledge={() => onAcknowledge(chapter.id)}
+                    />
                   ))}
               </ol>
             </div>
@@ -432,7 +545,13 @@ function ChapterProgress({
       ) : (
         <ol className="flex flex-col gap-3">
           {chapters.map((chapter) => (
-            <ChapterReviewItem key={chapter.id} chapter={chapter} />
+            <ChapterReviewItem
+              key={chapter.id}
+              chapter={chapter}
+              writing={writeTriggered && chapter.content === null}
+              acknowledged={acknowledgedChapterIds.has(chapter.id)}
+              onAcknowledge={() => onAcknowledge(chapter.id)}
+            />
           ))}
         </ol>
       )}
@@ -468,10 +587,27 @@ const STATUS_LABEL: Record<ChapterDraft["status"], string> = {
 /** 챕터 하나 — 접었다 폈다 하며 본문과, 팩트체크/근거검증에 걸린 부분을 사람이
  * 직접 확인할 수 있게 보여준다. factcheck_report/groundedness_report는 write_chapter가
  * 이미 계산해두지만(autobiography_service.py) 지금까지 이 화면 어디에도 노출되지
- * 않아 사실상 죽은 데이터였다(2026-07-16) — 이 카드가 그걸 실제로 보여주는 첫 자리다. */
-function ChapterReviewItem({ chapter }: { chapter: ChapterDraft }) {
+ * 않아 사실상 죽은 데이터였다(2026-07-16) — 이 카드가 그걸 실제로 보여주는 첫 자리다.
+ *
+ * writing: "각 장 집필 시작"을 누른 뒤 아직 본문이 없는 챕터에 대해 true — 백엔드가
+ * "생성 중" 신호를 따로 주지 않아(is_generating 필드 없음) 프론트가 트리거 여부로
+ * 유추한다(page.tsx의 chaptersWriteTriggered 참조).
+ * acknowledged/onAcknowledge: "확인 필요 N곳" 배지를 사용자가 직접 읽어보고 지울 수
+ * 있게 하는 프론트 전용 토글 — 백엔드 데이터는 바뀌지 않고 화면에서만 감춘다. */
+function ChapterReviewItem({
+  chapter,
+  writing,
+  acknowledged,
+  onAcknowledge,
+}: {
+  chapter: ChapterDraft;
+  writing: boolean;
+  acknowledged: boolean;
+  onAcknowledge: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const flagCount = chapterFlagCount(chapter);
+  const showFlagBadge = flagCount > 0 && !acknowledged;
   const canExpand = chapter.content !== null;
 
   return (
@@ -486,12 +622,19 @@ function ChapterReviewItem({ chapter }: { chapter: ChapterDraft }) {
           {chapter.chapter_index}장. {chapter.title ?? "제목 준비 중"}
         </span>
         <span className="flex shrink-0 items-center gap-2 text-sm">
-          {flagCount > 0 && (
+          {showFlagBadge && (
             <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-amber-800">
               확인 필요 {flagCount}곳
             </span>
           )}
-          <span className="text-black/40">{STATUS_LABEL[chapter.status]}</span>
+          {writing ? (
+            <span className="flex items-center gap-1.5 text-black/40">
+              <Spinner />
+              <span className="animate-pulse">집필하고 있어요...</span>
+            </span>
+          ) : (
+            <span className="text-black/40">{STATUS_LABEL[chapter.status]}</span>
+          )}
           {canExpand && <span className="text-black/30">{expanded ? "▲" : "▼"}</span>}
         </span>
       </button>
@@ -501,7 +644,7 @@ function ChapterReviewItem({ chapter }: { chapter: ChapterDraft }) {
           <p className="whitespace-pre-wrap text-base leading-relaxed text-black/80">
             {chapter.content}
           </p>
-          {flagCount > 0 && (
+          {showFlagBadge && (
             <div className="flex flex-col gap-2 rounded-xl bg-amber-50 p-4">
               <p className="text-sm font-medium text-amber-900">
                 아래 부분은 원래 이야기와 다를 수 있어요 — 직접 읽어보고 확인해주세요.
@@ -518,6 +661,13 @@ function ChapterReviewItem({ chapter }: { chapter: ChapterDraft }) {
                   </li>
                 ))}
               </ul>
+              <button
+                type="button"
+                onClick={onAcknowledge}
+                className="self-start text-sm text-amber-900 underline underline-offset-4 hover:text-amber-950"
+              >
+                확인했어요
+              </button>
             </div>
           )}
         </div>

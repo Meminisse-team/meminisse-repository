@@ -41,6 +41,9 @@ class AutobiographyRead(BaseModel):
     photo_placements: list[PhotoPlacementItem] | None
     created_at: datetime
     updated_at: datetime
+    # GET /{user_id}에서만 실제로 채워진다(진행률 게이트 UI용) — 그 외 응답(예:
+    # /finished 목록)에서는 의미가 없어 기본값 0으로 둔다.
+    completed_session_count: int = 0
 
 
 class TocCandidateSelect(BaseModel):

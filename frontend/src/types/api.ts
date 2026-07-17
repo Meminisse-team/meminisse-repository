@@ -268,6 +268,9 @@ export interface Autobiography {
   photo_placements: PhotoPlacement[] | null;
   created_at: string;
   updated_at: string;
+  /** GET /{user_id}에서만 실제 값이 채워진다(그 외 응답에선 0) — 완료된 세션
+   * (재조립 산문) 개수. "자서전 집필" 진행률 게이트에 쓴다. */
+  completed_session_count: number;
 }
 
 /** GET /customization/options 응답 항목 하나 — 말투/구성/컨셉 선택지 공통 형태

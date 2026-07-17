@@ -143,9 +143,13 @@ export default function StoriesPage() {
         <p className="text-sm leading-relaxed text-black/60">
           여기 담긴 글은 나눈 대화를 사실 그대로 정리한 기록이에요. 문장만 다듬었을 뿐
           없는 내용을 더하거나 지어내지 않았어요 — 아직 자서전 문체로 다시 쓰는 AI는
-          거치지 않은, 있는 그대로의 사실 정리입니다. 실제 책으로 엮이는 최종 원고는{" "}
+          거치지 않은, 있는 그대로의 사실 정리입니다. 지금 쓰고 있는 자서전은{" "}
           <Link href="/dashboard/autobiography" className="underline underline-offset-2 hover:text-black">
-            나의 자서전
+            자서전 집필
+          </Link>
+          에서, 완성된 자서전은{" "}
+          <Link href="/dashboard/bookshelf" className="underline underline-offset-2 hover:text-black">
+            나의 책장
           </Link>
           에서 확인하실 수 있어요.
         </p>

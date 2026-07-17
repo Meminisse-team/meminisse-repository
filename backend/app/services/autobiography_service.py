@@ -66,6 +66,14 @@ CHAPTER_RETRIEVAL_LIMIT = 20
 # 기회를 준다. 그 이상은 비용 대비 개선이 없어 잔여 플래그를 리포트에 남기고 끝낸다.
 MAX_REPAIR_PASSES = 2
 
+# 자서전 집필 시작 가능 기준 — 완료된 세션(재조립 산문)이 이 개수 이상 쌓여야
+# 재료가 충분하다고 보고 "자서전 집필"을 열어준다(2026-07-17 제품 결정). 130은
+# 고정 질문 100개 + 사진/에피소드 세션을 더한 대략적인 전체 목표치로, 이 값
+# 자체를 강제하는 별도 상한은 없다 — 진행률 바의 분모로만 쓰인다.
+MIN_COMPLETED_SESSIONS_FOR_AUTOBIOGRAPHY = 50
+RECOMMENDED_COMPLETED_SESSIONS = 80
+AUTOBIOGRAPHY_PROGRESS_TOTAL = 130
+
 # 집필 프롬프트의 근거 태그 규약([E1], [E2]...) — prompts._numbered_events_block과
 # 같은 번호 체계. 조판 전에 본문에서 회수·제거된다(_strip_citation_tags).
 _CITATION_TAG_PATTERN = re.compile(r"\[E(\d+)\]")
@@ -82,12 +90,25 @@ def _now_iso() -> str:
 
 
 async def get_or_create_autobiography(gateways: Gateways, user_id: uuid.UUID) -> AutobiographyRecord:
-    autobiography = await gateways.autobiographies.get_by_user_id(user_id)
+    """"자서전 집필"이 이어서 작업할 자서전을 찾는다 — 미완성(final_content
+    없음) 버전이 있으면 그중 최신 것을 이어서 쓰고, 전부 완성됐거나 하나도
+    없으면 새 버전을 만든다(2026-07-17, migration 015로 유저당 여러 버전이
+    가능해지면서 "자서전 집필"에 다시 들어가면 자동으로 새 버전이 시작되도록
+    바뀜 — 별도 "새 버전 시작" 버튼 없이도 이전 버전은 "나의 책장"에 그대로
+    남는다)."""
+    autobiography = await gateways.autobiographies.get_latest_unfinished_by_user(user_id)
     if autobiography is not None:
         return autobiography
     autobiography = await gateways.autobiographies.create(user_id)
     await gateways.commit()
     return autobiography
+
+
+async def list_finished_autobiographies(
+    gateways: Gateways, user_id: uuid.UUID
+) -> list[AutobiographyRecord]:
+    """"나의 책장" 전용 — 이 유저가 완성한(final_content 有) 자서전 전체."""
+    return await gateways.autobiographies.list_finished_by_user(user_id)
 
 
 async def get_autobiography_by_id(gateways: Gateways, autobiography_id: uuid.UUID) -> AutobiographyRecord:
@@ -608,12 +629,79 @@ async def generate_toc_candidates(gateways: Gateways, autobiography_id: uuid.UUI
     )
     toc_data = {
         "generated_at": _now_iso(),
-        "candidates": result_json["candidates"],
+        "candidates": [_normalize_toc_parts(c) for c in result_json["candidates"]],
         "selected_candidate_index": None,
     }
     autobiography = await gateways.autobiographies.update(autobiography_id, toc_data=toc_data)
     await gateways.commit()
     return autobiography
+
+
+# Part 제목에 "Part 1:", "1부:", "제1부" 같은 번호 접두어가 다시 들어간 경우를
+# 잡아낸다 — 프론트가 "{part_index}부. {part_title}"로 번호를 이미 붙이므로
+# 그대로 두면 "1부. Part 1: ..." 처럼 중복 표기된다(2026-07-17 실사용 중 발견).
+_PART_TITLE_PREFIX_PATTERN = re.compile(
+    r"^(?:Part|PART)\s*\d+\s*[:.\-–—]?\s*|^제?\d+부\s*[:.\-–—]?\s*"
+)
+
+# Part당 챕터 최소 개수 — 사용자 확정치. TOC_GENERATION_SYSTEM_PROMPT도 같은
+# 수치를 지시하지만, 실사용 중 프롬프트 지시만으로는 LLM이 이 제약을 어기는
+# 사례가(예: 마지막 Part가 챕터 1개) 반복 확인돼 결정론적 보정을 추가했다.
+_MIN_CHAPTERS_PER_PART = 3
+
+
+def _strip_part_title_prefix(part_title: str) -> str:
+    stripped = _PART_TITLE_PREFIX_PATTERN.sub("", part_title, count=1).strip()
+    return stripped or part_title  # 접두어 제거 후 빈 문자열이면(전부 접두어였던 극단 케이스) 원본 유지
+
+
+def _normalize_toc_parts(candidate: dict) -> dict:
+    """TOC 후보 하나를 저장 전 결정론적으로 보정한다:
+    1. 각 Part 제목에서 중복 번호 접두어를 제거한다(_strip_part_title_prefix).
+    2. 챕터가 3개 미만인 Part를 인접 Part(첫 Part면 다음 Part, 그 외엔 이전
+       Part)에 흡수시켜 제거하고, 남은 Part/챕터의 part_index를 1부터 다시
+       연속 번호로 매긴다.
+
+    Part가 1개 이하(episodic 예외 등 실제로 Part 구조가 없는 경우)면 제목
+    접두어 제거만 하고 병합 로직은 건드리지 않는다 — 병합 대상 자체가 없다."""
+    candidate = dict(candidate)
+    parts = [dict(p) for p in candidate.get("parts") or []]
+    chapters = [dict(c) for c in candidate.get("chapters") or []]
+
+    for part in parts:
+        part["part_title"] = _strip_part_title_prefix(part["part_title"])
+
+    if len(parts) <= 1:
+        candidate["parts"] = parts
+        candidate["chapters"] = chapters
+        return candidate
+
+    parts.sort(key=lambda p: p["part_index"])
+
+    def _chapter_count(part_index: int) -> int:
+        return sum(1 for c in chapters if c.get("part_index") == part_index)
+
+    while len(parts) > 1:
+        violating = next((p for p in parts if _chapter_count(p["part_index"]) < _MIN_CHAPTERS_PER_PART), None)
+        if violating is None:
+            break
+        position = parts.index(violating)
+        target = parts[position - 1] if position > 0 else parts[position + 1]
+        for chapter in chapters:
+            if chapter.get("part_index") == violating["part_index"]:
+                chapter["part_index"] = target["part_index"]
+        parts.remove(violating)
+
+    renumber = {part["part_index"]: new_index for new_index, part in enumerate(parts, start=1)}
+    for part in parts:
+        part["part_index"] = renumber[part["part_index"]]
+    for chapter in chapters:
+        if chapter.get("part_index") in renumber:
+            chapter["part_index"] = renumber[chapter["part_index"]]
+
+    candidate["parts"] = parts
+    candidate["chapters"] = chapters
+    return candidate
 
 
 async def select_toc_candidate(
@@ -631,7 +719,31 @@ async def select_toc_candidate(
 
     book_synopsis = await _generate_book_synopsis(autobiography, chosen)
     title = await _generate_book_title(autobiography, chosen)
-    part_synopses = await _generate_part_synopses(book_synopsis, chosen)
+
+    # 챕터 시놉시스를 목차 확정 시점에 전 챕터 분량으로 미리 생성해 초안에 함께
+    # 저장한다. 두 가지를 동시에 얻는다(2026-07-17): (1) 챕터당 ~20초짜리 최대
+    # 단일 구간이 집필 임계 경로에서 빠지고, (2) write_chapter의 "직전 챕터 요약"이
+    # 직전 챕터의 완성 본문 대신 이 시놉시스를 읽게 되어 챕터 간 직렬 의존이
+    # 사라진다 — 프론트는 이미 전 챕터를 Promise.all로 동시에 큐잉하므로, 이
+    # 변경으로 전체 집필 시간이 챕터 수와 무관해진다(워커 동시성 범위 내).
+    # 이벤트 검색은 같은 DB 세션을 공유하므로 순차로 돌고(챕터당 ~1.6초, 대부분
+    # 임베딩 HTTP), LLM 시놉시스 호출만 asyncio.gather로 병렬화한다.
+    #
+    # part_synopses 생성보다 먼저 실행한다 — Part 시놉시스도 이 검색 결과를
+    # 근거로 받아야 한다(아래 _generate_part_synopses 참조). 예전엔 part_synopsis가
+    # 사건 자료를 하나도 못 보고 book_synopsis·챕터 제목만 보고 지어냈는데, 이
+    # 때문에 "옥스퍼드에서 태어났다"는 근거를 "도서관에서 태어났다"로 구체화해
+    # 지어내는 환각이 실사용 중 확인됐다(2026-07-17) — 새 검색 호출 없이 이미
+    # 여기서 구하는 chapter_events를 재사용해 근거를 붙여준다.
+    chapter_events: list[list[EventRecord]] = []
+    for chapter_data in chosen["chapters"]:
+        chapter_events.append(
+            await _retrieve_events_for_chapter(
+                gateways, autobiography.user_id, chapter_data.get("title") or ""
+            )
+        )
+
+    part_synopses = await _generate_part_synopses(book_synopsis, chosen, chapter_events)
     if part_synopses:
         chosen = {
             **chosen,
@@ -642,21 +754,6 @@ async def select_toc_candidate(
         }
         candidates = [chosen if i == candidate_index else c for i, c in enumerate(candidates)]
 
-    # 챕터 시놉시스를 목차 확정 시점에 전 챕터 분량으로 미리 생성해 초안에 함께
-    # 저장한다. 두 가지를 동시에 얻는다(2026-07-17): (1) 챕터당 ~20초짜리 최대
-    # 단일 구간이 집필 임계 경로에서 빠지고, (2) write_chapter의 "직전 챕터 요약"이
-    # 직전 챕터의 완성 본문 대신 이 시놉시스를 읽게 되어 챕터 간 직렬 의존이
-    # 사라진다 — 프론트는 이미 전 챕터를 Promise.all로 동시에 큐잉하므로, 이
-    # 변경으로 전체 집필 시간이 챕터 수와 무관해진다(워커 동시성 범위 내).
-    # 이벤트 검색은 같은 DB 세션을 공유하므로 순차로 돌고(챕터당 ~1.6초, 대부분
-    # 임베딩 HTTP), LLM 시놉시스 호출만 asyncio.gather로 병렬화한다.
-    chapter_events: list[list[EventRecord]] = []
-    for chapter_data in chosen["chapters"]:
-        chapter_events.append(
-            await _retrieve_events_for_chapter(
-                gateways, autobiography.user_id, chapter_data.get("title") or ""
-            )
-        )
     chapter_synopses = await asyncio.gather(
         *(
             _generate_chapter_synopsis(
@@ -692,17 +789,32 @@ async def select_toc_candidate(
     return autobiography
 
 
-async def _generate_part_synopses(book_synopsis: str, chosen: dict) -> dict[int, str]:
+async def _generate_part_synopses(
+    book_synopsis: str, chosen: dict, chapter_events: list[list[EventRecord]]
+) -> dict[int, str]:
     """chosen['parts']의 씨앗 part_arc를 book_synopsis 확정 후 더 풍부한 Part
     시놉시스로 확장한다. Part가 1개 이하(episodic 예외/비커스터마이징 폴백)면
-    확장할 실익이 없어 빈 dict를 반환한다."""
+    확장할 실익이 없어 빈 dict를 반환한다.
+
+    chapter_events: chosen["chapters"]와 같은 순서로, 각 챕터가 select_toc_
+    candidate에서 이미 검색해 둔 사건 목록 — 여기서 새로 검색하지 않고 Part별로
+    묶어(같은 사건이 그 Part의 여러 챕터에서 검색되면 event.id로 중복 제거)
+    Part 시놉시스 프롬프트에 실제 근거로 넘긴다. 예전엔 이 함수가 book_synopsis·
+    챕터 제목만 보고 Part 시놉시스를 지어냈는데, 실제 사건 자료가 전혀 없다 보니
+    "옥스퍼드에서 태어났다"는 근거를 "도서관 복도에서 태어났다"로 구체화해
+    지어내는 환각이 실사용 중 확인됐다(2026-07-17) — 그 수정."""
     parts = chosen.get("parts") or []
     if len(parts) <= 1:
         return {}
 
     chapters_by_part: dict[int, list[str]] = {}
-    for chapter in chosen["chapters"]:
-        chapters_by_part.setdefault(chapter["part_index"], []).append(chapter["title"])
+    events_by_part: dict[int, dict[uuid.UUID, str]] = {}
+    for chapter_data, events in zip(chosen["chapters"], chapter_events):
+        part_index = chapter_data["part_index"]
+        chapters_by_part.setdefault(part_index, []).append(chapter_data["title"])
+        bucket = events_by_part.setdefault(part_index, {})
+        for event in events:
+            bucket[event.id] = event.one_line_summary
 
     part_synopses: dict[int, str] = {}
     for part in parts:
@@ -717,6 +829,7 @@ async def _generate_part_synopses(book_synopsis: str, chosen: dict) -> dict[int,
                 part_title=part["part_title"],
                 part_arc_seed=part["part_arc"],
                 chapter_titles=chapters_by_part.get(part["part_index"], []),
+                event_summaries=list(events_by_part.get(part["part_index"], {}).values()),
             ),
             reasoning_effort="low",
             max_tokens=4000,

@@ -400,7 +400,17 @@ class MediaAssetGateway(ABC):
 
 class AutobiographyGateway(ABC):
     @abstractmethod
-    async def get_by_user_id(self, user_id: UUID) -> AutobiographyRecord | None: ...
+    async def get_latest_unfinished_by_user(self, user_id: UUID) -> AutobiographyRecord | None:
+        """이 유저의 자서전 중 아직 완성되지 않은(final_content IS NULL) 것을
+        created_at 내림차순으로 가장 최근 것 하나. get_or_create_autobiography가
+        "지금 이어서 쓸 자서전"을 찾는 데 쓴다 — 전부 완성됐거나 하나도 없으면
+        None을 반환해 새 버전을 만들어야 함을 알린다(2026-07-17, migration 015로
+        유저당 자서전이 여러 권 가능해지기 전에는 get_by_user_id로 단순 조회했다)."""
+
+    @abstractmethod
+    async def list_finished_by_user(self, user_id: UUID) -> list[AutobiographyRecord]:
+        """이 유저의 완성된(final_content IS NOT NULL) 자서전들을 created_at
+        내림차순으로. "나의 책장" 전용."""
 
     @abstractmethod
     async def get_by_id(self, autobiography_id: UUID) -> AutobiographyRecord | None: ...
