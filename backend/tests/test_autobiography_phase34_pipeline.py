@@ -70,6 +70,7 @@ _STRUCTURED_RESPONSES = {
     },
     "book_title": {"title": "부산의 여름"},
     "fact_reextraction": {"facts": [{"fact_type": "person", "raw_text": "김철수"}]},
+    "groundedness_judge": {"flags": []},  # 이 테스트의 관심사는 파이프라인 배선이라 항상 근거 있음으로 고정.
     "ner_extraction": {"people": [{"name": "김철수", "relation_to_narrator": "친구"}]},
     "third_party_risk": {
         "person_name": "김철수", "risk_detected": False, "risk_classification": "none", "risk_reasons": [],
@@ -79,13 +80,6 @@ _STRUCTURED_RESPONSES = {
 
 async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
     return _STRUCTURED_RESPONSES[schema_name]
-
-
-async def _fake_classify_entailment(*, premise: str, hypothesis: str) -> dict[str, float]:
-    """실제 NLI 모델(app/clients/nli.py)은 무겁고(torch/transformers) 이 테스트의
-    관심사(파이프라인 배선)와 무관하므로 모킹한다 — 항상 entailment로 고정해
-    groundedness_report에 플래그가 남지 않게 한다."""
-    return {"entailment": 0.9, "neutral": 0.08, "contradiction": 0.02}
 
 
 async def _seed_user_with_events(gateways: Gateways):
@@ -127,7 +121,6 @@ async def test_full_phase3_4_pipeline_runs_end_to_end() -> None:
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)
@@ -181,7 +174,6 @@ async def test_retain_real_name_requires_disclosure_consent() -> None:
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)

@@ -7,6 +7,11 @@ Phase 4 챕터 집필의 팩트체크/근거검증 자동 재시도(autobiograph
 플래그가 하나라도 있으면 같은 자료로 한 번 더 집필을 시도해 flag가 더 적은 쪽을
 채택한다 — 재시도가 오히려 나빠질 수도 있으므로 "무조건 재시도 결과 사용"이 아니라
 "더 나은 쪽 채택"이 계약이다.
+
+근거검증(groundedness)은 이제 로컬 NLI가 아니라 Solar LLM 판정
+(schema_name="groundedness_judge")이므로, 이 테스트의 fake structured_completion도
+그 스키마 호출을 가로채 챕터 본문(_BAD_CONTENT/_GOOD_CONTENT)에 따라 플래그 유무를
+결정한다.
 """
 
 from __future__ import annotations
@@ -58,8 +63,17 @@ _STRUCTURED_RESPONSES = {
     "ner_extraction": {"people": []},
 }
 
+_BAD_CONTENT = "지어낸 문장입니다."
+_GOOD_CONTENT = "나는 부산에서 태어나 자랐다."
+
 
 async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+    if schema_name == "groundedness_judge":
+        # 챕터 본문이 user 메시지에 그대로 들어간다(build_groundedness_judge_prompt).
+        user_content = messages[1]["content"]
+        if _BAD_CONTENT in user_content:
+            return {"flags": [{"sentence": _BAD_CONTENT, "reason": "근거 사건에 없는 창작 문장"}]}
+        return {"flags": []}
     return _STRUCTURED_RESPONSES[schema_name]
 
 
@@ -96,14 +110,10 @@ async def _prepare_chapter(gateways: Gateways):
     return chapters[0].id
 
 
-_BAD_CONTENT = "지어낸 문장입니다."
-_GOOD_CONTENT = "나는 부산에서 태어나 자랐다."
-
-
 @pytest.mark.asyncio
 async def test_write_chapter_retries_once_and_keeps_better_result_when_flagged() -> None:
-    """1차 집필 결과가 근거검증에 걸리면(entailment 낮음) 재시도하고, 재시도 결과가
-    더 적게 flag되면 그걸 채택해야 한다."""
+    """1차 집필 결과가 근거검증에 걸리면 재시도하고, 재시도 결과가 더 적게
+    flag되면 그걸 채택해야 한다."""
     call_count = {"n": 0}
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
@@ -114,17 +124,11 @@ async def test_write_chapter_retries_once_and_keeps_better_result_when_flagged()
             return _FakeCompletion(_BAD_CONTENT)  # 1차 집필 — 근거 없음
         return _FakeCompletion(_GOOD_CONTENT)  # 재시도 — 근거 있음
 
-    async def _fake_classify_entailment(*, premise: str, hypothesis: str) -> dict[str, float]:
-        if hypothesis == _BAD_CONTENT:
-            return {"entailment": 0.05, "neutral": 0.05, "contradiction": 0.90}
-        return {"entailment": 0.95, "neutral": 0.04, "contradiction": 0.01}
-
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
     ):
         gateways = _build_mock_gateways()
         chapter_draft_id = await _prepare_chapter(gateways)
@@ -147,15 +151,11 @@ async def test_write_chapter_does_not_retry_when_no_flags() -> None:
         call_count["n"] += 1
         return _FakeCompletion("챕터 시놉시스" if call_count["n"] == 1 else _GOOD_CONTENT)
 
-    async def _fake_classify_entailment(*, premise: str, hypothesis: str) -> dict[str, float]:
-        return {"entailment": 0.95, "neutral": 0.04, "contradiction": 0.01}
-
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
     ):
         gateways = _build_mock_gateways()
         chapter_draft_id = await _prepare_chapter(gateways)
@@ -179,15 +179,11 @@ async def test_write_chapter_keeps_original_when_retry_is_not_better() -> None:
             return _FakeCompletion("챕터 시놉시스")
         return _FakeCompletion(_BAD_CONTENT)  # 1차, 재시도 모두 근거 없는 문장
 
-    async def _fake_classify_entailment(*, premise: str, hypothesis: str) -> dict[str, float]:
-        return {"entailment": 0.05, "neutral": 0.05, "contradiction": 0.90}
-
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
     ):
         gateways = _build_mock_gateways()
         chapter_draft_id = await _prepare_chapter(gateways)

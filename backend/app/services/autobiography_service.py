@@ -24,7 +24,7 @@ from decimal import Decimal
 
 from app.agents import prompts
 from app.clients import embeddings as embeddings_client
-from app.clients import nli, solar
+from app.clients import solar
 from app.data.question_bank import QUESTION_BANK_BY_SEQUENCE
 from app.gateways.dto import (
     AutobiographyRecord,
@@ -52,12 +52,17 @@ WEIGHT_EMOTION_INTENSITY = 0.5
 WEIGHT_MENTION_COUNT = 1.5
 
 # Phase 4 하이브리드 검색(의미 검색 + 키워드 정확 매칭)에서 챕터당 소환할 이벤트 상한.
-CHAPTER_RETRIEVAL_LIMIT = 10
+# 예전에는 10이었는데, 챕터 원재료가 너무 빈약해 챕터가 지나치게 짧게(1,600~2,400자)
+# 나오는 원인 중 하나였다. _run_groundedness_check를 Solar LLM 판정으로 옮긴 뒤에는
+# (아래 함수 주석 참조) 사건 개수가 늘어도 로컬 NLI 연산량과 무관해져 이 값을 계속
+# 늘려도 안전하다.
+CHAPTER_RETRIEVAL_LIMIT = 20
 
-# 근거 검증(Groundedness Check): 생성 문장의 함의(entailment) 확률이 이 값 미만이면
-# "소환된 이벤트 문단에 근거가 없다"고 플래그한다. 실사용 데이터로 캘리브레이션 전까지의
-# 잠정값(event_extraction_service._DISTORTION_CONTRADICTION_THRESHOLD와 짝을 이룸).
-GROUNDEDNESS_ENTAILMENT_THRESHOLD = 0.5
+# finalize_manuscript가 윤문 입력에 심어두는 Part 경계 안내 마커
+# ("=== PART N: 제목 ===")를 최종 출력에서 방어적으로 제거하기 위한 패턴 —
+# UNITY_REVISION_SYSTEM_PROMPT가 이 마커를 최종 출력에 남기지 말라고 명시하지만,
+# LLM이 지시를 어기는 경우를 대비한 안전망이다.
+_PART_MARKER_PATTERN = re.compile(r"^=== ?PART\s+\d+:.*?===\s*$\n?", re.MULTILINE)
 
 
 def _now_iso() -> str:
@@ -571,7 +576,6 @@ async def select_toc_candidate(
         raise ValueError(f"candidate_index={candidate_index}가 후보 범위를 벗어났습니다(총 {len(candidates)}개).")
 
     chosen = candidates[candidate_index]
-    updated_toc = {**autobiography.toc_data, "selected_candidate_index": candidate_index}
 
     # 재선택 시 이전 챕터 초안을 대체한다(idempotent).
     await gateways.chapters.replace_all(
@@ -584,6 +588,18 @@ async def select_toc_candidate(
 
     book_synopsis = await _generate_book_synopsis(autobiography, chosen)
     title = await _generate_book_title(autobiography, chosen)
+    part_synopses = await _generate_part_synopses(book_synopsis, chosen)
+    if part_synopses:
+        chosen = {
+            **chosen,
+            "parts": [
+                {**part, "part_synopsis": part_synopses.get(part["part_index"], part["part_arc"])}
+                for part in chosen["parts"]
+            ],
+        }
+        candidates = [chosen if i == candidate_index else c for i, c in enumerate(candidates)]
+
+    updated_toc = {**autobiography.toc_data, "candidates": candidates, "selected_candidate_index": candidate_index}
 
     autobiography = await gateways.autobiographies.update(
         autobiography_id, toc_data=updated_toc, book_synopsis=book_synopsis, title=title
@@ -592,16 +608,139 @@ async def select_toc_candidate(
     return autobiography
 
 
+async def _generate_part_synopses(book_synopsis: str, chosen: dict) -> dict[int, str]:
+    """chosen['parts']의 씨앗 part_arc를 book_synopsis 확정 후 더 풍부한 Part
+    시놉시스로 확장한다. Part가 1개 이하(episodic 예외/비커스터마이징 폴백)면
+    확장할 실익이 없어 빈 dict를 반환한다."""
+    parts = chosen.get("parts") or []
+    if len(parts) <= 1:
+        return {}
+
+    chapters_by_part: dict[int, list[str]] = {}
+    for chapter in chosen["chapters"]:
+        chapters_by_part.setdefault(chapter["part_index"], []).append(chapter["title"])
+
+    part_synopses: dict[int, str] = {}
+    for part in parts:
+        # max_tokens를 명시하지 않으면 API 서버 기본값에 맡기게 되는데, 실측 중
+        # (2026-07-17) Part 4개 중 마지막 호출 하나가 실제 시놉시스 대신 모델의
+        # 계획 서술("The user wants us to create...")만 담긴 응답을 반환한 사고가
+        # 있었다 — reasoning_effort="high"가 max_tokens를 추론 토큰만으로
+        # 소진해버린 챕터 집필 사고와 같은 계열의 문제로 보인다. 넉넉한 여유를 둔다.
+        response = await solar.chat_completion(
+            prompts.build_part_synopsis_prompt(
+                book_synopsis=book_synopsis,
+                part_title=part["part_title"],
+                part_arc_seed=part["part_arc"],
+                chapter_titles=chapters_by_part.get(part["part_index"], []),
+            ),
+            reasoning_effort="low",
+            max_tokens=4000,
+        )
+        part_synopses[part["part_index"]] = response.choices[0].message.content or part["part_arc"]
+    return part_synopses
+
+
 def _toc_text(selected_toc: dict) -> str:
     arc = selected_toc.get("narrative_arc")
     arc_block = f"[전체 뼈대]\n{arc}\n\n" if arc else ""
-    chapters_text = "\n".join(
-        f"{chapter['chapter_index']}. {chapter['title']} "
-        f"({', '.join(chapter.get('theme_keywords', []))})"
-        + (f" — 연결고리: {chapter['connecting_thread']}" if chapter.get("connecting_thread") else "")
-        for chapter in selected_toc["chapters"]
-    )
+    chapters = selected_toc["chapters"]
+    parts = selected_toc.get("parts") or []
+
+    def _chapter_line(chapter: dict) -> str:
+        return (
+            f"{chapter['chapter_index']}. {chapter['title']} "
+            f"({', '.join(chapter.get('theme_keywords', []))})"
+            + (f" — 연결고리: {chapter['connecting_thread']}" if chapter.get("connecting_thread") else "")
+        )
+
+    # Part가 2개 이상일 때만 Part별로 묶어 렌더링한다 — episodic 예외(Part 1개)나
+    # Part 필드 자체가 없는 구버전 toc_data는 기존과 동일한 평평한 렌더링으로
+    # 폴백해야 하위 호환이 깨지지 않는다.
+    if len(parts) > 1:
+        parts_by_index = {part["part_index"]: part for part in parts}
+        lines: list[str] = []
+        current_part_index: int | None = None
+        for chapter in chapters:
+            part_index = chapter.get("part_index")
+            if part_index != current_part_index:
+                current_part_index = part_index
+                part = parts_by_index.get(part_index)
+                if part:
+                    lines.append(f"\n[{part['part_index']}부. {part['part_title']}] — {part.get('part_arc', '')}")
+            lines.append(f"  {_chapter_line(chapter)}")
+        chapters_text = "\n".join(lines)
+    else:
+        chapters_text = "\n".join(_chapter_line(chapter) for chapter in chapters)
+
     return f"{arc_block}{chapters_text}"
+
+
+def get_chapter_part_context(autobiography: AutobiographyRecord, chapter_index: int) -> dict | None:
+    """toc_data에 저장된 선택 후보에서 이 챕터가 속한 Part의 컨텍스트(제목·
+    시놉시스·Part 경계 여부·인접 Part 제목)를 찾는다. _chapter_connecting_thread와
+    동일한 패턴(DB 컬럼 없이 toc_data JSON만 읽음) — pdf_service.py에서도 쓰이므로
+    공개 함수로 둔다. toc_data/선택 후보가 없거나, parts가 1개 이하(episodic 예외
+    또는 비커스터마이징 폴백), 이 chapter_index를 찾지 못했거나 part_index가 없는
+    구버전 toc_data라면 None을 반환해 "Part 구조 없음"으로 취급한다."""
+    toc_data = autobiography.toc_data
+    if not toc_data or toc_data.get("selected_candidate_index") is None:
+        return None
+    candidates = toc_data.get("candidates", [])
+    selected_index = toc_data["selected_candidate_index"]
+    if not (0 <= selected_index < len(candidates)):
+        return None
+    selected = candidates[selected_index]
+    parts = selected.get("parts") or []
+    if len(parts) <= 1:
+        return None
+    parts_by_index = {part["part_index"]: part for part in parts}
+    chapters = selected.get("chapters", [])
+
+    target = next((c for c in chapters if c.get("chapter_index") == chapter_index), None)
+    if target is None or target.get("part_index") is None:
+        return None
+    part_index = target["part_index"]
+    part = parts_by_index.get(part_index)
+    if part is None:
+        return None
+
+    siblings = sorted(c["chapter_index"] for c in chapters if c.get("part_index") == part_index)
+    ordered_part_indices = sorted(parts_by_index)
+    pos = ordered_part_indices.index(part_index)
+
+    return {
+        "part_index": part_index,
+        "part_title": part["part_title"],
+        "part_synopsis": part.get("part_synopsis") or part.get("part_arc", ""),
+        "is_part_opening": chapter_index == siblings[0],
+        "is_part_closing": chapter_index == siblings[-1],
+        "prev_part_title": (
+            parts_by_index[ordered_part_indices[pos - 1]]["part_title"] if pos > 0 else None
+        ),
+        "next_part_title": (
+            parts_by_index[ordered_part_indices[pos + 1]]["part_title"]
+            if pos < len(ordered_part_indices) - 1
+            else None
+        ),
+    }
+
+
+def get_ordered_parts(autobiography: AutobiographyRecord) -> list[dict]:
+    """선택된 후보의 parts를 part_index 오름차순으로 반환한다. Part 구조가 없으면
+    (없음 또는 1개 이하) 빈 리스트 — pdf_service/프론트는 이를 "Part UI를 아예
+    숨겨라"는 신호로 쓴다."""
+    toc_data = autobiography.toc_data
+    if not toc_data or toc_data.get("selected_candidate_index") is None:
+        return []
+    candidates = toc_data.get("candidates", [])
+    selected_index = toc_data["selected_candidate_index"]
+    if not (0 <= selected_index < len(candidates)):
+        return []
+    parts = candidates[selected_index].get("parts") or []
+    if len(parts) <= 1:
+        return []
+    return sorted(parts, key=lambda part: part["part_index"])
 
 
 def _chapter_connecting_thread(autobiography: AutobiographyRecord, chapter_index: int) -> str | None:
@@ -728,6 +867,7 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         chapter_title=chapter.title or f"{chapter.chapter_index}장",
         event_summaries=[event.one_line_summary for event in retrieved_events],
         connecting_thread=_chapter_connecting_thread(autobiography, chapter.chapter_index),
+        part_context=get_chapter_part_context(autobiography, chapter.chapter_index),
     )
 
     previous_summary = await _previous_chapter_summary(gateways, autobiography.id, chapter.chapter_index)
@@ -751,7 +891,12 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
     )
     groundedness_report = await _run_groundedness_check(content, source_events=retrieved_events)
 
-    if _total_flag_count(factcheck_report, groundedness_report) > 0:
+    # 본문이 비어 있으면(예: reasoning_effort="high"가 max_tokens 예산을 추론
+    # 토큰만으로 다 써버려 실제 본문을 못 받은 경우, 2026-07-17 실측) 빈 문자열
+    # 그대로 저장하면 안 된다 — 빈 본문은 factcheck/groundedness 둘 다 "검증
+    # 대상 없음"으로 조용히 통과해 flag가 0개로 나오므로, 아래 flag 기반 재시도
+    # 조건만으로는 이 실패를 못 잡는다. 별도로 강제 재시도 대상에 포함시킨다.
+    if not content.strip() or _total_flag_count(factcheck_report, groundedness_report) > 0:
         # 팩트체크/근거검증에 걸리면 한 번 더 같은 자료로 재집필을 시도한다 — 결과가
         # 확정적이지 않은 LLM 생성물이라, 다시 쓰면 지어낸 문장 없이 나올 가능성이
         # 있다(2026-07-16, factcheck_report/groundedness_report가 계산만 되고 아무
@@ -774,9 +919,16 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         retry_groundedness = await _run_groundedness_check(
             retry_content, source_events=retrieved_events
         )
-        if _total_flag_count(retry_factcheck, retry_groundedness) < _total_flag_count(
-            factcheck_report, groundedness_report
-        ):
+        # 원본이 비어 있었다면(위 강제 재시도 사유) flag 개수 비교와 무관하게
+        # 재시도 결과가 비어있지만 않으면 채택한다 — "빈 문자열 vs 빈 문자열"
+        # 비교로는 flag 수가 항상 같아(0 == 0) 절대 교체되지 않는 함정을 피한다.
+        original_was_empty = not content.strip()
+        retry_is_better = (
+            (original_was_empty and retry_content.strip())
+            or _total_flag_count(retry_factcheck, retry_groundedness)
+            < _total_flag_count(factcheck_report, groundedness_report)
+        )
+        if retry_is_better:
             content, factcheck_report, groundedness_report = (
                 retry_content,
                 retry_factcheck,
@@ -806,6 +958,7 @@ async def _generate_chapter_synopsis(
     chapter_title: str,
     event_summaries: list[str],
     connecting_thread: str | None = None,
+    part_context: dict | None = None,
 ) -> str:
     response = await solar.chat_completion(
         prompts.build_chapter_synopsis_prompt(
@@ -813,6 +966,7 @@ async def _generate_chapter_synopsis(
             chapter_title=chapter_title,
             event_summaries=event_summaries,
             connecting_thread=connecting_thread,
+            part_context=part_context,
         ),
         reasoning_effort="medium",
     )
@@ -847,7 +1001,14 @@ async def _generate_chapter_content(
             previous_chapter_summary=previous_chapter_summary,
             retrieved_event_paragraphs=retrieved_event_paragraphs,
         )
-    response = await solar.chat_completion(messages, reasoning_effort="high")
+    # max_tokens=8000으로 처음 지정했다가 실사용 검증 중 본문이 통째로 빈
+    # 문자열로 나오는 사고가 있었다(2026-07-17) — reasoning_effort="high"는
+    # 눈에 보이지 않는 "추론 토큰"을 먼저 소비하고 그것도 max_tokens에
+    # 포함되는데, 복잡한 챕터 프롬프트(전체 시놉시스+챕터 시놉시스+직전 챕터
+    # 레시피+사건 문단 최대 20개)에서는 추론 토큰만으로 8000을 다 써버려
+    # 실제 본문을 한 글자도 못 받는 경우가 실측됐다. 목표 분량(4,000~6,000자)
+    # 더하기 추론 토큰 여유를 넉넉히 두어야 한다.
+    response = await solar.chat_completion(messages, reasoning_effort="high", max_tokens=16000)
     return response.choices[0].message.content or ""
 
 
@@ -974,14 +1135,24 @@ async def _run_factcheck(
 
 async def _run_groundedness_check(chapter_content: str, *, source_events: list[EventRecord]) -> dict:
     """
-    근거 검증(Groundedness Check). 생성된 각 문장을 소환된 이벤트 문단(source_events의
-    prose_paragraph 전체)과 짝지어 NLI로 함의(entailment) 여부를 판정한다 — 함의되지
-    않는 문장은 원문에 근거 없이 지어낸 진술일 가능성이 있어 플래그한다.
+    근거 검증(Groundedness Check). 챕터 본문이 소환된 사건들로 뒷받침되는지
+    Solar LLM 판정으로 확인한다 — 어떤 사건으로도 뒷받침되지 않는 새로운
+    사실·사건을 도입한 문장이 있으면 플래그한다.
 
     _run_factcheck(문자열 대조)는 "있는 사실이 변형됐는가"만 잡아낼 수 있어(precision),
     원문에 아예 없는 창작 진술은 놓친다 — 이 함수가 그 반대쪽(recall)을 담당한다
     (기획안 4절: "팩트체크(정밀 변형 탐지)와 근거 검증(무근거 창작 탐지)이 각각
     정밀도와 재현율을 분담하는 상보적 2층 구조").
+
+    원래는 로컬 NLI(mDeBERTa) entailment로 문장 단위 대조를 했는데, 감각적
+    묘사·내적 성찰 같은 정당한 정교화까지 "원문을 논리적으로 함의하지 않는다"는
+    이유로 거의 전부 플래그되는 근본적인 도구 부적합 문제가 있었고, 512 토큰
+    제약 때문에 그룹핑을 해도 챕터 하나에 20분 넘게 걸리는 속도 문제까지
+    겹쳤다(2026-07-17). _run_factcheck와 동일한 패턴(단일 structured_completion
+    호출)으로 교체 — 챕터 전체를 근거 사건 전체와 함께 한 번에 비교하므로 토큰
+    제약도 그룹핑도 필요 없고, "정교화 vs 날조" 구분도 LLM에게 명시적으로
+    지시할 수 있다(GROUNDEDNESS_JUDGE_SYSTEM_PROMPT — CHAPTER_WRITING_SYSTEM_
+    PROMPT의 같은 구분과 일관됨).
     """
     if not chapter_content.strip() or not source_events:
         return {
@@ -991,25 +1162,24 @@ async def _run_groundedness_check(chapter_content: str, *, source_events: list[E
             "source_event_count": len(source_events),
         }
 
-    combined_sources = "\n".join(event.prose_paragraph for event in source_events)
-    sentences = nli.split_sentences(chapter_content)
-
-    flags = []
-    for sentence in sentences:
-        result = await nli.classify_entailment(premise=combined_sources, hypothesis=sentence)
-        if result["entailment"] < GROUNDEDNESS_ENTAILMENT_THRESHOLD:
-            flags.append(
-                {
-                    "sentence": sentence,
-                    "entailment_score": round(result["entailment"], 3),
-                    "reason": "not_entailed_by_sources",
-                }
-            )
+    source_events_text = "\n".join(
+        f"- {event.prose_paragraph}" for event in source_events if event.prose_paragraph and event.prose_paragraph.strip()
+    )
+    result = await solar.structured_completion(
+        prompts.build_groundedness_judge_prompt(
+            chapter_content=chapter_content, source_events_text=source_events_text
+        ),
+        schema_name="groundedness_judge",
+        json_schema=prompts.GROUNDEDNESS_JUDGE_SCHEMA,
+        reasoning_effort="low",
+    )
+    flags = [
+        {"sentence": flag["sentence"], "reason": flag["reason"]} for flag in result.get("flags", [])
+    ]
 
     return {
         "checked": True,
         "flags": flags,
-        "total_sentences": len(sentences),
         "source_event_count": len(source_events),
     }
 
@@ -1025,9 +1195,13 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
         raise ValueError("모든 챕터의 집필(write_chapter)이 끝난 뒤에 최종 윤문을 수행할 수 있습니다.")
 
     style_bible_text = (autobiography.style_bible or {}).get("content", "")
-    full_manuscript = "\n\n".join(
-        f"[{chapter.chapter_index}장. {chapter.title}]\n{chapter.content}" for chapter in chapters
-    )
+    manuscript_blocks: list[str] = []
+    for chapter in chapters:
+        part_context = get_chapter_part_context(autobiography, chapter.chapter_index)
+        if part_context and part_context["is_part_opening"]:
+            manuscript_blocks.append(f"=== PART {part_context['part_index']}: {part_context['part_title']} ===")
+        manuscript_blocks.append(f"[{chapter.chapter_index}장. {chapter.title}]\n{chapter.content}")
+    full_manuscript = "\n\n".join(manuscript_blocks)
 
     # 커스터마이징이 확정돼 있으면 말투·컨셉 일관성을 윤문에도 반영한다.
     confirmed = _get_confirmed_customization(autobiography)
@@ -1043,8 +1217,21 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
             style_bible=style_bible_text, full_manuscript=full_manuscript
         )
 
-    response = await solar.chat_completion(revision_messages, reasoning_effort="high")
+    # 챕터당 분량이 늘어난 만큼(챕터 4,000~6,000자 x N) full_manuscript 전체를
+    # 한 번에 되돌려 받아야 하는 이 호출도 절단 위험이 커졌다 — 넉넉하게 지정.
+    # reasoning_effort="high"는 눈에 보이지 않는 추론 토큰도 max_tokens에서
+    # 함께 소비하므로(2026-07-17 챕터 집필에서 실측 — 8000으로는 추론만으로
+    # 예산이 바닥나 본문이 통째로 빈 문자열이 된 사고 참조), 본문 분량보다
+    # 훨씬 큰 여유를 둔다. 다만 챕터 수가 매우 많은 책은 이 한 번의 호출로도
+    # 한계에 부딪힐 수 있으니(Solar의 실제 출력 상한 미검증), 실사용 중 잘림이
+    # 관찰되면 챕터 구간별 윤문으로 나누는 재설계가 필요할 수 있다. 아래
+    # `or full_manuscript` 폴백 덕분에 최악의 경우에도 빈 원고로 덮어쓰이지는
+    # 않는다.
+    response = await solar.chat_completion(revision_messages, reasoning_effort="high", max_tokens=48000)
     final_content = response.choices[0].message.content or full_manuscript
+    # 방어적 안전망: 윤문 LLM이 지시를 어기고 "=== PART N: 제목 ===" 마커를 그대로
+    # 남겨 출력했다면 최종 인쇄본에 노출되지 않도록 제거한다.
+    final_content = _PART_MARKER_PATTERN.sub("", final_content)
 
     for chapter in chapters:
         await gateways.chapters.mark_finalized(chapter.id)

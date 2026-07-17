@@ -26,6 +26,7 @@ from weasyprint import HTML
 from app.gateways.dto import AutobiographyRecord
 from app.gateways.factory import Gateways
 from app.models.enums import AssetType
+from app.services import autobiography_service
 
 logger = logging.getLogger(__name__)
 
@@ -100,20 +101,27 @@ async def render_manuscript_html(gateways: Gateways, autobiography: Autobiograph
         photo_url = await _first_photo_url_for_chapter(
             gateways, chapter.source_event_ids, media_url_by_id
         )
+        part_context = autobiography_service.get_chapter_part_context(autobiography, chapter.chapter_index)
         chapter_views.append(
             {
                 "chapter_index": chapter.chapter_index,
                 "title": chapter.title,
                 "paragraphs": _split_paragraphs(chapter.content or ""),
                 "photo_url": photo_url,
+                "part_index": part_context["part_index"] if part_context else None,
+                "part_title": part_context["part_title"] if part_context else None,
+                "is_part_opening": bool(part_context and part_context["is_part_opening"]),
             }
         )
+
+    parts = autobiography_service.get_ordered_parts(autobiography)
 
     template = _jinja_env.get_template("manuscript.html.jinja")
     return template.render(
         title=autobiography.title,
         book_synopsis=autobiography.book_synopsis,
         chapters=chapter_views,
+        parts=parts,
         font_url=_resolve_manuscript_font_url(),
     )
 
@@ -173,7 +181,9 @@ async def generate_manuscript_pdf(gateways: Gateways, autobiography_id: uuid.UUI
     pdf_bytes = HTML(string=html_content, base_url=".").write_pdf()
 
     chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
-    qa_report = _run_pdf_qa(pdf_bytes, expected_min_pages=len(chapters) + 2)  # +2: 표지, 목차
+    ordered_parts = autobiography_service.get_ordered_parts(autobiography)
+    # +2: 표지, 목차. Part 구조가 있으면 Part마다 구분 페이지가 1장씩 추가된다.
+    qa_report = _run_pdf_qa(pdf_bytes, expected_min_pages=len(chapters) + 2 + len(ordered_parts))
     if not qa_report["meets_expected_min_pages"] or not qa_report["fonts_embedded"]:
         logger.warning(
             "PDF QA 경고(autobiography_id=%s): %s — 그래도 업로드는 계속 진행하고 관리자가"

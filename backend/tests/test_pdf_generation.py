@@ -22,7 +22,6 @@ from app.services import autobiography_service, pdf_service
 from tests.test_autobiography_phase34_pipeline import (
     _fake_admin_create_user,
     _fake_chat_completion,
-    _fake_classify_entailment,
     _fake_structured_completion,
     _seed_user_with_events,
 )
@@ -35,7 +34,6 @@ async def test_generate_manuscript_pdf_produces_valid_pdf_and_stores_url() -> No
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
         patch("app.services.pdf_service._resolve_manuscript_font_url", return_value=""),
     ):
         gateways = _build_mock_gateways()
@@ -65,13 +63,81 @@ async def test_generate_manuscript_pdf_produces_valid_pdf_and_stores_url() -> No
 
 
 @pytest.mark.asyncio
+async def test_generate_manuscript_pdf_renders_part_divider_pages() -> None:
+    """Part(대분류) 구조가 있는 책은 Part 구분 페이지가 실제로 조판되는지 확인한다."""
+
+    async def _fake_structured_completion_with_parts(messages, *, schema_name, json_schema, **kwargs):
+        if schema_name == "toc_generation":
+            return {
+                "candidates": [
+                    {
+                        "narrative_arc": "결핍에서 성취로.",
+                        "parts": [
+                            {"part_index": 1, "part_title": "결핍의 시절", "part_arc": "가난과 결핍."},
+                            {"part_index": 2, "part_title": "도약의 시절", "part_arc": "성공을 향한 도약."},
+                        ],
+                        "chapters": [
+                            {
+                                "chapter_index": 1, "title": "1장. 어린 시절", "theme_keywords": [],
+                                "connecting_thread": "결핍이 시작된다.", "part_index": 1,
+                            },
+                            {
+                                "chapter_index": 2, "title": "2장. 방황", "theme_keywords": [],
+                                "connecting_thread": "결핍이 절정에 이른다.", "part_index": 1,
+                            },
+                            {
+                                "chapter_index": 3, "title": "3장. 도전", "theme_keywords": [],
+                                "connecting_thread": "도약이 시작된다.", "part_index": 2,
+                            },
+                            {
+                                "chapter_index": 4, "title": "4장. 성취", "theme_keywords": [],
+                                "connecting_thread": "성취를 회수한다.", "part_index": 2,
+                            },
+                        ],
+                    }
+                ]
+            }
+        return await _fake_structured_completion(messages, schema_name=schema_name, json_schema=json_schema, **kwargs)
+
+    with (
+        patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion_with_parts),
+        patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+        patch("app.services.pdf_service._resolve_manuscript_font_url", return_value=""),
+    ):
+        gateways = _build_mock_gateways()
+        user = await _seed_user_with_events(gateways)
+
+        autobiography = await autobiography_service.consolidate_autobiography(gateways, user.id)
+        autobiography = await autobiography_service.generate_toc_candidates(gateways, autobiography.id)
+        autobiography = await autobiography_service.select_toc_candidate(gateways, autobiography.id, 0)
+        chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
+        for chapter in chapters:
+            await autobiography_service.write_chapter(gateways, chapter.id)
+        autobiography = await autobiography_service.finalize_manuscript(gateways, autobiography.id)
+        assert autobiography.final_content
+
+        autobiography = await pdf_service.generate_manuscript_pdf(gateways, autobiography.id)
+
+        pdf_bytes = gateways.storage._store.objects[  # type: ignore[attr-defined]
+            f"users/{user.id}/manuscripts/{autobiography.id}.pdf"
+        ]
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        # 표지 + 목차 + Part 구분 페이지 2장 + 챕터 4장 = 최소 8페이지.
+        assert len(reader.pages) >= 8
+        extracted = "".join(page.extract_text() or "" for page in reader.pages)
+        assert "결핍의 시절" in extracted
+        assert "도약의 시절" in extracted
+
+
+@pytest.mark.asyncio
 async def test_generate_manuscript_pdf_rejects_before_finalize() -> None:
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.clients.nli.classify_entailment", new=_fake_classify_entailment),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)

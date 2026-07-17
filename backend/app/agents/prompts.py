@@ -913,6 +913,18 @@ TOC_GENERATION_SYSTEM_PROMPT = """\
 - 챕터와 챕터 사이는 반드시 연결되어야 합니다. 사건 자체가 인과적으로 이어지지
   않더라도, 주제·감정·이미지·질문 중 하나로 다음 챕터와 이어지는 다리를 놓으세요
   — "관계없는 에피소드의 모음"이 아니라 "한 사람의 한 이야기"로 읽혀야 합니다.
+- 각 후보는 3~5개의 큰 Part(대분류)로 나누고, 각 Part 안에 **반드시 3개
+  이상, 최대 10개**의 챕터를 배치하세요. 2개 이하인 Part는 절대 허용되지
+  않습니다 — 마지막 국면(예: 노년기·회고)에 배정할 챕터가 2개 이하로 줄어들
+  것 같으면, Part를 억지로 쪼개지 말고 바로 앞 Part와 합쳐서 전체 Part 수를
+  줄이세요(단, 최종 Part 수는 최소 3개를 유지). Part는 챕터를 담는 폴더가
+  아니라 그 자체로 하나의 국면(도입/전개/절정/회고 등)을 담당해야 합니다 —
+  어떤 원리로 Part를 나눌지(시간의 도약, 장소의 이동, 주제의 전환 등)를
+  먼저 정하고 그 원리에 맞게 챕터를 배정하세요. Part를 나누는 원리는
+  후보마다 자유롭게 골라 다양성을 주어도 좋습니다. 인접한 두 Part 사이에는
+  반드시 하나의 뚜렷한 전환점(사건·시간·장소·관점 중 하나)이 있어야 하며,
+  그 전환은 앞 Part의 마지막 챕터와 다음 Part의 첫 챕터의 connecting_thread에
+  구체적으로 드러나야 합니다.
 """
 
 TOC_GENERATION_SCHEMA: dict[str, Any] = {
@@ -927,6 +939,23 @@ TOC_GENERATION_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "description": "이 구성안이 처음부터 끝까지 들려주는 하나의 이야기(2~3문장) — 책 전체의 뼈대.",
                     },
+                    "parts": {
+                        "type": "array",
+                        "description": "이 후보를 이루는 3~5개의 큰 Part(대분류). 각 Part는 하나의 국면을 담당한다.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "part_index": {"type": "integer"},
+                                "part_title": {"type": "string"},
+                                "part_arc": {
+                                    "type": "string",
+                                    "description": "이 Part가 책 전체 아크에서 담당하는 구간과, 이 Part 안에서 무엇이 변화·전개되는지(2~3문장) — Part 시놉시스의 씨앗.",
+                                },
+                            },
+                            "required": ["part_index", "part_title", "part_arc"],
+                            "additionalProperties": False,
+                        },
+                    },
                     "chapters": {
                         "type": "array",
                         "items": {
@@ -939,13 +968,23 @@ TOC_GENERATION_SCHEMA: dict[str, Any] = {
                                     "type": "string",
                                     "description": "이 챕터가 직전 챕터에서 어떻게 이어지고 다음 챕터로 무엇을 넘기는지(1~2문장). 사건적으로 안 이어지면 주제·감정·이미지로 잇는 연결고리를 명시.",
                                 },
+                                "part_index": {
+                                    "type": "integer",
+                                    "description": "이 챕터가 속한 Part의 번호(위 parts 배열의 part_index와 일치해야 함).",
+                                },
                             },
-                            "required": ["chapter_index", "title", "theme_keywords", "connecting_thread"],
+                            "required": [
+                                "chapter_index",
+                                "title",
+                                "theme_keywords",
+                                "connecting_thread",
+                                "part_index",
+                            ],
                             "additionalProperties": False,
                         },
                     },
                 },
-                "required": ["narrative_arc", "chapters"],
+                "required": ["narrative_arc", "parts", "chapters"],
                 "additionalProperties": False,
             },
         }
@@ -1003,6 +1042,46 @@ def build_book_title_prompt(*, style_bible: str, toc: str) -> list[dict[str, str
     ]
 
 
+PART_SYNOPSIS_SYSTEM_PROMPT = """\
+아래 책 전체 시놉시스와 이 Part에 배정된 챕터 목록, 목차 설계 단계에서 정해진
+이 Part의 씨앗 설명(part_arc)을 참고해 Part 시놉시스를 작성하세요. 이후 이
+Part에 속한 각 챕터 집필의 설계도 역할을 하므로 다음을 반드시 포함하세요:
+- 이 Part가 책 전체 아크에서 담당하는 구간(도입/전개/절정/회고 중 어디인지)과
+  그 안에서 무엇이 변화·전개되는지.
+- 이 Part를 여는 장면·감정과, 이 Part를 닫는 장면·감정(다음 Part로 국면이
+  전환된다는 신호를 어떻게 남길지).
+- 이 Part에 속한 챕터들을 하나로 묶는 조직 원리와, 그 원리가 인접 Part와
+  어떻게 구별되는지.
+
+형식 — 반드시 지킬 것: 600~1000자 내외의 응집된 산문 한 편으로 작성하세요.
+표, 헤더(#, ##), 굵게(**), 글머리기호 같은 마크다운 서식은 쓰지 마세요 — 이
+시놉시스는 사람이 읽는 문서가 아니라 다음 단계 집필 프롬프트에 그대로
+삽입되는 내부 설계 문서이므로, 분석적으로 나열하기보다 짧고 응집된 산문으로
+핵심만 전달해야 합니다. 이 형식 지침 문장 자체를 출력에 그대로 옮기거나
+괄호로 덧붙이지 마세요 — 완성된 시놉시스 산문만 출력하세요.
+"""
+
+
+def build_part_synopsis_prompt(
+    *,
+    book_synopsis: str,
+    part_title: str,
+    part_arc_seed: str,
+    chapter_titles: list[str],
+) -> list[dict[str, str]]:
+    titles_block = "\n".join(f"- {t}" for t in chapter_titles)
+    user_prompt = (
+        f"[책 전체 시놉시스]\n{book_synopsis}\n\n"
+        f"[Part 제목] {part_title}\n\n"
+        f"[목차 단계에서 정해진 씨앗 설명]\n{part_arc_seed}\n\n"
+        f"[이 Part에 배정된 챕터들]\n{titles_block}"
+    )
+    return [
+        {"role": "system", "content": PART_SYNOPSIS_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 CHAPTER_SYNOPSIS_SYSTEM_PROMPT = """\
 아래 책 전체 시놉시스, 이 챕터의 [연결고리](목차 설계 단계에서 정해진, 직전
 챕터에서 어떻게 이어받아 다음 챕터로 무엇을 넘기는지)와 이 챕터에 배정된 사건
@@ -1013,6 +1092,16 @@ CHAPTER_SYNOPSIS_SYSTEM_PROMPT = """\
 - 배정된 사건들 사이의 인과관계와 감정선. 사건들이 서로 인과적으로 이어지지
   않더라도, 하나의 조직 원리(공통된 이미지·질문·주제)로 묶어 나열이 아닌
   하나의 흐름으로 구성하세요.
+- 이 챕터가 속한 Part 안에서 맡는 역할, 그리고 Part의 첫/마지막 챕터라면 그
+  경계를 매끄럽게 지우지 말고 국면 전환으로 드러내는 방법(아래 [소속 Part]
+  참고).
+
+형식 — 반드시 지킬 것: 400~700자 내외의 응집된 산문 한 편으로 작성하세요.
+표, 헤더(#, ##), 굵게(**), 글머리기호 같은 마크다운 서식은 쓰지 마세요 — 이
+시놉시스는 사람이 읽는 문서가 아니라 다음 단계 집필 프롬프트에 그대로
+삽입되는 내부 설계 문서이므로, 분석적으로 나열하기보다 짧고 응집된 산문으로
+핵심만 전달해야 합니다. 이 형식 지침 문장 자체를 출력에 그대로 옮기거나
+괄호로 덧붙이지 마세요 — 완성된 시놉시스 산문만 출력하세요.
 """
 
 
@@ -1022,12 +1111,37 @@ def build_chapter_synopsis_prompt(
     chapter_title: str,
     event_summaries: list[str],
     connecting_thread: str | None = None,
+    part_context: dict | None = None,
 ) -> list[dict[str, str]]:
     events_block = "\n".join(f"- {s}" for s in event_summaries)
     thread_block = connecting_thread or "(목차 단계에서 정해진 연결고리 없음 — 첫 챕터이거나 커스터마이징 이전 생성)"
+
+    part_block = "(이 챕터가 속한 Part 구조 없음 — 단일 흐름의 책)"
+    if part_context:
+        lines = [part_context["part_title"], part_context["part_synopsis"]]
+        if part_context["is_part_opening"]:
+            prev = part_context["prev_part_title"]
+            lines.append(
+                "이 챕터는 이 Part의 첫 챕터입니다."
+                + (f" 이전 Part({prev})에서 국면이 전환됐다는 신호를 도입부에 담으세요." if prev else "")
+            )
+        if part_context["is_part_closing"]:
+            nxt = part_context["next_part_title"]
+            lines.append(
+                "이 챕터는 이 Part의 마지막 챕터입니다."
+                + (
+                    f" 다음 Part({nxt})로 넘어가는 국면 전환을 매듭지으세요 — 일반 챕터처럼 "
+                    "여운만 남기지 말고, 무엇이 달라지는지 분명히 하세요."
+                    if nxt
+                    else " 책 전체를 회수하는 여운으로 마무리하세요."
+                )
+            )
+        part_block = "\n".join(lines)
+
     user_prompt = (
         f"[책 전체 시놉시스]\n{book_synopsis}\n\n"
         f"[챕터 제목] {chapter_title}\n\n"
+        f"[소속 Part]\n{part_block}\n\n"
         f"[연결고리]\n{thread_block}\n\n"
         f"[배정된 사건들]\n{events_block}"
     )
@@ -1039,9 +1153,20 @@ def build_chapter_synopsis_prompt(
 
 CHAPTER_WRITING_SYSTEM_PROMPT = """\
 아래 자료를 바탕으로 챕터 본문을 집필하세요. [스타일 바이블]의 문체를 따르고,
-[전체 시놉시스]와 [챕터 시놉시스]의 설계를 벗어나지 마세요. [RAG 검색된 사건
-문단]에 없는 사실을 지어내지 마세요 — 서술은 반드시 제공된 사건 문단에 근거해야
-합니다(사후 근거 검증 대상).
+[전체 시놉시스]와 [챕터 시놉시스]의 설계를 벗어나지 마세요.
+
+분량: 이 챕터는 4,000~6,000자(공백 포함) 분량으로, 얇은 문고본이 아니라
+실제 출간 자서전 한 챕터만큼 충분히 상세하게 쓰세요. 짧게 요약하고
+끝내지 마세요 — 아래 "집필 기술"을 활용해 장면을 충분히 펼쳐서 분량을
+채우세요.
+
+사실 관계: [RAG 검색된 사건 문단]에 없는 새로운 사건이나 사실(없던 사람,
+없던 사건, 없던 결과 등)을 지어내지 마세요 — 서술은 반드시 제공된 사건에
+근거해야 합니다(사후 근거 검증 대상). 다만 이것이 "짧게 쓰라"는 뜻은
+아닙니다 — 이미 있는 사건을 장면·감각·내적 성찰·있었을 법한 대화로
+정교하게 풀어내는 것(정교화)은 지어내는 것(날조)이 아니라 오히려 장려되는
+집필 방식입니다. 분량은 새 사건을 추가해서가 아니라, 주어진 사건 하나하나를
+더 깊이 있게 그려서 채우세요.
 
 집필 기술 — 시중에 파는 자서전처럼 읽히도록 다음을 지키세요:
 - "그리고 -했다. 그리고 -했다" 식의 사건 나열이나 요약형 진술로 열지 말고,
@@ -1051,7 +1176,9 @@ CHAPTER_WRITING_SYSTEM_PROMPT = """\
 - [직전 챕터 요약]이 주어지면 완전히 새로 시작하지 말고, 그 여운이나 감정을
   자연스럽게 이어받으며 도입부를 여세요.
 - [챕터 시놉시스]에 담긴 연결고리를 살려, 다음 챕터를 향한 여운이나 전환으로
-  마무리하세요(마지막 챕터라면 책 전체를 회수하는 여운으로).
+  마무리하세요(마지막 챕터라면 책 전체를 회수하는 여운으로). 챕터 시놉시스가
+  이 챕터를 Part의 마지막 챕터라고 안내한다면 단순한 여운이 아니라 국면이
+  전환된다는 사실이 분명히 느껴지는 매듭으로 마무리하세요.
 
 출력 형식 — 반드시 지킬 것:
 - 완성된 산문 본문만 출력하세요. "여기 챕터입니다", "**제1장**" 같은 제목·안내
@@ -1111,10 +1238,21 @@ UNITY_REVISION_SYSTEM_PROMPT = """\
 것입니다). 사건의 사실 관계나 순서는 변경하지 마세요 — 오직 문체
 통일성만 개선하는 윤문입니다.
 
+본문 중간에 `=== PART N: 제목 ===` 형식의 표시가 있다면, 이는 목차 설계
+단계에서 의도적으로 나눈 Part(대분류) 경계를 알려주는 것입니다. 같은 Part
+안에서 챕터가 바뀌는 지점은 위 지침대로 매끄럽게 다듬으세요. 하지만 이
+표시가 있는 지점은 다르게 다루세요 — 시간의 도약, 배경의 전환, 국면의
+전환처럼 의도적인 구조적 단절이므로 억지로 이어붙이지 말고, 오히려 그 전환이
+독자에게 분명하게 느껴지도록 유지하거나 필요하면 더 뚜렷하게 다듬으세요.
+
 출력 형식 — 반드시 지킬 것:
 - 윤문이 끝난 전체 원고 본문만 그대로 출력하세요. "**수정된 원고**", "아래는 수정
   본입니다" 같은 안내 문구나 지시사항을 되뇌는 메타 설명을 앞뒤에 절대 붙이지
   마세요 — 이 출력이 그대로 final_content로 저장되어 PDF에 인쇄됩니다.
+- `=== PART N: 제목 ===` 표시는 당신에게 구조를 알려주기 위한 안내용일
+  뿐입니다. 최종 출력 어디에도 이 표시나 이와 비슷한 마커를 그대로 남기지
+  마세요 — Part가 바뀌었다는 사실은 문장의 흐름과 전환 자체로 드러내야지,
+  표시로 나타내면 안 됩니다.
 - 마크다운 문법(**굵게**, ### 제목, > 인용, - 목록 등)을 쓰지 마세요. 입력 원고에
   이미 마크다운이 섞여 있다면 윤문하면서 순수 텍스트로 정리하세요.
 """
@@ -1164,6 +1302,87 @@ def build_fact_reextraction_prompt(*, chapter_content: str) -> list[dict[str, st
     return [
         {"role": "system", "content": FACT_REEXTRACTION_SYSTEM_PROMPT},
         {"role": "user", "content": chapter_content},
+    ]
+
+
+# 근거 검증(Groundedness Check) — 예전에는 로컬 NLI(mDeBERTa) entailment로 문장
+# 단위 대조를 했는데, 감각적 묘사·내적 성찰 같은 정당한 정교화까지 "원문을
+# 논리적으로 함의하지 않는다"는 이유로 거의 전부 플래그되는 근본적인 도구 부적합
+# 문제가 있었고, 512 토큰 제약 때문에 사건 여러 개를 함께 검증하려면 그룹핑이
+# 필요해 챕터 하나에 20분 넘게 걸리는 속도 문제까지 겹쳤다(2026-07-17). 같은
+# 목적(챕터 본문을 근거 자료와 대조)을 이미 Solar LLM 판정으로 하고 있는
+# _run_factcheck/FACT_REEXTRACTION_SYSTEM_PROMPT와 동일한 패턴으로 교체한다 —
+# 챕터 전체를 근거 사건 전체와 함께 한 번의 호출로 비교하므로 토큰 제약도,
+# 그룹핑도 필요 없다.
+GROUNDEDNESS_JUDGE_SYSTEM_PROMPT = """\
+아래 [챕터 본문]이 [근거 사건 목록]에 실제로 근거하는지 판정하세요. 판정
+기준은 딱 하나입니다 — "독자가 이 문장을 실제로 일어난 일에 대한 검증
+가능한 사실 주장으로 받아들일까?" 그렇다면, 그리고 그 사실이 근거 사건
+목록 어디에도 없다면 flag하세요. 문학적 표현이 사건 목록의 문장과 토씨
+하나까지 같아야 한다는 뜻이 아닙니다 — 같은 사건을 풀어 쓴 것이면 표현이
+아무리 구체적이고 감각적이어도 근거 있는 것입니다.
+
+플래그하지 말아야 할 것 (반드시 통과):
+- 이미 일어난 것으로 확인된 장면을 감각적으로 채색한 묘사. 예: 근거에
+  "병원에서 시한부 선고를 받았다"만 있어도, "차트 위 검은 글씨", "복도에
+  스민 소독제 냄새", "낙엽이 초침처럼 떨어졌다" 같은 분위기·비유 묘사는
+  전부 정교화입니다. 새로운 사건이 아니라 있는 사건의 배경 채색입니다.
+- 내적 독백·감정·다짐. 예: "시간이 천천히 흐르는 듯한 착각이 들었다",
+  "이 순간을 덤으로 살아보자고 되뇌었다" — 감정 반응이지 사실 주장이
+  아닙니다.
+- 이미 확인된 사건(예: 배우자와 대화했다) 속 대사의 재구성. "그녀가
+  대답하는 목소리는 부드러웠다"처럼 대화의 분위기·어조를 지어내는 것은
+  정교화입니다.
+
+반드시 플래그해야 할 것:
+- 근거 목록에 전혀 없는 새 인물의 등장(이름, 관계 등 — 예: 근거 어디에도
+  없는 "로버트"라는 사람이 갑자기 특정 행동을 하는 경우)
+- 근거 목록에 없는 새로운 사건·행동 자체(감정 채색이 아니라 "무엇을
+  했다/무슨 일이 있었다"는 새 사실). 예: 근거에 없는 전화 통화, 만남,
+  결정, 발언 내용 자체
+- 이미 알려진 사실과 모순되거나 이를 바꾸는 날짜·장소·결과의 창작
+
+판정할 때 "이 구체적 디테일이 근거 사건과 글자 그대로 일치하는가"가
+아니라 "이 문장이 근거 사건에 없던 새로운 사건/인물/결과를 주장하는가"를
+물으세요. 애매하면(정교화인지 새 사실인지 판단이 갈리면) 플래그하지
+마세요 — 이 검증의 목적은 명백한 날조를 막는 것이지 문학적 윤색을
+막는 것이 아닙니다.
+"""
+
+GROUNDEDNESS_JUDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "flags": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sentence": {
+                        "type": "string",
+                        "description": "근거 없다고 판단된 문장(챕터 본문에서 그대로 인용)",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "어떤 새로운 사실/사건이 근거 없이 추가됐는지",
+                    },
+                },
+                "required": ["sentence", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["flags"],
+    "additionalProperties": False,
+}
+
+
+def build_groundedness_judge_prompt(
+    *, chapter_content: str, source_events_text: str
+) -> list[dict[str, str]]:
+    user_prompt = f"[챕터 본문]\n{chapter_content}\n\n[근거 사건 목록]\n{source_events_text}"
+    return [
+        {"role": "system", "content": GROUNDEDNESS_JUDGE_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
     ]
 
 
@@ -1599,6 +1818,40 @@ def build_sample_preview_prompt(
 
 # ── 11-5. 커스터마이징된 기존 프롬프트 빌더 변형 ─────────────────────────
 
+# 구성(STRUCTURE_OPTIONS) 관점별로 Part(대분류)를 어떤 원리로 나눌지에 대한 힌트.
+# "episodic"(결정적 에피소드 중심)은 이미 5~10개의 독립된 단편이 책 전체라 다시
+# 3~5개 Part로 나누면 억지스럽다 — 별도 예외 처리(아래 build_customized_toc_prompt).
+_PART_SHAPING_HINTS: dict[str, str] = {
+    "thematic": (
+        "삶을 관통하는 핵심 가치관·주제군을 Part 단위로 묶으세요. Part 순서 "
+        "자체가 하나의 감정적·통찰적 상승 곡선(예: 정체성 형성 → 실패와 좌절 → "
+        "재기와 성장)을 이루도록 배열하세요."
+    ),
+    "in_medias_res": (
+        "정확히 3개의 Part로 구성하세요 — 1부: 현재(극적 순간), 2부: 과거로의 "
+        "회상(사건의 씨앗), 3부: 현재로의 복귀(그 사이의 과정과 지금). 3부의 "
+        "마지막 챕터는 1부에서 던진 장면·질문을 회수해야 합니다."
+    ),
+    "geographical": (
+        "실제로 옮겨 다닌 주요 장소(지역·도시) 단위로 Part를 나누세요. 한 Part "
+        "안에서는 같은 공간적 배경을 유지하고, Part가 바뀌는 지점에서 실제 "
+        "이주·이동이 일어나야 합니다."
+    ),
+    "chronological": (
+        "생애 단계(유년기/청년기/장년기/노년기 등)를 Part 경계로 삼으세요. "
+        "Part가 바뀌는 지점은 곧 인생의 국면이 바뀌는 지점이어야 합니다."
+    ),
+}
+
+_EPISODIC_PART_EXCEPTION = (
+    "\n\n[Part 구성 예외] 결정적 에피소드 중심 구성은 이미 그 자체로 5~10개의 "
+    "독립된 단편이 책 전체입니다 — 이를 다시 3~5개의 상위 Part로 묶으면 오히려 "
+    "단편의 독립성을 해치고 어색한 상위 분류가 생깁니다. parts 배열에는 정확히 "
+    "1개의 Part만 담고(part_index=1, part_title은 책 전체를 아우르는 제목), "
+    "모든 챕터의 part_index를 1로 통일하세요."
+)
+
+
 def build_customized_toc_prompt(
     *,
     event_summaries_with_scores: str,
@@ -1609,6 +1862,12 @@ def build_customized_toc_prompt(
     아니라 example(예시 목차)도 few-shot으로 함께 준다 — 추상적 설명만으로는 "주제별
     구성"과 "역순행적 구성" 같은 구조적 차이가 잘 재현되지 않는다."""
     structure = STRUCTURE_OPTIONS[structure_key]
+    if structure_key == "episodic":
+        part_instruction = _EPISODIC_PART_EXCEPTION
+    else:
+        hint = _PART_SHAPING_HINTS.get(structure_key, "")
+        part_instruction = f"\n\n[Part 구성 지침 — {structure['name']}에 맞게]\n{hint}"
+
     system_prompt = (
         f"{TOC_GENERATION_SYSTEM_PROMPT}\n\n"
         f"[사용자가 선택한 목차 구성 방식]\n{structure['instruction']}\n\n"
@@ -1616,6 +1875,7 @@ def build_customized_toc_prompt(
         f"{structure['example']}\n\n"
         f"반드시 이 구성 방식을 따라 목차 후보를 생성하세요. 3개 후보 모두 이 구성 "
         f"관점을 기반으로 하되, 세부 챕터 배분이나 제목에서 변주를 주세요."
+        f"{part_instruction}"
     )
     return [
         {"role": "system", "content": system_prompt},

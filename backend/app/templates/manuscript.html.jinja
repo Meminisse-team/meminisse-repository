@@ -82,6 +82,30 @@
     margin-bottom: 4mm;
     border-bottom: 1px dotted #999;
   }
+  .toc-part h3 {
+    font-size: 12pt;
+    margin: 6mm 0 3mm 0;
+  }
+
+  .part-divider {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    break-before: page;
+    break-after: page;
+  }
+  .part-divider .part-label {
+    font-size: 10pt;
+    letter-spacing: 0.2em;
+    color: #777;
+    margin-bottom: 4mm;
+  }
+  .part-divider h2 {
+    font-size: 20pt;
+  }
 
   .chapter {
     break-before: page;
@@ -116,14 +140,33 @@
 
 <section class="toc">
   <h2>목차</h2>
+  {% if parts %}
+    {% for part in parts %}
+    <div class="toc-part">
+      <h3>{{ part.part_index }}부. {{ part.part_title }}</h3>
+      <ol>
+        {% for chapter in chapters if chapter.part_index == part.part_index %}
+        <li><span>{{ chapter.chapter_index }}장. {{ chapter.title or "" }}</span></li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% endfor %}
+  {% else %}
   <ol>
     {% for chapter in chapters %}
     <li><span>{{ chapter.chapter_index }}장. {{ chapter.title or "" }}</span></li>
     {% endfor %}
   </ol>
+  {% endif %}
 </section>
 
 {% for chapter in chapters %}
+{% if chapter.is_part_opening %}
+<section class="part-divider">
+  <p class="part-label">PART {{ chapter.part_index }}</p>
+  <h2>{{ chapter.part_title }}</h2>
+</section>
+{% endif %}
 <section class="chapter">
   <h2>{{ chapter.chapter_index }}장. {{ chapter.title or "" }}</h2>
   {% if chapter.photo_url %}

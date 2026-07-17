@@ -327,3 +327,381 @@ async def test_generate_sample_previews_commits_placeholders_before_filling() ->
     filled_progression = [filled for _, filled in snapshots]
     assert filled_progression == sorted(filled_progression)  # 단조 비감소
     assert 1 in filled_progression  # 1개만 채워진 중간 상태가 실제로 존재
+
+
+# --------------------------------------------------------------------------- #
+# Part(대분류) 구조 — 스키마, _toc_text 렌더링, get_chapter_part_context/       #
+# get_ordered_parts 헬퍼, episodic 예외                                        #
+# --------------------------------------------------------------------------- #
+
+
+def _make_two_part_toc() -> dict:
+    return {
+        "narrative_arc": "가난한 유년기에서 자수성가한 노년기까지.",
+        "parts": [
+            {"part_index": 1, "part_title": "결핍의 시절", "part_arc": "가난과 결핍을 겪는다."},
+            {"part_index": 2, "part_title": "도약의 시절", "part_arc": "성공을 향해 나아간다."},
+        ],
+        "chapters": [
+            {
+                "chapter_index": 1,
+                "title": "1장",
+                "theme_keywords": [],
+                "connecting_thread": "결핍이 시작된다.",
+                "part_index": 1,
+            },
+            {
+                "chapter_index": 2,
+                "title": "2장",
+                "theme_keywords": [],
+                "connecting_thread": "결핍이 절정에 이른다.",
+                "part_index": 1,
+            },
+            {
+                "chapter_index": 3,
+                "title": "3장",
+                "theme_keywords": [],
+                "connecting_thread": "도약이 시작된다.",
+                "part_index": 2,
+            },
+            {
+                "chapter_index": 4,
+                "title": "4장",
+                "theme_keywords": [],
+                "connecting_thread": "성취를 회수한다.",
+                "part_index": 2,
+            },
+        ],
+    }
+
+
+def test_toc_generation_schema_requires_parts_and_chapter_part_index() -> None:
+    candidate_schema = prompts.TOC_GENERATION_SCHEMA["properties"]["candidates"]["items"]
+    assert "parts" in candidate_schema["required"]
+
+    part_schema = candidate_schema["properties"]["parts"]["items"]
+    assert set(part_schema["required"]) == {"part_index", "part_title", "part_arc"}
+
+    chapter_schema = candidate_schema["properties"]["chapters"]["items"]
+    assert "part_index" in chapter_schema["required"]
+
+
+def test_toc_text_renders_part_headers_in_chapter_order() -> None:
+    text = autobiography_service._toc_text(_make_two_part_toc())
+    assert "[1부. 결핍의 시절]" in text
+    assert "[2부. 도약의 시절]" in text
+    assert text.index("[1부. 결핍의 시절]") < text.index("1. 1장")
+    assert text.index("1. 1장") < text.index("[2부. 도약의 시절]")
+    assert text.index("[2부. 도약의 시절]") < text.index("3. 3장")
+
+
+def test_toc_text_falls_back_to_flat_rendering_when_parts_absent_or_single() -> None:
+    legacy = {"chapters": [{"chapter_index": 1, "title": "1장", "theme_keywords": []}]}
+    text = autobiography_service._toc_text(legacy)
+    assert "1. 1장" in text
+    assert "부." not in text
+
+    single_part = {
+        "chapters": [{"chapter_index": 1, "title": "1장", "theme_keywords": [], "part_index": 1}],
+        "parts": [{"part_index": 1, "part_title": "전체", "part_arc": "..."}],
+    }
+    text = autobiography_service._toc_text(single_part)
+    assert "1. 1장" in text
+    assert "부." not in text  # Part가 1개면 episodic 예외 — 헤더 없이 평평하게 렌더링.
+
+
+def test_get_chapter_part_context_identifies_opening_and_closing_chapters() -> None:
+    autobiography = _make_autobiography(
+        toc_data={"selected_candidate_index": 0, "candidates": [_make_two_part_toc()]}
+    )
+
+    ch1 = autobiography_service.get_chapter_part_context(autobiography, 1)  # Part 1의 첫 챕터
+    assert ch1["is_part_opening"] is True
+    assert ch1["is_part_closing"] is False
+    assert ch1["prev_part_title"] is None
+    assert ch1["next_part_title"] == "도약의 시절"
+
+    ch2 = autobiography_service.get_chapter_part_context(autobiography, 2)  # Part 1의 마지막 챕터
+    assert ch2["is_part_opening"] is False
+    assert ch2["is_part_closing"] is True
+
+    ch3 = autobiography_service.get_chapter_part_context(autobiography, 3)  # Part 2의 첫 챕터
+    assert ch3["is_part_opening"] is True
+    assert ch3["prev_part_title"] == "결핍의 시절"
+    assert ch3["next_part_title"] is None
+
+    ch4 = autobiography_service.get_chapter_part_context(autobiography, 4)  # Part 2의 마지막 챕터
+    assert ch4["is_part_closing"] is True
+
+
+def test_get_chapter_part_context_returns_none_when_no_real_part_structure() -> None:
+    assert autobiography_service.get_chapter_part_context(_make_autobiography(toc_data=None), 1) is None
+    assert (
+        autobiography_service.get_chapter_part_context(
+            _make_autobiography(toc_data={"candidates": [], "selected_candidate_index": None}), 1
+        )
+        is None
+    )
+
+    single_part_toc = {
+        "chapters": [{"chapter_index": 1, "title": "1장", "part_index": 1}],
+        "parts": [{"part_index": 1, "part_title": "전체", "part_arc": "..."}],
+    }
+    autobiography = _make_autobiography(toc_data={"selected_candidate_index": 0, "candidates": [single_part_toc]})
+    assert autobiography_service.get_chapter_part_context(autobiography, 1) is None
+
+    autobiography = _make_autobiography(
+        toc_data={"selected_candidate_index": 0, "candidates": [_make_two_part_toc()]}
+    )
+    assert autobiography_service.get_chapter_part_context(autobiography, 99) is None
+
+
+def test_get_ordered_parts_empty_for_zero_or_one_part() -> None:
+    assert autobiography_service.get_ordered_parts(_make_autobiography(toc_data=None)) == []
+
+    single_part_toc = {
+        "chapters": [{"chapter_index": 1, "title": "1장", "part_index": 1}],
+        "parts": [{"part_index": 1, "part_title": "전체", "part_arc": "..."}],
+    }
+    autobiography = _make_autobiography(toc_data={"selected_candidate_index": 0, "candidates": [single_part_toc]})
+    assert autobiography_service.get_ordered_parts(autobiography) == []
+
+
+def test_get_ordered_parts_returns_sorted_parts() -> None:
+    toc = _make_two_part_toc()
+    toc["parts"] = list(reversed(toc["parts"]))  # 저장 순서가 뒤바뀌어도 정렬돼 나와야 한다.
+    autobiography = _make_autobiography(toc_data={"selected_candidate_index": 0, "candidates": [toc]})
+    parts = autobiography_service.get_ordered_parts(autobiography)
+    assert [p["part_index"] for p in parts] == [1, 2]
+
+
+def test_customized_toc_prompt_forces_single_part_for_episodic_structure() -> None:
+    messages = prompts.build_customized_toc_prompt(
+        event_summaries_with_scores="사건 요약", structure_key="episodic"
+    )
+    system_content = messages[0]["content"]
+    assert "정확히 1개의 Part" in system_content
+
+
+def test_customized_toc_prompt_injects_part_shaping_hint_for_non_episodic_structure() -> None:
+    messages = prompts.build_customized_toc_prompt(
+        event_summaries_with_scores="사건 요약", structure_key="chronological"
+    )
+    system_content = messages[0]["content"]
+    assert prompts._PART_SHAPING_HINTS["chronological"] in system_content
+
+
+def test_part_marker_pattern_strips_marker_lines() -> None:
+    text = "머리말.\n\n=== PART 2: 도약의 시절 ===\n\n본문 이어짐."
+    cleaned = autobiography_service._PART_MARKER_PATTERN.sub("", text)
+    assert "=== PART" not in cleaned
+    assert "머리말." in cleaned
+    assert "본문 이어짐." in cleaned
+
+
+@pytest.mark.asyncio
+async def test_select_toc_candidate_generates_and_persists_part_synopses() -> None:
+    from app.gateways.factory import _build_mock_gateways
+    from app.schemas.user import UserCreate
+    from app.services import user_service
+
+    async def _fake_admin_create_user(*, email, password, user_metadata):
+        return uuid.uuid4()
+
+    call_count = {"n": 0}
+
+    async def _fake_chat_completion(messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _FakeCompletion("책 전체 시놉시스")
+        return _FakeCompletion(f"Part 시놉시스 {call_count['n']}")
+
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        assert schema_name == "book_title"
+        return {"title": "책 제목"}
+
+    with (
+        patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+    ):
+        gateways = _build_mock_gateways()
+        user = await user_service.create_user(
+            gateways, UserCreate(email="parts@example.com", name="테스터", password="test-password-123")
+        )
+        autobiography = await gateways.autobiographies.create(user.id)
+        toc = _make_two_part_toc()
+        await gateways.autobiographies.update(
+            autobiography.id,
+            toc_data={"generated_at": "now", "candidates": [toc], "selected_candidate_index": None},
+        )
+        await gateways.commit()
+
+        result = await autobiography_service.select_toc_candidate(gateways, autobiography.id, 0)
+
+    saved_parts = result.toc_data["candidates"][0]["parts"]
+    assert saved_parts[0]["part_synopsis"] == "Part 시놉시스 2"
+    assert saved_parts[1]["part_synopsis"] == "Part 시놉시스 3"
+
+
+@pytest.mark.asyncio
+async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_retry() -> None:
+    """재시도(팩트체크/근거검증 flag로 촉발)가 걸려도 챕터 시놉시스는 한 번만
+    생성돼야 한다 — Part 컨텍스트 주입이 기존 재시도/채택 로직을 건드리지 않는지
+    확인하는 회귀 테스트."""
+    from app.gateways.dto import ChapterDraftCreateData, EventCreateData, SessionCreateData
+    from app.gateways.factory import _build_mock_gateways
+    from app.models.enums import EventSourceType, SessionType
+    from app.schemas.user import UserCreate
+    from app.services import user_service
+
+    async def _fake_admin_create_user(*, email, password, user_metadata):
+        return uuid.uuid4()
+
+    _BAD = "지어낸 문장."
+    _GOOD = "나는 부산에서 태어났다."
+    captured_synopsis_messages: list[list[dict]] = []
+    call_count = {"n": 0}
+
+    async def _fake_chat_completion(messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            captured_synopsis_messages.append(messages)
+            return _FakeCompletion("챕터 시놉시스")
+        if call_count["n"] == 2:
+            return _FakeCompletion(_BAD)
+        return _FakeCompletion(_GOOD)
+
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        if schema_name == "groundedness_judge":
+            user_content = messages[1]["content"]
+            if _BAD in user_content:
+                return {"flags": [{"sentence": _BAD, "reason": "근거 없음"}]}
+            return {"flags": []}
+        if schema_name == "fact_reextraction":
+            return {"facts": []}
+        if schema_name == "ner_extraction":
+            return {"people": []}
+        raise AssertionError(f"unexpected schema {schema_name}")
+
+    with (
+        patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+    ):
+        gateways = _build_mock_gateways()
+        user = await user_service.create_user(
+            gateways, UserCreate(email="partchapter@example.com", name="테스터", password="test-password-123")
+        )
+        session = await gateways.sessions.create(
+            SessionCreateData(user_id=user.id, session_type=SessionType.FIXED_QUESTION)
+        )
+        await gateways.sessions.set_session_prose(session.id, "나는 부산에서 태어나 자랐다.")
+        await gateways.sessions.complete(session.id)
+        events = await gateways.events.bulk_create(
+            [
+                EventCreateData(
+                    user_id=user.id, source_type=EventSourceType.SESSION_CHAT,
+                    one_line_summary="부산 출생", prose_paragraph="나는 부산에서 태어나 자랐다.",
+                    verified=True, emotion_intensity=3,
+                ),
+            ]
+        )
+        await gateways.events.bulk_update_embeddings([(events[0].id, [1.0, 0.0, 0.0])])
+        await gateways.commit()
+
+        autobiography = await gateways.autobiographies.create(user.id)
+        toc = _make_two_part_toc()
+        await gateways.chapters.replace_all(
+            autobiography.id,
+            [
+                ChapterDraftCreateData(chapter_index=c["chapter_index"], title=c["title"])
+                for c in toc["chapters"]
+            ],
+        )
+        await gateways.autobiographies.update(
+            autobiography.id,
+            toc_data={"generated_at": "now", "candidates": [toc], "selected_candidate_index": 0},
+            book_synopsis="책 전체 시놉시스",
+        )
+        await gateways.commit()
+
+        chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
+        chapter1 = next(c for c in chapters if c.chapter_index == 1)
+
+        result = await autobiography_service.write_chapter(gateways, chapter1.id)
+
+    synopsis_user_content = captured_synopsis_messages[0][1]["content"]
+    assert "결핍의 시절" in synopsis_user_content
+    assert "이 챕터는 이 Part의 첫 챕터입니다." in synopsis_user_content
+
+    assert result.content == _GOOD
+    assert len(captured_synopsis_messages) == 1  # 재시도에도 시놉시스는 재생성되지 않음.
+    assert call_count["n"] == 3  # 시놉시스 1회 + 집필 2회(1차 + 재시도)
+
+
+@pytest.mark.asyncio
+async def test_finalize_manuscript_inserts_part_markers_and_strips_leftover_marker() -> None:
+    from app.gateways.dto import ChapterDraftCreateData, ChapterDraftWriteResult
+    from app.gateways.factory import _build_mock_gateways
+    from app.models.enums import DraftStatus
+    from app.schemas.user import UserCreate
+    from app.services import user_service
+
+    async def _fake_admin_create_user(*, email, password, user_metadata):
+        return uuid.uuid4()
+
+    captured: dict = {}
+
+    async def _fake_chat_completion(messages, **kwargs):
+        captured["full_manuscript"] = messages[1]["content"]
+        # 지시를 어기고 마커를 하나 남긴 응답을 흉내낸다 — 방어적 제거가 실제로 동작하는지 확인.
+        return _FakeCompletion("=== PART 1: 결핍의 시절 ===\n\n윤문된 원고 본문.")
+
+    with (
+        patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+    ):
+        gateways = _build_mock_gateways()
+        user = await user_service.create_user(
+            gateways, UserCreate(email="finalize-parts@example.com", name="테스터", password="test-password-123")
+        )
+        autobiography = await gateways.autobiographies.create(user.id)
+        toc = _make_two_part_toc()
+        await gateways.chapters.replace_all(
+            autobiography.id,
+            [
+                ChapterDraftCreateData(chapter_index=c["chapter_index"], title=c["title"])
+                for c in toc["chapters"]
+            ],
+        )
+        await gateways.autobiographies.update(
+            autobiography.id,
+            toc_data={"generated_at": "now", "candidates": [toc], "selected_candidate_index": 0},
+        )
+        chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+        for chapter in chapters:
+            await gateways.chapters.save_write_result(
+                chapter.id,
+                ChapterDraftWriteResult(
+                    source_event_ids=[],
+                    chapter_synopsis="시놉시스",
+                    content=f"{chapter.chapter_index}장 본문.",
+                    factcheck_report={"flags": []},
+                    groundedness_report={"flags": []},
+                    status=DraftStatus.REVIEWED,
+                ),
+            )
+        await gateways.commit()
+
+        result = await autobiography_service.finalize_manuscript(gateways, autobiography.id)
+
+    full_manuscript = captured["full_manuscript"]
+    assert full_manuscript.count("=== PART") == 2
+    assert full_manuscript.index("=== PART 1: 결핍의 시절 ===") < full_manuscript.index("[1장.")
+    assert full_manuscript.index("[2장.") < full_manuscript.index("=== PART 2: 도약의 시절 ===")
+    assert full_manuscript.index("=== PART 2: 도약의 시절 ===") < full_manuscript.index("[3장.")
+
+    assert "=== PART" not in result.final_content
+    assert "윤문된 원고 본문." in result.final_content
