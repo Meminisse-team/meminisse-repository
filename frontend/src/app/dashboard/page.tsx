@@ -104,15 +104,6 @@ export default function DashboardHomePage() {
         <p className="mt-4 text-sm text-black/40">눌러서 이어가기 →</p>
       </Link>
 
-      <Link
-        href="/dashboard/bookshelf"
-        className="w-full max-w-md rounded-3xl border border-black/10 p-6 text-left transition-colors hover:border-black/30"
-      >
-        <p className="text-sm text-black/40">나의 책장</p>
-        <p className="mt-2 text-lg leading-relaxed text-black">완성한 자서전들을 모아 볼 수 있어요</p>
-        <p className="mt-4 text-sm text-black/40">눌러서 확인하기 →</p>
-      </Link>
-
       <ChatOverlay
         open={chatOpen}
         onClose={handleChatClose}
