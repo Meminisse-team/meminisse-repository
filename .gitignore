@@ -9,9 +9,16 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 *.egg-info/
 dist/
 build/
+
+# 테스트 커버리지 산출물 (pytest-cov/coverage.py 로컬 실행 시)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 
 # 가상환경
 .venv/
@@ -22,9 +29,14 @@ env/
 .vscode/
 .idea/
 
+# Claude Code 개인 로컬 설정 — 팀 공유 설정(.claude/settings.json)과 달리 이 파일은
+# 머신마다 다르다(글로벌 git ignore에 없는 팀원이 실수로 커밋하지 않도록 여기서도 제외).
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Alembic 자동생성 임시파일
 alembic/versions/*.pyc
@@ -40,5 +52,9 @@ backend/celerybeat-schedule*
 # 파일 로깅(app/core/logging_config.py) 산출물 — 관리자 대시보드 로그 열람용이며
 # 커밋 대상이 아니다.
 backend/logs/
+
+# 그 밖의 로그 파일 전반(backend/pytest-run.log처럼 로컬 실행이 남기는 기록물).
+# 추적 중인 .log 파일은 없으므로 전역 패턴으로 막아도 안전하다.
+*.log
 
 # frontend/.gitignore가 node_modules, .next 등 Next.js 산출물을 별도로 관리한다.
