@@ -3,10 +3,10 @@
 
 app/clients/nli.py는 Solar/Embeddings와 달리 "외부 API"가 아니라 이 서버 프로세스
 안에서 도는 실제 모델이므로(기획안 6절: "NLI는 로컬 추론"), 여기서는 모킹하지 않고
-진짜 모델로 검증한다 — 왜곡 탐지·근거 검증이 실제로 한국어 문장에서 동작하는지가
-이 기능의 핵심이기 때문이다(app/services/event_extraction_service.py의
-_passes_distortion_check, app/services/autobiography_service.py의
-_run_groundedness_check가 이 모듈에 의존한다).
+진짜 모델로 검증한다 — 왜곡 탐지가 실제로 한국어 문장에서 동작하는지가 이 기능의
+핵심이기 때문이다(app/services/event_extraction_service.py의 _passes_distortion_check가
+이 모듈에 의존한다. 챕터 근거검증은 예전에 이 모듈을 썼으나 Solar LLM 판정 +
+groundedness-check API 이중 게이트로 교체되어 더는 의존하지 않는다, 2026-07-17).
 
 첫 실행 시 모델 가중치(수백MB)를 내려받으므로 캐시가 없는 환경에서는 느릴 수 있다 —
 tests/test_autobiography_phase34_pipeline.py처럼 파이프라인 배선만 검증하는 테스트는

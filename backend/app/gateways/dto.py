@@ -310,6 +310,10 @@ class ChapterDraftRecord:
 class ChapterDraftCreateData:
     chapter_index: int
     title: str | None = None
+    # select_toc_candidate가 목차 확정 시점에 미리 생성하는 챕터 시놉시스.
+    # write_chapter가 이 값을 읽어 집필하고, 다음 챕터의 "직전 챕터 요약"으로도
+    # 쓰인다(직전 챕터 완성 본문 의존 제거 → 전 챕터 병렬 집필 가능).
+    synopsis: str | None = None
 
 
 @dataclass

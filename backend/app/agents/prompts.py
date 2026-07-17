@@ -1168,6 +1168,15 @@ CHAPTER_WRITING_SYSTEM_PROMPT = """\
 집필 방식입니다. 분량은 새 사건을 추가해서가 아니라, 주어진 사건 하나하나를
 더 깊이 있게 그려서 채우세요.
 
+근거 태그: [RAG 검색된 사건 문단]의 각 사건에는 [E1], [E2] 같은 번호가
+붙어 있습니다. 사실 서술(무슨 일이 있었는지)을 담은 문단은 반드시 그 문단이
+근거로 삼은 사건의 태그를 문단 맨 끝에 표기하세요(여러 개면 [E2][E5]처럼
+나란히). 순수한 감상·전환 문단(새로운 사실 주장이 없는 문단)에는 태그를
+붙이지 않아도 됩니다. 이 태그는 조판 전에 자동으로 제거되므로 책에는 절대
+실리지 않습니다 — 태그 때문에 문장을 어색하게 만들지 마세요. 어떤 사건
+태그도 붙일 수 없는 사실 서술이 나온다면, 그 문단은 근거 없는 창작이라는
+뜻이므로 쓰지 말아야 합니다.
+
 집필 기술 — 시중에 파는 자서전처럼 읽히도록 다음을 지키세요:
 - "그리고 -했다. 그리고 -했다" 식의 사건 나열이나 요약형 진술로 열지 말고,
   구체적인 장면·감각(공간, 소리, 냄새, 몸짓)으로 문을 여세요.
@@ -1190,6 +1199,14 @@ CHAPTER_WRITING_SYSTEM_PROMPT = """\
 """
 
 
+def _numbered_events_block(retrieved_event_paragraphs: list[str]) -> str:
+    """집필 프롬프트의 근거 태그([E1]...) 규약과 짝을 이루는 사건 번호 매기기.
+    서비스 레이어(_strip_citation_tags)가 같은 번호 체계로 태그를 회수·검증한다."""
+    return "\n\n".join(
+        f"[E{i}] {paragraph}" for i, paragraph in enumerate(retrieved_event_paragraphs, start=1)
+    )
+
+
 def build_chapter_writing_prompt(
     *,
     style_bible: str,
@@ -1198,7 +1215,7 @@ def build_chapter_writing_prompt(
     previous_chapter_summary: str | None,
     retrieved_event_paragraphs: list[str],
 ) -> list[dict[str, str]]:
-    events_block = "\n\n".join(retrieved_event_paragraphs)
+    events_block = _numbered_events_block(retrieved_event_paragraphs)
     prev_block = previous_chapter_summary or "(첫 챕터)"
     user_prompt = (
         f"[스타일 바이블]\n{style_bible}\n\n"
@@ -1344,9 +1361,14 @@ GROUNDEDNESS_JUDGE_SYSTEM_PROMPT = """\
 
 판정할 때 "이 구체적 디테일이 근거 사건과 글자 그대로 일치하는가"가
 아니라 "이 문장이 근거 사건에 없던 새로운 사건/인물/결과를 주장하는가"를
-물으세요. 애매하면(정교화인지 새 사실인지 판단이 갈리면) 플래그하지
-마세요 — 이 검증의 목적은 명백한 날조를 막는 것이지 문학적 윤색을
-막는 것이 아닙니다.
+물으세요. 애매할 때의 기준은 문장의 유형에 따라 다릅니다(비대칭 기준):
+- 분위기·감정·감각 채색인지 아닌지 애매하면 → 통과시키세요(문학적 윤색을
+  막는 것이 목적이 아닙니다).
+- 그러나 새 인물의 등장, 새 사건·행동의 발생, 날짜·장소·결과의 주장이
+  근거에 있는지 없는지 애매하면 → 플래그하세요. 이 세 유형은 틀렸을 때
+  독자를 실제로 속이는 사실 주장이므로, 확신이 없으면 플래그하는 쪽이
+  안전합니다(플래그된 문장은 삭제가 아니라 근거 기반 수정 절차로 넘어가므로,
+  오탐의 비용은 낮고 미탐의 비용은 높습니다).
 """
 
 GROUNDEDNESS_JUDGE_SCHEMA: dict[str, Any] = {
@@ -1377,11 +1399,73 @@ GROUNDEDNESS_JUDGE_SCHEMA: dict[str, Any] = {
 
 
 def build_groundedness_judge_prompt(
-    *, chapter_content: str, source_events_text: str
+    *,
+    chapter_content: str,
+    source_events_text: str,
+    attention_paragraphs: list[str] | None = None,
 ) -> list[dict[str, str]]:
     user_prompt = f"[챕터 본문]\n{chapter_content}\n\n[근거 사건 목록]\n{source_events_text}"
+    if attention_paragraphs:
+        # 집필 단계의 근거 태그([En]) 규약을 지키지 않은 문단 — 순수 전환·감상
+        # 문단일 수도 있지만(그 경우 태그 생략이 허용됨) 근거 없는 창작일 확률이
+        # 상대적으로 높으므로, 판정자가 특히 집중해서 보도록 지목한다.
+        flagged_block = "\n\n".join(attention_paragraphs)
+        user_prompt += (
+            "\n\n[집필 시 근거 태그 없이 작성된 문단 — 특히 주의해서 검토]\n"
+            f"{flagged_block}"
+        )
     return [
         {"role": "system", "content": GROUNDEDNESS_JUDGE_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+# 외과적 수리(Surgical Repair) — 팩트체크/근거검증에 걸린 문장만 고치는 재작성.
+# 예전에는 플래그가 뜨면 플래그 내용을 전달하지도 않은 채 같은 프롬프트로 챕터
+# 전체를 다시 쓰고(블라인드 재집필) 플래그 수가 적은 쪽을 채택했는데, 이는 (1)
+# 무엇이 문제였는지 모델이 모른 채 다시 쓰는 동전 던지기라 수렴 보장이 없고,
+# (2) 멀쩡했던 부분에서 새 환각이 생길 수 있으며, (3) 전체 재집필+재검증 비용이
+# 통째로 든다. 플래그된 문장·사유·근거를 명시해 그 문장만 고치게 하면 세 문제가
+# 모두 사라진다(2026-07-17 도입).
+CHAPTER_REPAIR_SYSTEM_PROMPT = """\
+아래 [챕터 본문]에서 [수정 대상] 목록에 지목된 문장들만 고치세요. 각 항목에는
+문제가 된 문장과 그 사유(근거 없는 인물/사건/사실)가 적혀 있습니다.
+
+수정 방법 — 지목된 문장마다 둘 중 하나를 택하세요:
+1. [근거 사건 목록]에 실제로 있는 내용으로 바꿔 쓸 수 있으면, 근거에 맞게
+   고쳐 쓰세요(문체와 흐름은 주변 문장과 자연스럽게 이어지도록).
+2. 근거로 대체할 내용이 없으면 그 문장을 삭제하고, 필요하면 앞뒤 문장을
+   최소한으로 다듬어 흐름이 끊기지 않게 하세요.
+
+반드시 지킬 것:
+- 지목되지 않은 문장은 한 글자도 바꾸지 마세요 — 이 작업은 전면 개고가
+  아니라 국소 수술입니다.
+- 수정하면서 근거 사건 목록에 없는 새로운 사실·인물·사건을 추가하지 마세요.
+- 완성된 챕터 본문 전체만 출력하세요. 안내 문구·수정 내역 설명·마크다운
+  문법·[E1] 같은 태그를 출력에 포함하지 마세요 — 이 출력이 그대로 저장되어
+  PDF에 인쇄됩니다.
+"""
+
+
+def build_chapter_repair_prompt(
+    *,
+    chapter_content: str,
+    flagged_items: list[dict[str, str]],
+    source_events_text: str,
+) -> list[dict[str, str]]:
+    """flagged_items: [{"sentence": 문제 문장, "reason": 사유}, ...] —
+    팩트체크 플래그(raw_text 기반)와 근거검증 플래그(sentence 기반)를 호출부가
+    같은 모양으로 정규화해 전달한다."""
+    flags_block = "\n".join(
+        f"- 문장: {item['sentence']}\n  사유: {item['reason']}" for item in flagged_items
+    )
+    user_prompt = (
+        f"[챕터 본문]\n{chapter_content}\n\n"
+        f"[수정 대상]\n{flags_block}\n\n"
+        f"[근거 사건 목록]\n{source_events_text}"
+    )
+    return [
+        {"role": "system", "content": CHAPTER_REPAIR_SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
 
@@ -1909,7 +1993,7 @@ def build_customized_chapter_writing_prompt(
         f"[컨셉 예시 — 관점과 초점만 참고하고, 예시의 구체적 사실·소재는 "
         f"절대 가져오지 말 것] {concept['example']}"
     )
-    events_block = "\n\n".join(retrieved_event_paragraphs)
+    events_block = _numbered_events_block(retrieved_event_paragraphs)
     prev_block = previous_chapter_summary or "(첫 챕터)"
     user_prompt = (
         f"[스타일 바이블]\n{style_bible}\n\n"

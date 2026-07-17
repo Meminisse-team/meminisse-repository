@@ -781,6 +781,7 @@ class SqlAlchemyChapterDraftGateway(ChapterDraftGateway):
                 autobiography_id=autobiography_id,
                 chapter_index=item.chapter_index,
                 title=item.title,
+                chapter_synopsis=item.synopsis,
             )
             for item in chapters
         ]

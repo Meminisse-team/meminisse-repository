@@ -1,17 +1,16 @@
 """
-Phase 4 챕터 집필의 팩트체크/근거검증 자동 재시도(autobiography_service.write_chapter)
-회귀 테스트.
+Phase 4 챕터 집필의 외과적 수리 루프(autobiography_service.write_chapter) 회귀 테스트.
 
-배경: factcheck_report/groundedness_report는 계산만 되고 검토 화면 어디에도 노출되지
-않아, 사실상 아무도 안 보는 죽은 데이터였다(2026-07-16). 이를 실제로 쓰는 첫 단계로,
-플래그가 하나라도 있으면 같은 자료로 한 번 더 집필을 시도해 flag가 더 적은 쪽을
-채택한다 — 재시도가 오히려 나빠질 수도 있으므로 "무조건 재시도 결과 사용"이 아니라
-"더 나은 쪽 채택"이 계약이다.
+배경: 예전에는 팩트체크/근거검증 플래그가 뜨면 플래그 내용을 전달하지 않은 채 같은
+프롬프트로 챕터 전체를 다시 쓰는 블라인드 재집필 1회를 했다(2026-07-16 도입) —
+무엇이 문제였는지 모델이 모른 채 다시 쓰는 동전 던지기라 수렴 보장이 없고, 멀쩡한
+부분에 새 환각이 생길 수 있었다. 지금은 플래그된 문장·사유·근거를 명시한 수리
+프롬프트(CHAPTER_REPAIR_SYSTEM_PROMPT)로 그 문장만 고치고, 결과가 실제로 더 나을
+때만(플래그 감소) 채택한다(2026-07-17 교체).
 
-근거검증(groundedness)은 이제 로컬 NLI가 아니라 Solar LLM 판정
-(schema_name="groundedness_judge")이므로, 이 테스트의 fake structured_completion도
-그 스키마 호출을 가로채 챕터 본문(_BAD_CONTENT/_GOOD_CONTENT)에 따라 플래그 유무를
-결정한다.
+챕터 시놉시스는 이제 select_toc_candidate가 목차 확정 시점에 미리 생성·저장하므로
+write_chapter 안에서는 시놉시스 생성 호출이 없다 — 각 테스트의 chat_completion 호출
+순서는 [1차 집필 → (플래그 시) 수리]다.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.agents import prompts
 from app.gateways.dto import EventCreateData, SessionCreateData
 from app.gateways.factory import Gateways, _build_mock_gateways
 from app.models.enums import EventSourceType, SessionType
@@ -30,6 +30,13 @@ from app.services import autobiography_service, user_service
 
 async def _fake_admin_create_user(*, email: str, password: str, user_metadata: dict) -> uuid.UUID:
     return uuid.uuid4()
+
+
+async def _fake_groundedness_api_check(*, context: str, answer: str) -> str:
+    # 2차 게이트가 판정자 플래그를 철회하지 않도록 고정 — 이 테스트의 관심사는
+    # 수리 루프 배선이지 게이트 판정이 아니다(게이트 자체는
+    # test_chapter_groundedness_check.py가 검증).
+    return "notGrounded"
 
 
 class _FakeMessage:
@@ -79,7 +86,7 @@ async def _fake_structured_completion(messages, *, schema_name, json_schema, **k
 
 async def _seed_user_with_one_event(gateways: Gateways):
     user = await user_service.create_user(
-        gateways, UserCreate(email="retry@example.com", name="테스터", password="test-password-123")
+        gateways, UserCreate(email="repair@example.com", name="테스터", password="test-password-123")
     )
     session = await gateways.sessions.create(
         SessionCreateData(user_id=user.id, session_type=SessionType.FIXED_QUESTION)
@@ -107,90 +114,129 @@ async def _prepare_chapter(gateways: Gateways):
     autobiography = await autobiography_service.generate_toc_candidates(gateways, autobiography.id)
     autobiography = await autobiography_service.select_toc_candidate(gateways, autobiography.id, 0)
     chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
+    # select_toc_candidate가 챕터 시놉시스를 미리 생성해 저장했어야 한다 —
+    # write_chapter가 이 값을 읽어 시놉시스 생성 호출을 건너뛰는 전제.
+    assert chapters[0].chapter_synopsis
     return chapters[0].id
 
 
 @pytest.mark.asyncio
-async def test_write_chapter_retries_once_and_keeps_better_result_when_flagged() -> None:
-    """1차 집필 결과가 근거검증에 걸리면 재시도하고, 재시도 결과가 더 적게
-    flag되면 그걸 채택해야 한다."""
+async def test_write_chapter_repairs_flagged_content_with_repair_prompt() -> None:
+    """1차 집필 결과가 근거검증에 걸리면 수리 프롬프트(플래그된 문장·사유·근거
+    명시)로 고치고, 수리 결과의 플래그가 더 적으면 그걸 채택해야 한다."""
     call_count = {"n": 0}
+    captured_messages: list[list[dict]] = []
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
         call_count["n"] += 1
+        captured_messages.append(messages)
         if call_count["n"] == 1:
-            return _FakeCompletion("챕터 시놉시스")  # _generate_chapter_synopsis
-        if call_count["n"] == 2:
             return _FakeCompletion(_BAD_CONTENT)  # 1차 집필 — 근거 없음
-        return _FakeCompletion(_GOOD_CONTENT)  # 재시도 — 근거 있음
+        return _FakeCompletion(_GOOD_CONTENT)  # 수리 — 근거 있는 문장으로 교정
 
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_api_check),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
         chapter_draft_id = await _prepare_chapter(gateways)
-        call_count["n"] = 0  # _prepare_chapter(consolidate/toc) 안에서도 chat_completion이 불려서 여기서부터 다시 센다
+        call_count["n"] = 0  # _prepare_chapter(consolidate/toc/시놉시스)에서도 chat_completion이 불려서 여기서부터 다시 센다
+        captured_messages.clear()
 
         chapter = await autobiography_service.write_chapter(gateways, chapter_draft_id)
 
         assert chapter.content == _GOOD_CONTENT
         assert chapter.groundedness_report["flags"] == []
-        assert call_count["n"] == 3  # 시놉시스 1회 + 집필 2회(1차 + 재시도)
+        assert call_count["n"] == 2  # 집필 1회 + 수리 1회
+
+        # 2번째 호출은 블라인드 재집필이 아니라 수리 프롬프트여야 하고, 플래그된
+        # 문장과 사유가 실제로 전달되어야 한다.
+        repair_messages = captured_messages[1]
+        assert repair_messages[0]["content"] == prompts.CHAPTER_REPAIR_SYSTEM_PROMPT
+        assert _BAD_CONTENT in repair_messages[1]["content"]
+        assert "근거 사건에 없는 창작 문장" in repair_messages[1]["content"]
 
 
 @pytest.mark.asyncio
-async def test_write_chapter_does_not_retry_when_no_flags() -> None:
-    """처음부터 flag가 없으면 재시도(추가 Solar 호출) 자체를 하지 않아야 한다 —
+async def test_write_chapter_does_not_repair_when_no_flags() -> None:
+    """처음부터 flag가 없으면 수리(추가 Solar 호출) 자체를 하지 않아야 한다 —
     불필요한 비용·지연을 만들지 않기 위함."""
     call_count = {"n": 0}
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
         call_count["n"] += 1
-        return _FakeCompletion("챕터 시놉시스" if call_count["n"] == 1 else _GOOD_CONTENT)
+        return _FakeCompletion(_GOOD_CONTENT)
 
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_api_check),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
         chapter_draft_id = await _prepare_chapter(gateways)
-        call_count["n"] = 0  # _prepare_chapter(consolidate/toc) 안에서도 chat_completion이 불려서 여기서부터 다시 센다
+        call_count["n"] = 0  # _prepare_chapter(consolidate/toc/시놉시스)에서도 chat_completion이 불려서 여기서부터 다시 센다
 
         chapter = await autobiography_service.write_chapter(gateways, chapter_draft_id)
 
         assert chapter.content == _GOOD_CONTENT
-        assert call_count["n"] == 2  # 시놉시스 1회 + 집필 1회. 재시도 없음.
+        assert call_count["n"] == 1  # 집필 1회뿐. 수리 없음.
 
 
 @pytest.mark.asyncio
-async def test_write_chapter_keeps_original_when_retry_is_not_better() -> None:
-    """재시도해도 flag 개수가 줄지 않으면(오히려 같거나 늘면) 원래 결과를 그대로
-    유지해야 한다 — "무조건 재시도 결과로 교체"가 아니라 "더 나을 때만 교체"."""
+async def test_write_chapter_keeps_original_when_repair_is_not_better() -> None:
+    """수리해도 flag 개수가 줄지 않으면(같거나 늘면) 원래 결과를 유지하고 루프를
+    중단해야 한다 — "무조건 수리 결과로 교체"가 아니라 "더 나을 때만 교체". 잔여
+    플래그는 리포트에 남아 검토 화면에서 확인할 수 있어야 한다."""
     call_count = {"n": 0}
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
         call_count["n"] += 1
-        if call_count["n"] == 1:
-            return _FakeCompletion("챕터 시놉시스")
-        return _FakeCompletion(_BAD_CONTENT)  # 1차, 재시도 모두 근거 없는 문장
+        return _FakeCompletion(_BAD_CONTENT)  # 1차 집필도, 수리 결과도 근거 없는 문장
 
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_api_check),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
         chapter_draft_id = await _prepare_chapter(gateways)
-        call_count["n"] = 0  # _prepare_chapter(consolidate/toc) 안에서도 chat_completion이 불려서 여기서부터 다시 센다
+        call_count["n"] = 0  # _prepare_chapter(consolidate/toc/시놉시스)에서도 chat_completion이 불려서 여기서부터 다시 센다
 
         chapter = await autobiography_service.write_chapter(gateways, chapter_draft_id)
 
         assert chapter.content == _BAD_CONTENT
         assert len(chapter.groundedness_report["flags"]) == 1
-        assert call_count["n"] == 3  # 재시도는 시도했지만(2회 집필) 결과는 원본 유지
+        assert call_count["n"] == 2  # 수리는 시도했지만(집필 1 + 수리 1) 개선이 없어 중단·원본 유지
+
+
+@pytest.mark.asyncio
+async def test_write_chapter_strips_citation_tags_and_saves_clean_content() -> None:
+    """집필 규약상 본문에 섞여 나오는 근거 태그([E1]...)는 저장 전에 반드시
+    제거되어야 한다 — PDF 조판이 content를 그대로 인쇄하기 때문."""
+    tagged_content = "나는 부산에서 태어나 자랐다. [E1]\n\n그 시절이 그립다."
+
+    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
+        return _FakeCompletion(tagged_content)
+
+    with (
+        patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_api_check),
+        patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+    ):
+        gateways = _build_mock_gateways()
+        chapter_draft_id = await _prepare_chapter(gateways)
+
+        chapter = await autobiography_service.write_chapter(gateways, chapter_draft_id)
+
+        assert "[E1]" not in chapter.content
+        assert "나는 부산에서 태어나 자랐다." in chapter.content
+        assert "그 시절이 그립다." in chapter.content

@@ -136,13 +136,80 @@ class _FakeCompletion:
         self.choices = [_FakeChoice(content)]
 
 
-@pytest.mark.asyncio
-async def test_previous_chapter_summary_uses_recap_prompt_not_raw_tail_slice() -> None:
+async def _seed_two_chapters(gateways, *, first_chapter_synopsis: str):
+    """1장(집필 완료)·2장(미집필) 상태를 만든다 — _previous_chapter_summary 테스트 공용."""
     from app.gateways.dto import ChapterDraftCreateData, SessionCreateData
-    from app.gateways.factory import _build_mock_gateways
-    from app.models.enums import EventSourceType, SessionType
+    from app.gateways.dto import ChapterDraftWriteResult
+    from app.models.enums import DraftStatus, SessionType
     from app.schemas.user import UserCreate
     from app.services import user_service
+
+    user = await user_service.create_user(
+        gateways, UserCreate(email="recap@example.com", name="테스터", password="test-password-123")
+    )
+    await gateways.sessions.create(
+        SessionCreateData(user_id=user.id, session_type=SessionType.FIXED_QUESTION)
+    )
+    await gateways.commit()
+    autobiography = await gateways.autobiographies.create(user.id)
+    chapters = await gateways.chapters.replace_all(
+        autobiography.id,
+        [
+            ChapterDraftCreateData(chapter_index=1, title="1장"),
+            ChapterDraftCreateData(chapter_index=2, title="2장"),
+        ],
+    )
+    await gateways.chapters.save_write_result(
+        chapters[0].id,
+        ChapterDraftWriteResult(
+            source_event_ids=[],
+            chapter_synopsis=first_chapter_synopsis,
+            content="가" * 2000,
+            factcheck_report={"flags": []},
+            groundedness_report={"flags": []},
+            status=DraftStatus.DRAFT,
+        ),
+    )
+    await gateways.commit()
+    return autobiography
+
+
+@pytest.mark.asyncio
+async def test_previous_chapter_summary_prefers_stored_synopsis_without_llm_call() -> None:
+    """직전 챕터에 시놉시스가 저장돼 있으면 LLM 요약 호출 없이 그걸 그대로 써야
+    한다 — 직전 챕터 '완성 본문' 의존을 없애 전 챕터 병렬 집필을 가능하게 하는
+    계약(2026-07-17). 시놉시스는 select_toc_candidate가 목차 확정 시점에 미리
+    생성해 둔다."""
+    from app.gateways.factory import _build_mock_gateways
+
+    synopsis = "1장은 유년기의 가난과 희망을 다룬다."
+    call_count = {"n": 0}
+
+    async def _fake_chat_completion(messages, **kwargs):
+        call_count["n"] += 1
+        return _FakeCompletion("불려서는 안 되는 응답")
+
+    async def _fake_admin_create_user(*, email, password, user_metadata):
+        return uuid.uuid4()
+
+    with (
+        patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+    ):
+        gateways = _build_mock_gateways()
+        autobiography = await _seed_two_chapters(gateways, first_chapter_synopsis=synopsis)
+
+        summary = await autobiography_service._previous_chapter_summary(gateways, autobiography.id, 2)
+
+    assert summary == synopsis
+    assert call_count["n"] == 0  # 시놉시스가 있으면 LLM 호출이 없어야 한다
+
+
+@pytest.mark.asyncio
+async def test_previous_chapter_summary_falls_back_to_recap_prompt_when_no_synopsis() -> None:
+    """시놉시스가 없는 구버전 초안은 기존 방식(본문을 CHAPTER_RECAP_SYSTEM_PROMPT로
+    요약)으로 폴백해야 한다 — 단순 절단(content[-1000:])이 아니라."""
+    from app.gateways.factory import _build_mock_gateways
 
     long_content = "가" * 2000  # 마지막 1000자 슬라이스와 확실히 구분되는 내용
     recap_text = "1장에서는 유년기의 가난을 다뤘고, 희망을 품은 채로 끝났다."
@@ -161,33 +228,7 @@ async def test_previous_chapter_summary_uses_recap_prompt_not_raw_tail_slice() -
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
-        user = await user_service.create_user(
-            gateways, UserCreate(email="recap@example.com", name="테스터", password="test-password-123")
-        )
-        session = await gateways.sessions.create(
-            SessionCreateData(user_id=user.id, session_type=SessionType.FIXED_QUESTION)
-        )
-        await gateways.commit()
-        autobiography = await gateways.autobiographies.create(user.id)
-        chapters = await gateways.chapters.replace_all(
-            autobiography.id,
-            [
-                ChapterDraftCreateData(chapter_index=1, title="1장"),
-                ChapterDraftCreateData(chapter_index=2, title="2장"),
-            ],
-        )
-        await gateways.chapters.save_write_result(
-            chapters[0].id,
-            __import__("app.gateways.dto", fromlist=["ChapterDraftWriteResult"]).ChapterDraftWriteResult(
-                source_event_ids=[],
-                chapter_synopsis="시놉시스",
-                content=long_content,
-                factcheck_report={"flags": []},
-                groundedness_report={"flags": []},
-                status=__import__("app.models.enums", fromlist=["DraftStatus"]).DraftStatus.DRAFT,
-            ),
-        )
-        await gateways.commit()
+        autobiography = await _seed_two_chapters(gateways, first_chapter_synopsis="")
 
         summary = await autobiography_service._previous_chapter_summary(gateways, autobiography.id, 2)
 
@@ -523,6 +564,9 @@ async def test_select_toc_candidate_generates_and_persists_part_synopses() -> No
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        # select_toc_candidate가 이제 챕터 시놉시스 사전 생성을 위해 챕터별 이벤트
+        # 검색(임베딩 호출)도 수행한다(2026-07-17).
+        patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
         gateways = _build_mock_gateways()
@@ -545,10 +589,11 @@ async def test_select_toc_candidate_generates_and_persists_part_synopses() -> No
 
 
 @pytest.mark.asyncio
-async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_retry() -> None:
-    """재시도(팩트체크/근거검증 flag로 촉발)가 걸려도 챕터 시놉시스는 한 번만
-    생성돼야 한다 — Part 컨텍스트 주입이 기존 재시도/채택 로직을 건드리지 않는지
-    확인하는 회귀 테스트."""
+async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_repair() -> None:
+    """수리(팩트체크/근거검증 flag로 촉발)가 걸려도 챕터 시놉시스는 한 번만
+    생성돼야 한다 — Part 컨텍스트 주입이 수리/채택 로직을 건드리지 않는지
+    확인하는 회귀 테스트. 이 테스트는 시놉시스 없는 초안(구버전 경로)을 직접
+    만들므로 write_chapter의 즉석 시놉시스 생성 폴백도 함께 검증한다."""
     from app.gateways.dto import ChapterDraftCreateData, EventCreateData, SessionCreateData
     from app.gateways.factory import _build_mock_gateways
     from app.models.enums import EventSourceType, SessionType
@@ -584,9 +629,13 @@ async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_retry()
             return {"people": []}
         raise AssertionError(f"unexpected schema {schema_name}")
 
+    async def _fake_groundedness_api_check(*, context: str, answer: str) -> str:
+        return "notGrounded"  # 2차 게이트가 판정자 플래그를 철회하지 않도록 고정
+
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_api_check),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
     ):
@@ -637,8 +686,8 @@ async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_retry()
     assert "이 챕터는 이 Part의 첫 챕터입니다." in synopsis_user_content
 
     assert result.content == _GOOD
-    assert len(captured_synopsis_messages) == 1  # 재시도에도 시놉시스는 재생성되지 않음.
-    assert call_count["n"] == 3  # 시놉시스 1회 + 집필 2회(1차 + 재시도)
+    assert len(captured_synopsis_messages) == 1  # 수리 중에도 시놉시스는 재생성되지 않음.
+    assert call_count["n"] == 3  # 시놉시스 1회 + 집필 1회 + 수리 1회
 
 
 @pytest.mark.asyncio

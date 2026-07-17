@@ -695,7 +695,7 @@ class MockChapterDraftGateway(ChapterDraftGateway):
                 autobiography_id=autobiography_id,
                 chapter_index=item.chapter_index,
                 title=item.title,
-                chapter_synopsis=None,
+                chapter_synopsis=item.synopsis,
                 content=None,
                 source_event_ids=[],
                 factcheck_report=None,
