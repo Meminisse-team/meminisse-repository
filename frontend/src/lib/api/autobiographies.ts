@@ -1,5 +1,5 @@
 import { apiClient } from "@/lib/api/client";
-import type { Autobiography, ChapterDraft } from "@/types/api";
+import type { Autobiography, ChapterDraft, PhotoPlacement } from "@/types/api";
 
 export const autobiographiesApi = {
   /** get-or-create — 처음 호출하는 순간 in_progress 상태로 자동 생성된다. */
@@ -27,6 +27,12 @@ export const autobiographiesApi = {
   /** 202 — 마찬가지로 비동기. 완료되면 get()의 final_content가 채워진다. */
   finalize: (autobiographyId: string) =>
     apiClient.post<{ detail: string }>(`/api/v1/autobiographies/${autobiographyId}/finalize`),
+  /** PDF 조판 직전, 수록할 사진과 배치(고정 슬롯)를 통째로 교체 저장한다(PUT
+   * 시맨틱 — 보낸 배열이 전체 상태, 빈 배열 = 수록 사진 없음으로 확정). */
+  updatePhotoPlacements: (autobiographyId: string, placements: PhotoPlacement[]) =>
+    apiClient.put<Autobiography>(`/api/v1/autobiographies/${autobiographyId}/photo-placements`, {
+      placements,
+    }),
   /** 202 — 국판(A5) PDF 조판을 큐잉한다. final_content가 없으면 워커에서 실패한다.
    * 완료되면 get()의 pdf_url이 채워진다. */
   generatePdf: (autobiographyId: string) =>

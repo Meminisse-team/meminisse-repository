@@ -53,8 +53,13 @@ export function ChatOverlay({
    * 이어보는 경우엔 그 세션의 chat_logs 첫머리에 이미 질문이 들어있으므로 null로
    * 비워 중복 표시를 막는다. */
   const [openingLine, setOpeningLine] = useState<string | null>(null);
+  /** 미리보기 상태에서 실제로 배정할 다음 항목이 있는지(next-preview의 session_type이
+   * null이 아닌지). '이 질문 넘어가기' 버튼 노출 판정에 쓴다 — 큐를 모두 마쳐
+   * "준비된 질문에는 모두 답변해 주셨어요"가 보일 땐 건너뛸 대상이 없다. */
+  const [hasNextItem, setHasNextItem] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [skipping, setSkipping] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 방금 세션 하나가 끝났고, 아직 "계속하기/오늘은 여기까지"를 선택하지 않은 상태.
@@ -85,6 +90,7 @@ export function ChatOverlay({
     setActiveSessionType(null);
     setLinkedMediaAssetId(null);
     setLinkedPhoto(null);
+    setHasNextItem(false);
     if (startMode === "episode") {
       // 에피소드는 자동 배정 큐와 무관하므로 next-preview를 조회할 필요가 없다 —
       // 세션도 아직 안 만드니(첫 발화 시점에 생성) 로컬 문구만 바로 보여준다.
@@ -97,6 +103,7 @@ export function ChatOverlay({
       .previewNext()
       .then((preview) => {
         setOpeningLine(preview.opening_message);
+        setHasNextItem(preview.session_type !== null);
         if (preview.session_type === "photo") setLinkedMediaAssetId(preview.linked_media_asset_id);
       })
       .catch(() => setOpeningLine(FALLBACK_OPENING_LINE))
@@ -237,6 +244,48 @@ export function ChatOverlay({
     loadFreshPreview();
   }
 
+  // 지금 화면의 질문에 아직 아무 답도 하지 않은 상태에서만 '이 질문 넘어가기'를
+  // 보여준다 — 답변을 시작한 뒤에 건너뛰면 이미 쓴 내용이 통째로 버려지므로
+  // (SKIPPED 세션은 산문 재조립 대상이 아님) 그 상태에선 버튼을 숨긴다.
+  // 에피소드는 배정된 질문 자체가 없어 건너뛸 대상이 없다.
+  const canSkip =
+    (activeSessionType ?? startMode) !== "episode" &&
+    !justCompleted &&
+    !loading &&
+    !messages.some((m) => m.role === "user") &&
+    (sessionId !== null || hasNextItem);
+
+  async function handleSkip() {
+    if (skipping || sending) return;
+    setSkipping(true);
+    setError(null);
+    try {
+      if (sessionId) {
+        // 세션이 이미 만들어진 뒤(답변 실패 후 재개 등 드문 경우) — 그 세션을
+        // SKIPPED로 종료하고 다음 미리보기를 새로 가져온다.
+        const skippedId = sessionId;
+        await interviewsApi.skip(skippedId);
+        setSessionId(null);
+        onSessionChanged?.(skippedId);
+        loadFreshPreview();
+      } else {
+        // 일반적인 경로: 아직 세션이 없는 미리보기 상태 — 서버가 그 항목을
+        // 건너뛰고 다음 미리보기를 한 번에 돌려준다.
+        const preview = await interviewsApi.skipNext();
+        setMessages([]);
+        setLinkedMediaAssetId(null);
+        setLinkedPhoto(null);
+        setOpeningLine(preview.opening_message);
+        setHasNextItem(preview.session_type !== null);
+        if (preview.session_type === "photo") setLinkedMediaAssetId(preview.linked_media_asset_id);
+      }
+    } catch {
+      setError("질문을 넘어가지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setSkipping(false);
+    }
+  }
+
   async function handleEnd() {
     if (sessionId) {
       try {
@@ -326,33 +375,47 @@ export function ChatOverlay({
           </button>
         </div>
       ) : (
-        <form onSubmit={handleSubmit} className="flex items-end gap-3 border-t border-black/10 px-6 py-4">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter로 전송, Shift+Enter로 줄바꿈 — 여러 줄 입력을 자연스럽게 쓸 수 있게.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void handleSubmit(e);
-              }
-            }}
-            rows={1}
-            placeholder="그때 상황을 편하게, 떠오르는 대로 자세히 들려주세요"
-            className="max-h-40 flex-1 resize-none overflow-y-auto rounded-2xl border border-black/15 px-5 py-3 text-base leading-relaxed outline-none placeholder:text-black/35 focus:border-black"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || sending}
-            className="relative shrink-0 whitespace-nowrap rounded-full bg-black px-5 py-3 text-base text-white disabled:opacity-40"
-          >
-            <span aria-hidden className="pointer-events-none absolute inset-0">
-              <RippleRings className="text-black/25" />
-            </span>
-            <span className="relative z-10">보내기</span>
-          </button>
-        </form>
+        <div className="border-t border-black/10">
+          {canSkip && (
+            <div className="flex justify-center px-6 pt-3">
+              <button
+                type="button"
+                onClick={() => void handleSkip()}
+                disabled={skipping || sending}
+                className="text-sm text-black/40 underline-offset-4 hover:text-black hover:underline disabled:opacity-50"
+              >
+                {skipping ? "다음 질문 가져오는 중..." : "이 질문 넘어가기"}
+              </button>
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="flex items-end gap-3 px-6 py-4">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter로 전송, Shift+Enter로 줄바꿈 — 여러 줄 입력을 자연스럽게 쓸 수 있게.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSubmit(e);
+                }
+              }}
+              rows={1}
+              placeholder="그때 상황을 편하게, 떠오르는 대로 자세히 들려주세요"
+              className="max-h-40 flex-1 resize-none overflow-y-auto rounded-2xl border border-black/15 px-5 py-3 text-base leading-relaxed outline-none placeholder:text-black/35 focus:border-black"
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || sending}
+              className="relative shrink-0 whitespace-nowrap rounded-full bg-black px-5 py-3 text-base text-white disabled:opacity-40"
+            >
+              <span aria-hidden className="pointer-events-none absolute inset-0">
+                <RippleRings className="text-black/25" />
+              </span>
+              <span className="relative z-10">보내기</span>
+            </button>
+          </form>
+        </div>
       )}
     </div>
   );

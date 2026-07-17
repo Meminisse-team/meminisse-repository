@@ -240,6 +240,17 @@ export interface TocData {
   selected_candidate_index: number | null;
 }
 
+/** 자서전 수록 사진 슬롯 — 기획안 5절의 고정 슬롯 템플릿 원칙에 따라 자유 배치가
+ * 아니라 두 가지 슬롯만 허용된다(backend/app/schemas/autobiography.py:PhotoPlacementItem). */
+export type PhotoPlacementSlot = "chapter_top" | "full_page_before";
+
+export interface PhotoPlacement {
+  media_asset_id: string;
+  chapter_index: number;
+  slot: PhotoPlacementSlot;
+  caption: string | null;
+}
+
 export interface Autobiography {
   id: string;
   user_id: string;
@@ -252,6 +263,9 @@ export interface Autobiography {
   final_content: string | null;
   /** pdf/generate 완료 후에만 채워지는 조판된 국판(A5) PDF의 S3 URL. */
   pdf_url: string | null;
+  /** PDF 조판 직전 사용자가 고른 수록 사진 배치. 조판은 여기 지정된 사진만
+   * 수록한다 — null(아직 저장 안 함)이든 빈 배열이든 사진 없이 조판된다. */
+  photo_placements: PhotoPlacement[] | null;
   created_at: string;
   updated_at: string;
 }

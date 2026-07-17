@@ -50,6 +50,11 @@ class Autobiography(Base):
     # 채워진 뒤에만 생성 가능하다(app/services/pdf_service.py 참조). POD(주문형 인쇄)
     # 발주 연계는 범위 밖 — 이 필드는 완성된 PDF 파일 위치까지만 담당한다.
     pdf_url = Column(String(2048), nullable=True)
+    # 사용자가 PDF 조판 직전에 직접 고른 수록 사진 배치(2026-07-16). 기획안 5절의
+    # 고정 슬롯 템플릿 원칙에 따라 [{media_asset_id, chapter_index, slot, caption}]
+    # 배열로만 표현한다(slot: "chapter_top" | "full_page_before"). NULL(미지정)과
+    # 빈 배열 모두 조판 시 "사진 없음" — pdf_service는 여기 지정된 사진만 넣는다.
+    photo_placements = Column(JSONB, nullable=True)
     # 최종 자서전 확정 시점에 설정. 이 날짜 이후 Layer 0 원문 로그(chat_logs 등)는
     # 사용자 옵트인이 없는 한 자동 삭제 대상이 된다(개인정보보호법상 최소보유 원칙, 기획안 5절).
     raw_log_retention_until = Column(Date, nullable=True)

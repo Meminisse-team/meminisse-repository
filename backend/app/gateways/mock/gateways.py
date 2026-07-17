@@ -613,6 +613,7 @@ class MockAutobiographyGateway(AutobiographyGateway):
         book_synopsis: str | None = None,
         final_content: str | None = None,
         pdf_url: str | None = None,
+        photo_placements: list[dict] | None = None,
     ) -> AutobiographyRecord:
         autobiography = self._store.autobiographies.get(autobiography_id)
         if autobiography is None:
@@ -633,6 +634,8 @@ class MockAutobiographyGateway(AutobiographyGateway):
             autobiography.final_content = final_content
         if pdf_url is not None:
             autobiography.pdf_url = pdf_url
+        if photo_placements is not None:
+            autobiography.photo_placements = photo_placements
         autobiography.updated_at = datetime.now(timezone.utc)
         return autobiography
 

@@ -12,6 +12,7 @@ from app.schemas.autobiography import (
     CustomizationOptionsResponse,
     CustomizationRecommendationResponse,
     CustomizationSelectionRequest,
+    PhotoPlacementsUpdate,
     SamplePreviewItem,
     SamplePreviewsResponse,
     TocCandidateSelect,
@@ -214,10 +215,17 @@ async def write_chapter(
     current_user: CurrentUserDep,
 ) -> dict:
     """챕터 단위 하향식 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔) 트리거."""
-    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
     chapter = await autobiography_service.get_chapter_draft(gateways, chapter_draft_id)
     if chapter is None or chapter.autobiography_id != autobiography_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 챕터를 찾을 수 없습니다.")
+    if not autobiography.book_synopsis:
+        # 이전엔 이 선행 조건 미충족이 Celery 태스크 안에서만 ValueError로 죽어
+        # 클라이언트는 202를 받고도 아무 일도 일어나지 않는 것처럼 보였다
+        # (2026-07-16 해소 — 알려진 한계 "202 실패가 HTTP로 전달 안 됨").
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "먼저 목차를 선택해야 챕터를 집필할 수 있습니다."
+        )
 
     from app.workers.tasks import write_chapter as write_chapter_task
 
@@ -236,22 +244,55 @@ async def finalize(
     실패는 워커 내부에서만 조용히 발생) — 소유권 검증을 추가하는 김에 사전 조회로
     이 문제도 함께 바로잡았다."""
     await _require_own_autobiography(gateways, autobiography_id, current_user)
+    chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography_id)
+    if not chapters or any(chapter.content is None for chapter in chapters):
+        # 선행 조건(전 챕터 집필 완료) 미충족을 202 뒤 워커 내부 실패로 숨기지 않고
+        # 즉시 알려준다(2026-07-16 해소 — 알려진 한계 "202 실패가 HTTP로 전달 안 됨").
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "모든 챕터의 집필이 끝난 뒤에 최종본을 만들 수 있습니다."
+        )
     from app.workers.tasks import finalize_manuscript as finalize_task
 
     finalize_task.delay(str(autobiography_id))
     return {"detail": "Manuscript finalization queued"}
 
 
+@router.put("/{autobiography_id}/photo-placements", response_model=AutobiographyRead)
+async def set_photo_placements(
+    autobiography_id: uuid.UUID,
+    payload: PhotoPlacementsUpdate,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> AutobiographyRead:
+    """PDF 조판 직전, 자서전에 수록할 사진과 배치(고정 슬롯)를 통째로 교체 저장한다.
+    PUT 시맨틱 — 보낸 배열이 전체 상태다(빈 배열 = 수록 사진 없음으로 확정, 자동
+    선택 폴백도 하지 않음). pdf/generate가 이 값을 읽어 조판에 반영한다."""
+    autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
+    try:
+        updated = await autobiography_service.set_photo_placements(
+            gateways,
+            autobiography,
+            [item.model_dump(mode="json") for item in payload.placements],
+        )
+    except autobiography_service.InvalidPhotoPlacementError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return AutobiographyRead.model_validate(updated)
+
+
 @router.post("/{autobiography_id}/pdf/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_pdf(
     autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
 ) -> dict:
-    """실물 출판용 국판(A5) PDF 조판 트리거. final_content(최종 윤문)가 아직이면
-    워커 안에서 ValueError로 실패한다 — 다른 태스크들과 동일하게 사전 조회로
-    막지 않고 202만 반환한다(여기서 매번 finalize 여부를 확인하는 것도 가능하지만,
-    "존재 확인은 API에서, 선행 단계 완료 여부는 서비스 레이어에서"라는 기존
-    write_chapter/finalize의 검증 분담 방식을 그대로 따른다)."""
-    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    """실물 출판용 국판(A5) PDF 조판 트리거. 선행 조건(final_content, 최종 윤문
+    완료)은 여기서 즉시 409로 알려준다(2026-07-16 해소 — 이전엔 워커 안에서만
+    ValueError로 실패해 클라이언트가 202를 받고도 폴링으로 간접 확인해야 했다).
+    워커 쪽 검증(pdf_service.generate_manuscript_pdf)은 큐잉 이후 상태 변화에
+    대비한 이중 방어로 그대로 둔다."""
+    autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
+    if not autobiography.final_content:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "최종본(윤문)이 완성된 뒤에 PDF를 만들 수 있습니다."
+        )
     from app.workers.tasks import generate_manuscript_pdf as generate_pdf_task
 
     generate_pdf_task.delay(str(autobiography_id))

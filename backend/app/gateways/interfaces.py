@@ -421,6 +421,7 @@ class AutobiographyGateway(ABC):
         book_synopsis: str | None = None,
         final_content: str | None = None,
         pdf_url: str | None = None,
+        photo_placements: list[dict] | None = None,
     ) -> AutobiographyRecord:
         """None인 인자는 "이 필드는 건드리지 않는다"는 뜻이다 — 부분 갱신 전용이며,
         이 도메인에서는 위 필드들을 의도적으로 null로 되돌리는 경우가 없으므로

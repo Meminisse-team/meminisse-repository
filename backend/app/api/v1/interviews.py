@@ -63,6 +63,22 @@ async def preview_next(gateways: GatewaysDep, current_user: CurrentUserDep) -> N
     return NextItemPreviewRead.model_validate(preview)
 
 
+@router.post("/skip-next", response_model=NextItemPreviewRead)
+async def skip_next(gateways: GatewaysDep, current_user: CurrentUserDep) -> NextItemPreviewRead:
+    """미리보기로 보여준 다음 질문/사진을 사용자가 거부('이 질문 넘어가기')한 경우 —
+    세션이 아직 없으므로 그 항목을 SKIPPED 세션으로 배정 처리하고, 건너뛴 뒤의
+    새 미리보기를 반환한다(프론트가 다음 질문을 한 번의 왕복으로 이어 보여줄 수
+    있게). 반드시 `/{session_id}` 라우트보다 먼저 등록한다."""
+    try:
+        preview = await interview_service.skip_next_item(gateways, current_user.id)
+    except interview_service.NoRemainingQuestionsError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "건너뛸 다음 질문이 없습니다. 이미 모든 질문에 답변하셨습니다.",
+        )
+    return NextItemPreviewRead.model_validate(preview)
+
+
 @router.get("/{session_id}", response_model=SessionDetailRead)
 async def get_session(
     session_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
@@ -98,4 +114,21 @@ async def complete_session(
 ) -> SessionRead:
     session = await _get_own_session_or_404(gateways, session_id, current_user)
     session = await interview_service.complete_session(gateways, session)
+    return SessionRead.model_validate(session)
+
+
+@router.post("/{session_id}/skip", response_model=SessionRead)
+async def skip_session(
+    session_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> SessionRead:
+    """열려 있는 세션의 질문을 사용자가 거부한 경우 — complete와 달리 Phase 2
+    후처리 없이 SKIPPED로 전이한다(interview_service.skip_session 참조)."""
+    session = await _get_own_session_or_404(gateways, session_id, current_user)
+    try:
+        session = await interview_service.skip_session(gateways, session)
+    except interview_service.SessionNotOpenError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "이미 종료된 대화입니다. 새 대화를 시작해주세요.",
+        )
     return SessionRead.model_validate(session)

@@ -122,10 +122,42 @@
     margin: 0 auto 6mm auto;
     object-fit: cover;
   }
+  .chapter figure {
+    margin: 0 0 6mm 0;
+    break-inside: avoid;
+  }
+  .chapter figcaption {
+    margin-top: 2mm;
+    text-align: center;
+    font-size: 9pt;
+    color: #555;
+  }
   .chapter p {
     margin: 0 0 4mm 0;
     text-indent: 1em;
     break-inside: avoid;
+  }
+
+  /* 전면 사진 페이지형 슬롯(기획안 5절) — 사진 한 장이 한 페이지를 차지한다. */
+  .photo-page {
+    break-before: page;
+    break-after: page;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+  .photo-page img {
+    max-width: 100%;
+    max-height: 150mm;
+    object-fit: contain;
+  }
+  .photo-page .photo-caption {
+    margin-top: 4mm;
+    font-size: 9pt;
+    color: #555;
+    text-align: center;
   }
 </style>
 </head>
@@ -167,11 +199,20 @@
   <h2>{{ chapter.part_title }}</h2>
 </section>
 {% endif %}
+{% for photo in chapter.full_page_photos %}
+<section class="photo-page">
+  <img src="{{ photo.url }}" alt="">
+  {% if photo.caption %}<p class="photo-caption">{{ photo.caption }}</p>{% endif %}
+</section>
+{% endfor %}
 <section class="chapter">
   <h2>{{ chapter.chapter_index }}장. {{ chapter.title or "" }}</h2>
-  {% if chapter.photo_url %}
-  <img class="photo" src="{{ chapter.photo_url }}" alt="">
-  {% endif %}
+  {% for photo in chapter.top_photos %}
+  <figure>
+    <img class="photo" src="{{ photo.url }}" alt="">
+    {% if photo.caption %}<figcaption>{{ photo.caption }}</figcaption>{% endif %}
+  </figure>
+  {% endfor %}
   {% for paragraph in chapter.paragraphs %}
   <p>{{ paragraph }}</p>
   {% endfor %}

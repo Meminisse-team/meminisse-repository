@@ -283,6 +283,51 @@ async def create_session(
     return session
 
 
+async def skip_next_item(gateways: Gateways, user_id: uuid.UUID) -> NextItemPreview:
+    """POST /interview-sessions/skip-next — 아직 세션을 만들지 않은 미리보기 상태에서
+    사용자가 '이 질문 넘어가기'를 누른 경우. 미리보기가 쓰는 것과 같은
+    _resolve_next_item(멱등)으로 지금 화면에 보이는 항목을 다시 계산해, 그 항목의
+    SKIPPED 세션을 만들어 "배정됨" 처리한다 — 고정 질문은 get_next_unasked 계약
+    (비-OPEN 세션의 question_id 제외), 사진은 list_uninterviewed 계약(PHOTO 세션이
+    달린 사진 제외)에 따라 다시는 후보에 오르지 않는다.
+
+    건너뛴 직후의 새 미리보기를 함께 반환한다 — 프론트가 별도 왕복 없이 다음
+    질문을 바로 보여줄 수 있게. 더 건너뛸 항목이 없으면 NoRemainingQuestionsError."""
+    next_item = await _resolve_next_item(gateways, user_id)
+    if next_item is None:
+        raise NoRemainingQuestionsError()
+    session = await gateways.sessions.create(
+        SessionCreateData(
+            user_id=user_id,
+            session_type=next_item.session_type,
+            question_id=next_item.question.id if next_item.question is not None else None,
+            linked_media_asset_id=(
+                next_item.media_asset.id if next_item.media_asset is not None else None
+            ),
+        )
+    )
+    await gateways.sessions.skip(session.id)
+    await gateways.commit()
+    return await preview_next_item(gateways, user_id)
+
+
+async def skip_session(
+    gateways: Gateways, session: InterviewSessionRecord
+) -> InterviewSessionRecord:
+    """POST /interview-sessions/{id}/skip — 이미 열린 세션의 질문을 사용자가 거부한
+    경우. complete_session과 달리 Phase 2 후처리(산문 재조립·이벤트 추출)를 큐잉하지
+    않는다 — 거부한 질문의 대화는 자서전 재료가 아니며, SKIPPED 세션은 '나의 이야기'
+    목록에서도 제외된다(story_service 참조). 같은 질문/사진은 큐 제외 계약에 따라
+    다시 배정되지 않는다."""
+    if session.status != SessionStatus.OPEN:
+        raise SessionNotOpenError()
+    await gateways.sessions.skip(session.id)
+    await gateways.commit()
+    updated_session = await gateways.sessions.get_by_id(session.id)
+    assert updated_session is not None
+    return updated_session
+
+
 async def get_session(gateways: Gateways, session_id: uuid.UUID) -> InterviewSessionRecord | None:
     return await gateways.sessions.get_by_id(session_id)
 
@@ -437,6 +482,22 @@ async def add_user_turn(
         session.id, role=MessageRole.ASSISTANT, content=assistant_content
     )
     await gateways.commit()
+
+    if is_crisis:
+        # 위기 신호로 자동 종료된 세션도 Phase 2 후처리(산문 재조립·이벤트 추출)를
+        # 정상 종료(complete_session)와 동일하게 큐잉한다(2026-07-16 해소 — 이전엔
+        # 상태만 completed로 바꿔서, /complete를 따로 호출하지 않는 한 그 세션의
+        # 이야기가 '나의 이야기'에 영영 "생성 중" placeholder로 남았다). 큐잉은
+        # 위 커밋 이후여야 워커가 방금 저장된 대화까지 볼 수 있다. complete_session을
+        # 그대로 쓰지 않는 이유: 그 함수는 자체적으로 상태 전이+커밋을 다시 하는데,
+        # 이 함수는 위기 대응 문구(assistant_turn)까지 한 트랜잭션에 담아야 해서
+        # 커밋 순서가 다르다.
+        from app.workers.enqueue import enqueue_in_background
+        from app.workers.tasks import process_session_completion  # 순환 임포트 방지용 지연 임포트
+
+        enqueue_in_background(
+            process_session_completion, str(session.id), log_context=f"session_id={session.id}"
+        )
 
     updated_session = await gateways.sessions.get_by_id(session.id)
     assert updated_session is not None

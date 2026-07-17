@@ -76,19 +76,25 @@ def _split_paragraphs(content: str) -> list[str]:
     return [stripped] if stripped else []
 
 
-async def _first_photo_url_for_chapter(
-    gateways: Gateways, source_event_ids: list[uuid.UUID], media_url_by_id: dict[uuid.UUID, str]
-) -> str | None:
-    """챕터가 소환한 이벤트 중 사진이 딸린 첫 번째 것을 그 챕터의 대표 사진으로
-    쓴다(기획안의 "상단 이미지+하단 캡션형" 슬롯에 대응). 여러 장을 배치하는
-    레이아웃은 MVP 범위 밖으로 남긴다."""
-    if not source_event_ids:
-        return None
-    events = await gateways.events.list_by_ids(source_event_ids)
-    for event in events:
-        if event.media_asset_id and event.media_asset_id in media_url_by_id:
-            return media_url_by_id[event.media_asset_id]
-    return None
+def _placements_by_chapter(
+    placements: list[dict], media_url_by_id: dict[uuid.UUID, str]
+) -> dict[int, dict[str, list[dict]]]:
+    """사용자가 지정한 수록 사진 배치를 챕터별 슬롯 목록으로 변환한다. URL을 못
+    찾는 항목(그 사이 삭제된 사진 등)은 조판을 깨지 않도록 조용히 건너뛴다."""
+    by_chapter: dict[int, dict[str, list[dict]]] = {}
+    for placement in placements:
+        url = media_url_by_id.get(uuid.UUID(str(placement["media_asset_id"])))
+        if url is None:
+            continue
+        slots = by_chapter.setdefault(
+            placement["chapter_index"], {"top_photos": [], "full_page_photos": []}
+        )
+        entry = {"url": url, "caption": placement.get("caption")}
+        if placement.get("slot") == "full_page_before":
+            slots["full_page_photos"].append(entry)
+        else:
+            slots["top_photos"].append(entry)
+    return by_chapter
 
 
 async def render_manuscript_html(gateways: Gateways, autobiography: AutobiographyRecord) -> str:
@@ -96,10 +102,17 @@ async def render_manuscript_html(gateways: Gateways, autobiography: Autobiograph
     media_assets = await gateways.media_assets.list_by_user(autobiography.user_id)
     media_url_by_id = {m.id: m.s3_url for m in media_assets if m.asset_type == AssetType.IMAGE}
 
+    # 사용자가 "책에 실을 사진 고르기"에서 직접 지정한 배치만 반영한다.
+    # 미지정(None)과 빈 배열 모두 "사진 없음"으로 취급 — 챕터 소환 이벤트의
+    # 사진을 자동 선택하던 폴백은 제거됨(2026-07-17).
+    placements_by_chapter = _placements_by_chapter(
+        autobiography.photo_placements or [], media_url_by_id
+    )
+
     chapter_views = []
     for chapter in chapters:
-        photo_url = await _first_photo_url_for_chapter(
-            gateways, chapter.source_event_ids, media_url_by_id
+        slots = placements_by_chapter.get(
+            chapter.chapter_index, {"top_photos": [], "full_page_photos": []}
         )
         part_context = autobiography_service.get_chapter_part_context(autobiography, chapter.chapter_index)
         chapter_views.append(
@@ -107,7 +120,8 @@ async def render_manuscript_html(gateways: Gateways, autobiography: Autobiograph
                 "chapter_index": chapter.chapter_index,
                 "title": chapter.title,
                 "paragraphs": _split_paragraphs(chapter.content or ""),
-                "photo_url": photo_url,
+                "top_photos": slots["top_photos"],
+                "full_page_photos": slots["full_page_photos"],
                 "part_index": part_context["part_index"] if part_context else None,
                 "part_title": part_context["part_title"] if part_context else None,
                 "is_part_opening": bool(part_context and part_context["is_part_opening"]),

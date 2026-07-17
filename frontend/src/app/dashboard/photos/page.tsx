@@ -56,11 +56,22 @@ export default function PhotosPage() {
 
   return (
     <main className="px-6 pb-10 pt-14">
-      <div className="mb-8 flex items-end justify-between">
+      <div className="mb-4 flex items-end justify-between">
         <h1 className="font-serif-kr text-2xl text-black">사진첩</h1>
         <span className="text-sm text-black/40">
           {photos.length} / {MAX_PHOTOS}
         </span>
+      </div>
+
+      {/* 여기 올리는 사진의 용도를 명확히 안내한다(2026-07-16 요청) — 지금 올리는
+      사진은 대화(질문 생성)의 재료이고, 책에 실제로 실을 사진과 위치는 책 만들기
+      직전 단계('나의 자서전' 화면)에서 따로 고른다. */}
+      <div className="mb-8 rounded-2xl border border-black/10 bg-black/[0.02] p-4">
+        <p className="text-sm leading-relaxed text-black/60">
+          여기 올리는 사진은 대화에서 그 시절 이야기를 여쭤보는 데 쓰여요. 책에 실을
+          사진은 나중에 자서전을 책으로 만들기 직전에, 이 사진들 중에서 원하는 것과
+          넣을 위치를 따로 고르시게 됩니다.
+        </p>
       </div>
 
       {loading && <p className="text-black/50">불러오는 중...</p>}

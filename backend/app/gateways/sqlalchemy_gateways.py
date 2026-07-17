@@ -697,6 +697,7 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
         book_synopsis: str | None = None,
         final_content: str | None = None,
         pdf_url: str | None = None,
+        photo_placements: list[dict] | None = None,
     ) -> AutobiographyRecord:
         obj = await self._session.get(Autobiography, autobiography_id)
         if obj is None:
@@ -717,6 +718,8 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
             obj.final_content = final_content
         if pdf_url is not None:
             obj.pdf_url = pdf_url
+        if photo_placements is not None:
+            obj.photo_placements = photo_placements
         await self._session.flush()
         return _to_autobiography_record(obj)
 
@@ -1060,6 +1063,7 @@ def _to_autobiography_record(autobiography: Autobiography) -> AutobiographyRecor
         book_synopsis=autobiography.book_synopsis,
         final_content=autobiography.final_content,
         pdf_url=autobiography.pdf_url,
+        photo_placements=autobiography.photo_placements,
     )
 
 

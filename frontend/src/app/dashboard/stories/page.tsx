@@ -31,6 +31,9 @@ export default function StoriesPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // 전체를 한 번에 받지 않고 현재 페이지 분량만 서버에서 받는다(2026-07-16 —
+  // 이야기를 많이 나눈 사용자의 첫 로드가 수 초씩 걸리던 문제). 페이지를 넘기면
+  // 그때 그 페이지를 요청하고, 폴링도 현재 페이지만 다시 받는다.
   const refresh = useCallback(() => {
     // 이전 시도에서 남은 에러 메시지를 지우지 않으면, 새로고침이 실제로 성공해도
     // 화면엔 옛 에러 문구가 그대로 남아 "안 눌리는 것처럼" 보인다(2026-07-15 피드백).

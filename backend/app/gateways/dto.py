@@ -286,6 +286,8 @@ class AutobiographyRecord:
     book_synopsis: str | None = None
     final_content: str | None = None
     pdf_url: str | None = None
+    # PDF 조판 직전 사용자가 고른 수록 사진 배치(고정 슬롯) — None이면 미지정.
+    photo_placements: list[dict] | None = None
 
 
 @dataclass

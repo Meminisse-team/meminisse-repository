@@ -1,9 +1,29 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import AutobiographyStatus, DraftStatus
+
+
+class PhotoPlacementItem(BaseModel):
+    """자서전 수록 사진 하나의 배치 지정. 기획안 5절(고정 슬롯 템플릿) 원칙에 따라
+    위치는 자유 좌표가 아니라 "어느 챕터의 어느 슬롯인지"로만 표현한다:
+    - "chapter_top": 챕터 첫머리의 상단 이미지+하단 캡션형 슬롯
+    - "full_page_before": 그 챕터가 시작되기 직전의 전면 사진 페이지형 슬롯"""
+
+    media_asset_id: uuid.UUID
+    chapter_index: int = Field(..., ge=1)
+    slot: Literal["chapter_top", "full_page_before"] = "chapter_top"
+    caption: str | None = None
+
+
+class PhotoPlacementsUpdate(BaseModel):
+    """PUT /{autobiography_id}/photo-placements. 빈 배열이면 "수록 사진 없음"으로
+    확정하는 것. 조판은 여기 지정된 사진만 수록한다(자동 선택 없음)."""
+
+    placements: list[PhotoPlacementItem]
 
 
 class AutobiographyRead(BaseModel):
@@ -18,6 +38,7 @@ class AutobiographyRead(BaseModel):
     book_synopsis: str | None
     final_content: str | None
     pdf_url: str | None
+    photo_placements: list[PhotoPlacementItem] | None
     created_at: datetime
     updated_at: datetime
 
