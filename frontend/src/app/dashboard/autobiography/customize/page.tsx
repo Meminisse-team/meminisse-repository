@@ -119,23 +119,26 @@ export default function CustomizePage() {
     };
   }, [user]);
 
-  // previews 폴링: previews 단계이고 아직 결과가 비어 있는 동안만.
+  // previews 폴링: previews 단계이고, 아직 하나도 안 왔거나 8개 중 하나라도
+  // is_generating이면 계속 돈다 — 8개를 한꺼번에 기다리지 않고 완성되는 대로
+  // 하나씩 화면에 채워 넣는다(story_service.py의 placeholder 카드와 동일한 사상).
+  const stillGenerating = previews.length === 0 || previews.some((p) => p.is_generating);
   useEffect(() => {
-    if (step !== "previews" || !autobiography || previews.length > 0) {
+    if (step !== "previews" || !autobiography || !stillGenerating) {
       stopPolling();
       return;
     }
     const tick = async () => {
       const result = await customizationApi.getPreviews(autobiography.id);
-      if (result.samples.length > 0) {
-        setPreviews(result.samples);
+      setPreviews(result.samples);
+      if (result.samples.length > 0 && result.samples.every((p) => !p.is_generating)) {
         stopPolling();
       }
     };
     void tick();
     startPolling(() => void tick());
     return () => stopPolling();
-  }, [step, autobiography, previews.length, startPolling, stopPolling]);
+  }, [step, autobiography, stillGenerating, startPolling, stopPolling]);
 
   function toggleOption(category: Category, key: string) {
     setSelections((prev) => {
@@ -443,15 +446,23 @@ function PreviewsStep({
                 </span>
               ))}
             </div>
-            <p className="whitespace-pre-wrap text-base leading-relaxed text-black/80">{sample.preview_text}</p>
-            <Button
-              variant="secondary"
-              className="mt-5 w-full"
-              disabled={confirmingKey !== null}
-              onClick={() => onConfirm(sample)}
-            >
-              {confirmingKey === key ? "확정하는 중..." : "이 글로 확정하기"}
-            </Button>
+            {sample.is_generating || sample.preview_text === null ? (
+              <p className="text-base leading-relaxed text-black/40">이 조합으로 쓰는 중...</p>
+            ) : (
+              <>
+                <p className="whitespace-pre-wrap text-base leading-relaxed text-black/80">
+                  {sample.preview_text}
+                </p>
+                <Button
+                  variant="secondary"
+                  className="mt-5 w-full"
+                  disabled={confirmingKey !== null}
+                  onClick={() => onConfirm(sample)}
+                >
+                  {confirmingKey === key ? "확정하는 중..." : "이 글로 확정하기"}
+                </Button>
+              </>
+            )}
           </div>
         );
       })}

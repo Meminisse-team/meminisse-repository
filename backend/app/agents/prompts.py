@@ -899,9 +899,20 @@ def build_event_merge_judge_prompt(*, event_a_summary: str, event_b_summary: str
 # --------------------------------------------------------------------------- #
 
 TOC_GENERATION_SYSTEM_PROMPT = """\
-아래는 사건 요약과 중요도 점수 목록입니다. 이를 의미론적으로 군집화하여 사용자
-맞춤형 목차 후보 3안을 제안하세요. 각 안은 서로 다른 구성 관점(예: 연대기순,
-주제별, 인물 중심)을 가져야 합니다.
+당신은 한 사람의 파편적인 기억(사건 요약과 중요도 점수 목록)을 넘겨받아, 그
+사람의 인생을 하나의 살아있는 이야기로 설계하는 자서전 작가입니다. 사건을
+비슷한 것끼리 묶는 분류 작업이 아니라, "이 책을 처음부터 끝까지 읽었을 때
+어떤 이야기가 완성되는가"를 먼저 정하고, 그 이야기(뼈대)에 맞게 챕터(살)를
+배치하세요 — 뼈대 없이 살부터 붙이면 낱개 에피소드의 나열이 될 뿐입니다.
+
+사용자 맞춤형 목차 후보 3안을 제안하세요. 각 안은 서로 다른 구성 관점(예:
+연대기순, 주제별, 인물 중심)을 가지되, 다음을 반드시 지키세요:
+- 각 후보는 시작(도입)-전개(갈등·변화)-절정-마무리(회고·통합)의 형태를 갖춘
+  하나의 이야기 아크여야 합니다. 마지막 챕터는 첫 챕터에서 던진 질문이나
+  이미지를 회수하는 결말이어야 합니다.
+- 챕터와 챕터 사이는 반드시 연결되어야 합니다. 사건 자체가 인과적으로 이어지지
+  않더라도, 주제·감정·이미지·질문 중 하나로 다음 챕터와 이어지는 다리를 놓으세요
+  — "관계없는 에피소드의 모음"이 아니라 "한 사람의 한 이야기"로 읽혀야 합니다.
 """
 
 TOC_GENERATION_SCHEMA: dict[str, Any] = {
@@ -912,6 +923,10 @@ TOC_GENERATION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
+                    "narrative_arc": {
+                        "type": "string",
+                        "description": "이 구성안이 처음부터 끝까지 들려주는 하나의 이야기(2~3문장) — 책 전체의 뼈대.",
+                    },
                     "chapters": {
                         "type": "array",
                         "items": {
@@ -920,13 +935,17 @@ TOC_GENERATION_SCHEMA: dict[str, Any] = {
                                 "chapter_index": {"type": "integer"},
                                 "title": {"type": "string"},
                                 "theme_keywords": {"type": "array", "items": {"type": "string"}},
+                                "connecting_thread": {
+                                    "type": "string",
+                                    "description": "이 챕터가 직전 챕터에서 어떻게 이어지고 다음 챕터로 무엇을 넘기는지(1~2문장). 사건적으로 안 이어지면 주제·감정·이미지로 잇는 연결고리를 명시.",
+                                },
                             },
-                            "required": ["chapter_index", "title", "theme_keywords"],
+                            "required": ["chapter_index", "title", "theme_keywords", "connecting_thread"],
                             "additionalProperties": False,
                         },
-                    }
+                    },
                 },
-                "required": ["chapters"],
+                "required": ["narrative_arc", "chapters"],
                 "additionalProperties": False,
             },
         }
@@ -944,9 +963,12 @@ def build_toc_generation_prompt(*, event_summaries_with_scores: str) -> list[dic
 
 
 BOOK_SYNOPSIS_SYSTEM_PROMPT = """\
-아래 스타일 바이블과 전체 목차를 참고해 책 전체를 관통하는 시놉시스를 작성하세요.
-이후 각 챕터 집필의 설계도 역할을 하므로, 생애 전체의 기승전결과 핵심 주제를
-압축적으로 담아야 합니다.
+아래 스타일 바이블과 전체 목차(각 후보의 뼈대인 narrative_arc 및 챕터별
+connecting_thread 포함)를 참고해 책 전체를 관통하는 시놉시스를 작성하세요.
+narrative_arc를 뼈대 삼아, 이 사람의 삶을 관통하는 중심 갈등·욕망과 그것이
+어떻게 변화·해소되는지를 실제 출간 자서전의 뒤표지 소개글처럼 압축적으로
+풀어내세요. 이후 각 챕터 집필의 설계도 역할을 하므로, 생애 전체의 기승전결과
+핵심 주제가 분명히 드러나야 합니다.
 """
 
 
@@ -982,19 +1004,32 @@ def build_book_title_prompt(*, style_bible: str, toc: str) -> list[dict[str, str
 
 
 CHAPTER_SYNOPSIS_SYSTEM_PROMPT = """\
-아래 책 전체 시놉시스와 이 챕터에 배정된 사건 목록을 참고해 챕터 시놉시스를
-작성하세요. 챕터 본문 집필의 설계도이므로 사건들의 인과관계와 감정선을
-중심으로 구성하세요.
+아래 책 전체 시놉시스, 이 챕터의 [연결고리](목차 설계 단계에서 정해진, 직전
+챕터에서 어떻게 이어받아 다음 챕터로 무엇을 넘기는지)와 이 챕터에 배정된 사건
+목록을 참고해 챕터 시놉시스를 작성하세요. 챕터 본문 집필의 설계도이므로
+다음을 반드시 포함하세요:
+- 이 챕터가 책 전체 아크에서 맡는 역할(도입/상승/절정/전환/회고 등).
+- [연결고리]를 구체화해, 챕터를 어떤 장면·감정으로 열고 어떤 여운으로 닫을지.
+- 배정된 사건들 사이의 인과관계와 감정선. 사건들이 서로 인과적으로 이어지지
+  않더라도, 하나의 조직 원리(공통된 이미지·질문·주제)로 묶어 나열이 아닌
+  하나의 흐름으로 구성하세요.
 """
 
 
 def build_chapter_synopsis_prompt(
-    *, book_synopsis: str, chapter_title: str, event_summaries: list[str]
+    *,
+    book_synopsis: str,
+    chapter_title: str,
+    event_summaries: list[str],
+    connecting_thread: str | None = None,
 ) -> list[dict[str, str]]:
     events_block = "\n".join(f"- {s}" for s in event_summaries)
+    thread_block = connecting_thread or "(목차 단계에서 정해진 연결고리 없음 — 첫 챕터이거나 커스터마이징 이전 생성)"
     user_prompt = (
         f"[책 전체 시놉시스]\n{book_synopsis}\n\n"
-        f"[챕터 제목] {chapter_title}\n\n[배정된 사건들]\n{events_block}"
+        f"[챕터 제목] {chapter_title}\n\n"
+        f"[연결고리]\n{thread_block}\n\n"
+        f"[배정된 사건들]\n{events_block}"
     )
     return [
         {"role": "system", "content": CHAPTER_SYNOPSIS_SYSTEM_PROMPT},
@@ -1007,6 +1042,16 @@ CHAPTER_WRITING_SYSTEM_PROMPT = """\
 [전체 시놉시스]와 [챕터 시놉시스]의 설계를 벗어나지 마세요. [RAG 검색된 사건
 문단]에 없는 사실을 지어내지 마세요 — 서술은 반드시 제공된 사건 문단에 근거해야
 합니다(사후 근거 검증 대상).
+
+집필 기술 — 시중에 파는 자서전처럼 읽히도록 다음을 지키세요:
+- "그리고 -했다. 그리고 -했다" 식의 사건 나열이나 요약형 진술로 열지 말고,
+  구체적인 장면·감각(공간, 소리, 냄새, 몸짓)으로 문을 여세요.
+- 감정을 이름 붙여 설명("슬펐다", "기뻤다")하기보다, 행동과 디테일로 그 감정이
+  드러나게 하세요(보여주기, showing not telling).
+- [직전 챕터 요약]이 주어지면 완전히 새로 시작하지 말고, 그 여운이나 감정을
+  자연스럽게 이어받으며 도입부를 여세요.
+- [챕터 시놉시스]에 담긴 연결고리를 살려, 다음 챕터를 향한 여운이나 전환으로
+  마무리하세요(마지막 챕터라면 책 전체를 회수하는 여운으로).
 
 출력 형식 — 반드시 지킬 것:
 - 완성된 산문 본문만 출력하세요. "여기 챕터입니다", "**제1장**" 같은 제목·안내
@@ -1041,9 +1086,29 @@ def build_chapter_writing_prompt(
     ]
 
 
+CHAPTER_RECAP_SYSTEM_PROMPT = """\
+아래 챕터 본문을 읽고, 다음 챕터를 쓸 작가에게 넘겨줄 짧은 인수인계 노트를
+3~5문장으로 작성하세요. 반드시 다음 세 가지를 포함하세요:
+1. 이 챕터에서 실제로 무슨 일이 있었는지(핵심 사건).
+2. 챕터가 어떤 감정·분위기로 끝났는지.
+3. 다음 챕터로 넘어갈 미해결된 여운이나 질문(있다면).
+요약 대상 본문을 그대로 요약하는 것이지, 새로운 사실을 지어내지 마세요.
+"""
+
+
+def build_chapter_recap_prompt(*, chapter_content: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": CHAPTER_RECAP_SYSTEM_PROMPT},
+        {"role": "user", "content": chapter_content},
+    ]
+
+
 UNITY_REVISION_SYSTEM_PROMPT = """\
 전체 챕터와 스타일 바이블을 함께 검토해 인접 챕터 경계부의 어조·문체 단절을
-매끄럽게 다듬으세요. 사건의 사실 관계나 순서는 변경하지 마세요 — 오직 문체
+매끄럽게 다듬으세요. 각 챕터의 첫 문장·마지막 문장 같은 "이음매" 부분이
+자연스러운 전환처럼 읽히도록 연결어·전환 문장을 다듬는 것도 포함됩니다(단,
+이때도 사실 관계나 사건 순서는 절대 바꾸지 마세요 — 문장 표현만 다듬는
+것입니다). 사건의 사실 관계나 순서는 변경하지 마세요 — 오직 문체
 통일성만 개선하는 윤문입니다.
 
 출력 형식 — 반드시 지킬 것:
@@ -1509,15 +1574,20 @@ def build_sample_preview_prompt(
     style_bible: str,
     event_summaries: str,
 ) -> list[dict[str, str]]:
-    """8개 샘플 중 하나의 조합에 대한 미리보기 텍스트를 생성한다."""
+    """8개 샘플 중 하나의 조합에 대한 미리보기 텍스트를 생성한다. 각 축의
+    instruction(추상 지시)뿐 아니라 example(예시 문장)도 few-shot으로 함께
+    준다 — 추상적 지시문만으로는 문체 간 차이가 뚜렷하게 재현되지 않는다."""
     tone = TONE_OPTIONS[tone_key]
     structure = STRUCTURE_OPTIONS[structure_key]
     concept = CONCEPT_OPTIONS[concept_key]
 
     user_prompt = (
-        f"[말투 지시]\n{tone['instruction']}\n\n"
-        f"[구성 지시]\n{structure['instruction']}\n\n"
-        f"[컨셉 지시]\n{concept['instruction']}\n\n"
+        f"[말투 지시]\n{tone['instruction']}\n"
+        f"[말투 예시 — 어조만 참고, 내용은 가져오지 말 것] {tone['example']}\n\n"
+        f"[구성 지시]\n{structure['instruction']}\n"
+        f"[구성 예시 — 형식만 참고, 내용은 가져오지 말 것] {structure['example']}\n\n"
+        f"[컨셉 지시]\n{concept['instruction']}\n"
+        f"[컨셉 예시 — 관점만 참고, 내용은 가져오지 말 것] {concept['example']}\n\n"
         f"[스타일 바이블]\n{style_bible}\n\n"
         f"[사건 요약]\n{event_summaries}"
     )
@@ -1535,11 +1605,15 @@ def build_customized_toc_prompt(
     structure_key: str,
 ) -> list[dict[str, str]]:
     """TOC_GENERATION_SYSTEM_PROMPT에 사용자가 선택한 구성(structure) 지시문을 주입한다.
-    기존 build_toc_generation_prompt의 커스터마이징 확장판."""
+    기존 build_toc_generation_prompt의 커스터마이징 확장판. instruction(추상 지시)뿐
+    아니라 example(예시 목차)도 few-shot으로 함께 준다 — 추상적 설명만으로는 "주제별
+    구성"과 "역순행적 구성" 같은 구조적 차이가 잘 재현되지 않는다."""
     structure = STRUCTURE_OPTIONS[structure_key]
     system_prompt = (
         f"{TOC_GENERATION_SYSTEM_PROMPT}\n\n"
-        f"[사용자가 선택한 목차 구성 방식]\n{structure['instruction']}\n"
+        f"[사용자가 선택한 목차 구성 방식]\n{structure['instruction']}\n\n"
+        f"[구성 예시 — 형식만 참고할 것, 실제 내용은 사용자의 사건 요약을 따를 것]\n"
+        f"{structure['example']}\n\n"
         f"반드시 이 구성 방식을 따라 목차 후보를 생성하세요. 3개 후보 모두 이 구성 "
         f"관점을 기반으로 하되, 세부 챕터 배분이나 제목에서 변주를 주세요."
     )
@@ -1560,14 +1634,20 @@ def build_customized_chapter_writing_prompt(
     concept_key: str,
 ) -> list[dict[str, str]]:
     """CHAPTER_WRITING_SYSTEM_PROMPT에 말투(tone)·컨셉(concept) 지시문을 주입한다.
-    기존 build_chapter_writing_prompt의 커스터마이징 확장판."""
+    기존 build_chapter_writing_prompt의 커스터마이징 확장판. instruction과 함께
+    example(예시 문장)도 few-shot으로 주입한다 — 추상적 지시문만으로는 문체가
+    충실히 재현되지 않는다(내용 유출을 막기 위해 "참고만 하라"는 경고를 함께 둠)."""
     tone = TONE_OPTIONS[tone_key]
     concept = CONCEPT_OPTIONS[concept_key]
 
     system_prompt = (
         f"{CHAPTER_WRITING_SYSTEM_PROMPT}\n\n"
-        f"[사용자가 선택한 말투]\n{tone['instruction']}\n\n"
-        f"[사용자가 선택한 컨셉]\n{concept['instruction']}"
+        f"[사용자가 선택한 말투]\n{tone['instruction']}\n"
+        f"[말투 예시 — 어조·문장 리듬만 참고하고, 예시의 구체적 사실·소재는 "
+        f"절대 가져오지 말 것] {tone['example']}\n\n"
+        f"[사용자가 선택한 컨셉]\n{concept['instruction']}\n"
+        f"[컨셉 예시 — 관점과 초점만 참고하고, 예시의 구체적 사실·소재는 "
+        f"절대 가져오지 말 것] {concept['example']}"
     )
     events_block = "\n\n".join(retrieved_event_paragraphs)
     prev_block = previous_chapter_summary or "(첫 챕터)"
@@ -1592,14 +1672,18 @@ def build_customized_unity_revision_prompt(
     concept_key: str,
 ) -> list[dict[str, str]]:
     """UNITY_REVISION_SYSTEM_PROMPT에 말투(tone)·컨셉(concept) 지시문을 주입한다.
-    기존 build_unity_revision_prompt의 커스터마이징 확장판."""
+    기존 build_unity_revision_prompt의 커스터마이징 확장판. example도 함께 준다 —
+    윤문 단계에서도 목표 문체를 구체적 예문으로 다시 상기시켜야 챕터마다 흔들린
+    어조를 일관되게 되돌릴 수 있다."""
     tone = TONE_OPTIONS[tone_key]
     concept = CONCEPT_OPTIONS[concept_key]
 
     system_prompt = (
         f"{UNITY_REVISION_SYSTEM_PROMPT}\n\n"
-        f"[사용자가 선택한 말투]\n{tone['instruction']}\n\n"
+        f"[사용자가 선택한 말투]\n{tone['instruction']}\n"
+        f"[말투 예시] {tone['example']}\n\n"
         f"[사용자가 선택한 컨셉]\n{concept['instruction']}\n"
+        f"[컨셉 예시] {concept['example']}\n"
         f"윤문 시 이 말투와 컨셉의 일관성도 함께 확인하고 유지하세요."
     )
     user_prompt = f"[스타일 바이블]\n{style_bible}\n\n[전체 원고]\n{full_manuscript}"

@@ -64,14 +64,17 @@ class CustomizationRecommendationResponse(BaseModel):
 
 
 class SamplePreviewItem(BaseModel):
-    """8개 샘플 중 하나."""
+    """8개 샘플 중 하나. 순차 스트리밍 생성 중에는 preview_text가 아직 None이고
+    is_generating=True인 자리표시자 상태로 먼저 내려간다(autobiography_service.py:
+    generate_sample_previews 참조)."""
     tone: str
     structure: str
     concept: str
     tone_name: str
     structure_name: str
     concept_name: str
-    preview_text: str
+    preview_text: str | None = None
+    is_generating: bool = False
 
 
 class SamplePreviewsResponse(BaseModel):

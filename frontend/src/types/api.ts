@@ -281,6 +281,9 @@ export interface CustomizationSelectionRequest {
 /** GET .../customization/previews, style_bible.customization.previews 응답 단위
  * (backend/app/schemas/autobiography.py:SamplePreviewItem). tone/structure/concept는
  * POST .../customization/confirm에 그대로 되돌려 보내는 키다. */
+/** preview_text가 null이고 is_generating이 true면 아직 생성 중인 자리표시자다
+ * (backend/app/schemas/autobiography.py:SamplePreviewItem 참조) — 8개를 한꺼번에
+ * 기다리지 않고 완성되는 대로 하나씩 채워지는 순차 스트리밍 UI에 쓰인다. */
 export interface SamplePreviewItem {
   tone: string;
   structure: string;
@@ -288,7 +291,8 @@ export interface SamplePreviewItem {
   tone_name: string;
   structure_name: string;
   concept_name: string;
-  preview_text: string;
+  preview_text: string | null;
+  is_generating: boolean;
 }
 
 export interface SamplePreviewsResponse {

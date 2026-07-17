@@ -246,6 +246,13 @@ async def generate_sample_previews(
     """
     사용자가 선택한 말투 2 × 구성 2 × 컨셉 2 = 8개 조합에 대해 각각
     맛보기 텍스트(200~400자)를 생성해 style_bible.customization.previews에 저장한다.
+
+    8개를 전부 만든 뒤 한 번에 저장하지 않는다 — 조합별 메타데이터(tone/structure/
+    concept/각 *_name)는 LLM 호출 없이 즉시 알 수 있으므로, 먼저 8개 자리표시자
+    (preview_text=None, is_generating=True)를 커밋해 프론트가 즉시 8칸을 그릴 수
+    있게 하고, 이후 조합이 하나 완성될 때마다 그 자리만 채워 매번 커밋한다
+    (story_service.py의 세션 placeholder → 실제 카드 교체와 동일한 사상) — 그래야
+    사용자가 8개를 한꺼번에 기다리지 않고 완성되는 대로 하나씩 볼 수 있다.
     """
     autobiography = await get_autobiography_by_id(gateways, autobiography_id)
     style_bible = dict(autobiography.style_bible or {})
@@ -265,8 +272,26 @@ async def generate_sample_previews(
         for event in events[:10]
     )
 
-    previews = []
-    for tone_key, structure_key, concept_key in itertools.product(tones, structures, concepts):
+    combos = list(itertools.product(tones, structures, concepts))
+    previews = [
+        {
+            "tone": tone_key,
+            "structure": structure_key,
+            "concept": concept_key,
+            "tone_name": prompts.TONE_OPTIONS[tone_key]["name"],
+            "structure_name": prompts.STRUCTURE_OPTIONS[structure_key]["name"],
+            "concept_name": prompts.CONCEPT_OPTIONS[concept_key]["name"],
+            "preview_text": None,
+            "is_generating": True,
+        }
+        for tone_key, structure_key, concept_key in combos
+    ]
+    customization["previews"] = previews
+    style_bible["customization"] = customization
+    await gateways.autobiographies.update(autobiography_id, style_bible=style_bible)
+    await gateways.commit()
+
+    for index, (tone_key, structure_key, concept_key) in enumerate(combos):
         messages = prompts.build_sample_preview_prompt(
             tone_key=tone_key,
             structure_key=structure_key,
@@ -280,17 +305,13 @@ async def generate_sample_previews(
             json_schema=prompts.SAMPLE_PREVIEW_SCHEMA,
             reasoning_effort="medium",
         )
-        previews.append({
-            "tone": tone_key,
-            "structure": structure_key,
-            "concept": concept_key,
-            "tone_name": prompts.TONE_OPTIONS[tone_key]["name"],
-            "structure_name": prompts.STRUCTURE_OPTIONS[structure_key]["name"],
-            "concept_name": prompts.CONCEPT_OPTIONS[concept_key]["name"],
-            "preview_text": result.get("preview_text", ""),
-        })
+        previews[index]["preview_text"] = result.get("preview_text", "")
+        previews[index]["is_generating"] = False
+        customization["previews"] = previews
+        style_bible["customization"] = customization
+        await gateways.autobiographies.update(autobiography_id, style_bible=style_bible)
+        await gateways.commit()
 
-    customization["previews"] = previews
     customization["previews_generated_at"] = _now_iso()
     style_bible["customization"] = customization
     autobiography = await gateways.autobiographies.update(autobiography_id, style_bible=style_bible)
@@ -572,10 +593,33 @@ async def select_toc_candidate(
 
 
 def _toc_text(selected_toc: dict) -> str:
-    return "\n".join(
-        f"{chapter['chapter_index']}. {chapter['title']} ({', '.join(chapter.get('theme_keywords', []))})"
+    arc = selected_toc.get("narrative_arc")
+    arc_block = f"[전체 뼈대]\n{arc}\n\n" if arc else ""
+    chapters_text = "\n".join(
+        f"{chapter['chapter_index']}. {chapter['title']} "
+        f"({', '.join(chapter.get('theme_keywords', []))})"
+        + (f" — 연결고리: {chapter['connecting_thread']}" if chapter.get("connecting_thread") else "")
         for chapter in selected_toc["chapters"]
     )
+    return f"{arc_block}{chapters_text}"
+
+
+def _chapter_connecting_thread(autobiography: AutobiographyRecord, chapter_index: int) -> str | None:
+    """toc_data에 저장된 선택된 후보에서 이 챕터의 connecting_thread(목차 설계
+    단계에서 정해진, 직전/다음 챕터와의 연결고리)를 찾는다. DB 스키마 변경 없이
+    이미 저장된 toc_data(자유 JSON) 안의 값을 읽기만 한다 — 커스터마이징 이전에
+    생성된 목차(connecting_thread 필드가 없는 구버전)라면 None."""
+    toc_data = autobiography.toc_data
+    if not toc_data or toc_data.get("selected_candidate_index") is None:
+        return None
+    candidates = toc_data.get("candidates", [])
+    selected_index = toc_data["selected_candidate_index"]
+    if not (0 <= selected_index < len(candidates)):
+        return None
+    for chapter in candidates[selected_index].get("chapters", []):
+        if chapter.get("chapter_index") == chapter_index:
+            return chapter.get("connecting_thread")
+    return None
 
 
 async def _generate_book_synopsis(autobiography: AutobiographyRecord, selected_toc: dict) -> str:
@@ -640,13 +684,20 @@ async def _retrieve_events_for_chapter(
 async def _previous_chapter_summary(
     gateways: Gateways, autobiography_id: uuid.UUID, chapter_index: int
 ) -> str | None:
+    """직전 챕터의 실제 요약(사건·감정·여운)을 LLM으로 생성해 다음 챕터 집필에
+    넘긴다 — 예전에는 previous.content[-1000:](마지막 1000자 단순 절단)을 썼는데,
+    문장 중간에서 잘린 원문 조각이라 다음 챕터가 자연스럽게 이어받을 신호가
+    약했다. reasoning_effort="low"의 저비용 호출로 교체."""
     if chapter_index <= 1:
         return None
     previous = await gateways.chapters.get_by_index(autobiography_id, chapter_index - 1)
     if previous is None or not previous.content:
         return None
-    # 직전 챕터 전문 대신 말미 일부만 전달 — 실제 요약 생성 LLM 호출을 아끼는 근사치.
-    return previous.content[-1000:]
+    response = await solar.chat_completion(
+        prompts.build_chapter_recap_prompt(chapter_content=previous.content),
+        reasoning_effort="low",
+    )
+    return response.choices[0].message.content or previous.content[-1000:]
 
 
 def _total_flag_count(factcheck_report: dict, groundedness_report: dict) -> int:
@@ -676,6 +727,7 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         book_synopsis=autobiography.book_synopsis,
         chapter_title=chapter.title or f"{chapter.chapter_index}장",
         event_summaries=[event.one_line_summary for event in retrieved_events],
+        connecting_thread=_chapter_connecting_thread(autobiography, chapter.chapter_index),
     )
 
     previous_summary = await _previous_chapter_summary(gateways, autobiography.id, chapter.chapter_index)
@@ -749,11 +801,18 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
 
 
 async def _generate_chapter_synopsis(
-    *, book_synopsis: str, chapter_title: str, event_summaries: list[str]
+    *,
+    book_synopsis: str,
+    chapter_title: str,
+    event_summaries: list[str],
+    connecting_thread: str | None = None,
 ) -> str:
     response = await solar.chat_completion(
         prompts.build_chapter_synopsis_prompt(
-            book_synopsis=book_synopsis, chapter_title=chapter_title, event_summaries=event_summaries,
+            book_synopsis=book_synopsis,
+            chapter_title=chapter_title,
+            event_summaries=event_summaries,
+            connecting_thread=connecting_thread,
         ),
         reasoning_effort="medium",
     )
