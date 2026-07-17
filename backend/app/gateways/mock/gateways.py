@@ -284,6 +284,23 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
         sessions.reverse()
         return sessions[offset : offset + limit]
 
+    async def list_completed_by_user(
+        self, user_id: uuid.UUID, *, limit: int, offset: int
+    ) -> list[InterviewSessionRecord]:
+        sessions = [
+            s for s in self._store.sessions.values()
+            if s.user_id == user_id and s.status == SessionStatus.COMPLETED
+        ]
+        sessions.sort(key=lambda s: s.started_at)
+        sessions.reverse()
+        return sessions[offset : offset + limit]
+
+    async def count_completed_by_user(self, user_id: uuid.UUID) -> int:
+        return sum(
+            1 for s in self._store.sessions.values()
+            if s.user_id == user_id and s.status == SessionStatus.COMPLETED
+        )
+
     def _require_session(self, session_id: uuid.UUID) -> InterviewSessionRecord:
         session = self._store.sessions.get(session_id)
         if session is None:

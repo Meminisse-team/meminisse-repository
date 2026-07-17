@@ -179,6 +179,14 @@ export interface StoryCard {
   is_generating: boolean;
 }
 
+/** GET /stories 응답 봉투(backend/app/schemas/story.py:StoryCardPageRead).
+ * items는 요청한 limit/offset 분량만, total은 이 유저의 완료된 세션 전체
+ * 개수 — 페이지 번호 UI(총 페이지 수)를 만드는 데 쓴다. */
+export interface StoryCardPage {
+  items: StoryCard[];
+  total: number;
+}
+
 export interface MediaAsset {
   id: string;
   user_id: string;

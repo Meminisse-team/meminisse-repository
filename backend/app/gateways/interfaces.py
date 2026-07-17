@@ -226,6 +226,21 @@ class InterviewSessionGateway(ABC):
         list_by_user와 달리 특정 유저로 좁히지 않는다. chat_logs는 채우지 않는다
         (list_by_user와 동일한 이유: 목록 조회 페이로드를 가볍게 유지)."""
 
+    @abstractmethod
+    async def list_completed_by_user(
+        self, user_id: UUID, *, limit: int, offset: int
+    ) -> list[InterviewSessionRecord]:
+        """이 유저의 완료(status=COMPLETED)된 세션만 started_at 내림차순으로,
+        DB 레벨 LIMIT/OFFSET을 적용해 반환한다. '나의 이야기' 탭(story_service.py)
+        전용 — list_by_user와 달리 상태 필터링과 페이지네이션을 SQL에서 직접
+        한다. list_by_user와 동일한 정렬 계약(started_at, id 보조키)을 유지해
+        페이지 경계에서 항목이 중복되거나 빠지지 않도록 한다."""
+
+    @abstractmethod
+    async def count_completed_by_user(self, user_id: UUID) -> int:
+        """list_completed_by_user와 같은 필터(status=COMPLETED)의 총 개수 —
+        프론트 페이지 번호 UI(총 페이지 수) 계산용."""
+
 
 class EventGateway(ABC):
     """Layer 1(검증 계층)의 실체. Event/EventRelation을 다룬다."""

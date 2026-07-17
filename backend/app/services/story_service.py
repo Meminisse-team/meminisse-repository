@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.gateways.dto import InterviewSessionRecord
 from app.gateways.factory import Gateways
-from app.models.enums import MessageRole, SessionStatus, SessionType
+from app.models.enums import MessageRole, SessionType
 from app.services import event_extraction_service
 
 _SUBTITLE_SEPARATOR = " · "
@@ -66,9 +66,28 @@ class StoryCard:
     is_generating: bool = False
 
 
-async def list_story_cards(gateways: Gateways, user_id: uuid.UUID) -> list[StoryCard]:
-    """본인의 완료된 세션을, 최신순(started_at 내림차순, InterviewSessionGateway.
-    list_by_user 정렬 계약 참조)으로 카드를 만들어 반환한다.
+@dataclass
+class StoryCardPage:
+    """list_story_cards의 반환 봉투. items는 이 페이지 분량, total은 이 유저의
+    완료된 세션 전체 개수(프론트 페이지 번호 UI의 총 페이지 수 계산용) —
+    페이지네이션이 UI에서만 존재하고 실제 조회는 항상 전체를 가져오던 문제
+    (2026-07-17 발견: 100개가 있어도 7개씩 보여주는 화면 체감 속도가 동일)의
+    수정으로 도입됐다."""
+
+    items: list[StoryCard]
+    total: int
+
+
+async def list_story_cards(
+    gateways: Gateways, user_id: uuid.UUID, *, limit: int, offset: int
+) -> StoryCardPage:
+    """본인의 완료된 세션 중 이 페이지 분량만, 최신순(started_at 내림차순,
+    InterviewSessionGateway.list_completed_by_user 정렬 계약 참조)으로 카드를
+    만들어 반환한다. 상태 필터링(COMPLETED만)과 페이지네이션은 게이트웨이가
+    SQL LIMIT/OFFSET으로 처리하므로, 여기서는 이 페이지에 해당하는 세션에
+    대해서만 카드를 조립한다 — 세션이 아무리 많아도 매 호출의 추가 조회
+    (_resolve_title/_to_story_card의 get_by_id·events 조회)는 최대 limit개로
+    고정된다.
 
     완료(status=COMPLETED)됐지만 아직 Phase 2 후처리(Celery)가 안 끝나 session_prose가
     비어 있는 세션도 건너뛰지 않고 is_generating=True인 placeholder 카드로 포함한다 —
@@ -78,17 +97,16 @@ async def list_story_cards(gateways: Gateways, user_id: uuid.UUID) -> list[Story
     이 placeholder를 완성된 카드로 자연스럽게 교체한다.
 
     아직 대화 중(OPEN)이거나 사용자에게 보여준 적도 없이 건너뛴(SKIPPED) 세션은
-    "끝난 이야기"가 아니므로 제외한다."""
-    sessions = await gateways.sessions.list_by_user(user_id)
+    "끝난 이야기"가 아니므로 제외한다(게이트웨이 쿼리 자체가 COMPLETED만 대상)."""
+    sessions = await gateways.sessions.list_completed_by_user(user_id, limit=limit, offset=offset)
+    total = await gateways.sessions.count_completed_by_user(user_id)
     cards: list[StoryCard] = []
     for session in sessions:
-        if session.status != SessionStatus.COMPLETED:
-            continue
         if session.session_prose is None:
             cards.append(await _to_placeholder_card(gateways, session))
         else:
             cards.append(await _to_story_card(gateways, session))
-    return cards
+    return StoryCardPage(items=cards, total=total)
 
 
 async def update_session_prose(

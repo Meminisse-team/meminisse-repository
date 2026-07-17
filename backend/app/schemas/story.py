@@ -21,6 +21,15 @@ class StoryCardRead(BaseModel):
     is_generating: bool = False
 
 
+class StoryCardPageRead(BaseModel):
+    """GET /stories 응답 봉투 — items는 이 페이지 분량(limit/offset), total은
+    이 유저의 완료된 세션 전체 개수(프론트 페이지 번호 UI의 총 페이지 수
+    계산용). app/services/story_service.py:StoryCardPage 참조."""
+
+    items: list[StoryCardRead]
+    total: int
+
+
 class StoryProseUpdate(BaseModel):
     """PATCH /stories/{session_id}. 사용자가 재조립된 산문을 직접 고쳐 저장할 때."""
 

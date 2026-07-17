@@ -17,7 +17,11 @@ const PAGE_SIZE = 7; // 한 창에 보여줄 산문 개수
 const PAGE_WINDOW = 5; // 페이지 번호를 한 번에 몇 개씩 보여줄지
 
 export default function StoriesPage() {
+  // 이제 "현재 페이지에 보일 7개"만 담는다 — 전체 목록을 받아 클라이언트에서
+  // 잘라내던 방식(stories.slice(...))은 페이지네이션이 UI에만 있고 실제 조회는
+  // 항상 전체였던 원인이라 제거했다(2026-07-17). 총 개수는 별도 total state로.
   const [stories, setStories] = useState<StoryCard[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +36,13 @@ export default function StoriesPage() {
     // 화면엔 옛 에러 문구가 그대로 남아 "안 눌리는 것처럼" 보인다(2026-07-15 피드백).
     setError(null);
     return storiesApi
-      .list()
-      .then(setStories)
+      .list({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+      .then((res) => {
+        setStories(res.items);
+        setTotal(res.total);
+      })
       .catch(() => setError("이야기를 불러오지 못했어요."));
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     setLoading(true);
@@ -87,14 +94,16 @@ export default function StoriesPage() {
       .finally(() => setSaving(false));
   }
 
-  const totalPages = Math.max(1, Math.ceil(stories.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // 목록이 새로고침되며 개수가 줄어들 수 있다(예: 마지막 페이지를 보던 중 데이터가
-  // 바뀜) — 그런 경우 현재 페이지가 범위를 벗어나지 않도록 보정한다.
+  // 바뀜) — 그런 경우 현재 페이지가 범위를 벗어나지 않도록 보정한다. 이 보정
+  // 자체가 setPage를 호출해 refresh를 다시 트리거하므로(page가 refresh의 의존성),
+  // 서버가 이미 돌려준 stories를 다시 자르는 게 아니라 새 offset으로 재요청한다.
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
 
-  const pageStories = stories.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageStories = stories;
 
   // 페이지 번호를 PAGE_WINDOW개씩 블록으로 나눠 보여준다(1~5, 6~10, ...).
   const blockIndex = Math.floor((page - 1) / PAGE_WINDOW);

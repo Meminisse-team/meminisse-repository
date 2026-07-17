@@ -156,9 +156,9 @@ async def test_completed_episode_session_appears_as_story_card() -> None:
         await gateways.sessions.complete(session.id)
         await gateways.commit()
 
-        cards = await story_service.list_story_cards(gateways, user.id)
+        page = await story_service.list_story_cards(gateways, user.id, limit=50, offset=0)
 
-        assert len(cards) == 1
-        assert cards[0].title == prompts.EPISODE_SESSION_OPENING
-        assert cards[0].prose == "직접 들려준 나만의 이야기."
-        assert cards[0].is_generating is False
+        assert len(page.items) == 1
+        assert page.items[0].title == prompts.EPISODE_SESSION_OPENING
+        assert page.items[0].prose == "직접 들려준 나만의 이야기."
+        assert page.items[0].is_generating is False

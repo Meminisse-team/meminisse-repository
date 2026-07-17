@@ -326,6 +326,32 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
         )
         return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
 
+    async def list_completed_by_user(
+        self, user_id: UUID, *, limit: int, offset: int
+    ) -> list[InterviewSessionRecord]:
+        result = await self._session.execute(
+            select(InterviewSession)
+            .where(
+                InterviewSession.user_id == user_id,
+                InterviewSession.status == SessionStatus.COMPLETED,
+            )
+            .order_by(InterviewSession.started_at.desc(), InterviewSession.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return [_to_session_record(s, chat_logs=[]) for s in result.scalars().all()]
+
+    async def count_completed_by_user(self, user_id: UUID) -> int:
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(InterviewSession)
+            .where(
+                InterviewSession.user_id == user_id,
+                InterviewSession.status == SessionStatus.COMPLETED,
+            )
+        )
+        return result.scalar_one()
+
     async def _require_session(self, session_id: UUID) -> InterviewSession:
         session_obj = await self._session.get(InterviewSession, session_id)
         if session_obj is None:

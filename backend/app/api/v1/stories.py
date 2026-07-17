@@ -7,19 +7,33 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUserDep, GatewaysDep
-from app.schemas.story import StoryCardRead, StoryProseUpdate
+from app.schemas.story import StoryCardPageRead, StoryCardRead, StoryProseUpdate
 from app.services import story_service
 
 router = APIRouter(prefix="/stories", tags=["stories"])
 
 
-@router.get("", response_model=list[StoryCardRead])
-async def list_stories(gateways: GatewaysDep, current_user: CurrentUserDep) -> list[StoryCardRead]:
-    cards = await story_service.list_story_cards(gateways, current_user.id)
-    return [StoryCardRead.model_validate(card) for card in cards]
+@router.get("", response_model=StoryCardPageRead)
+async def list_stories(
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+    limit: int = Query(7, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+) -> StoryCardPageRead:
+    """'나의 이야기' 탭 목록 — limit/offset으로 실제 DB 레벨 페이지네이션을
+    적용한다(예전엔 이 엔드포인트가 완료된 세션 전체를 매번 내려주고 프론트가
+    화면에 보일 7개만 잘라내는 방식이라, 세션이 많을수록 페이지를 넘겨도
+    체감 속도가 똑같았다 — story_service.list_story_cards 참조)."""
+    page = await story_service.list_story_cards(
+        gateways, current_user.id, limit=limit, offset=offset
+    )
+    return StoryCardPageRead(
+        items=[StoryCardRead.model_validate(card) for card in page.items],
+        total=page.total,
+    )
 
 
 @router.patch("/{session_id}", response_model=StoryCardRead)
