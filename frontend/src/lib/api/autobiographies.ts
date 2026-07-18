@@ -28,6 +28,13 @@ export const autobiographiesApi = {
     apiClient.post<{ detail: string }>(
       `/api/v1/autobiographies/${autobiographyId}/chapters/${chapterDraftId}/write`,
     ),
+  /** 완성된 자서전(final_content 존재)의 챕터 본문을 사용자가 직접 고쳐 저장한다.
+   * AI 재집필(writeChapter)과 달리 LLM 호출이 없어 동기(200)로 즉시 끝난다. */
+  updateChapterContent: (autobiographyId: string, chapterDraftId: string, content: string) =>
+    apiClient.patch<Autobiography>(
+      `/api/v1/autobiographies/${autobiographyId}/chapters/${chapterDraftId}/content`,
+      { content },
+    ),
   /** 202 — 마찬가지로 비동기. 완료되면 get()의 final_content가 채워진다. */
   finalize: (autobiographyId: string) =>
     apiClient.post<{ detail: string }>(`/api/v1/autobiographies/${autobiographyId}/finalize`),

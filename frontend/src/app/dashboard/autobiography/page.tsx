@@ -314,8 +314,13 @@ export default function AutobiographyPage() {
           chapters={chapters}
           busy={busy}
           pdfTriggered={pdfTriggered}
+          rewritingChapterIds={new Set(rewritingChapters.keys())}
           onGeneratePdf={handleGeneratePdf}
           onAutobiographyChange={setAutobiography}
+          onChapterContentSaved={(chapterId, content) =>
+            setChapters((prev) => prev.map((c) => (c.id === chapterId ? { ...c, content } : c)))
+          }
+          onRewrite={handleRewriteChapter}
         />
       ) : selectedIndex !== null ? (
         <ChapterProgress
@@ -747,15 +752,21 @@ function FinalManuscript({
   chapters,
   busy,
   pdfTriggered,
+  rewritingChapterIds,
   onGeneratePdf,
   onAutobiographyChange,
+  onChapterContentSaved,
+  onRewrite,
 }: {
   autobiography: Autobiography;
   chapters: ChapterDraft[];
   busy: boolean;
   pdfTriggered: boolean;
+  rewritingChapterIds: Set<string>;
   onGeneratePdf: () => void;
   onAutobiographyChange: (updated: Autobiography) => void;
+  onChapterContentSaved: (chapterId: string, content: string) => void;
+  onRewrite: (chapter: ChapterDraft) => void;
 }) {
   const pdfUrl = autobiography.pdf_url;
   return (
@@ -794,10 +805,157 @@ function FinalManuscript({
         )}
       </div>
 
-      <p className="whitespace-pre-wrap text-base leading-loose text-black/80">
-        {autobiography.final_content}
-      </p>
+      {chapters.length > 0 ? (
+        <ol className="flex flex-col gap-4">
+          {chapters.map((chapter) => (
+            <FinalChapterItem
+              key={chapter.id}
+              autobiographyId={autobiography.id}
+              chapter={chapter}
+              rewriting={rewritingChapterIds.has(chapter.id)}
+              onSaved={(content) => {
+                onChapterContentSaved(chapter.id, content);
+                onAutobiographyChange({
+                  ...autobiography,
+                  final_content: joinChaptersPreview(
+                    chapters.map((c) => (c.id === chapter.id ? { ...c, content } : c)),
+                  ),
+                });
+              }}
+              onRewrite={() => onRewrite(chapter)}
+            />
+          ))}
+        </ol>
+      ) : (
+        // chapters를 아직 못 불러온 드문 경우(직접 URL 진입 등)의 최소 폴백 — 편집은
+        // 챕터 단위라 여기서는 열람만 제공한다.
+        <p className="whitespace-pre-wrap text-base leading-loose text-black/80">
+          {autobiography.final_content}
+        </p>
+      )}
     </article>
+  );
+}
+
+/** 챕터를 직접 고친 직후 화면에 곧바로 반영하기 위한 미리보기 조립 — 서버가
+ * 응답으로 돌려주는 final_content와 같은 형식(backend _join_chapters_into_final_content
+ * 참조)을 프론트에서 재현한다. 다음 폴링/새로고침 때 서버 값으로 다시 덮인다. */
+function joinChaptersPreview(chapters: ChapterDraft[]): string {
+  return chapters
+    .map((chapter) => `[${chapter.chapter_index}장. ${chapter.title ?? ""}]\n${chapter.content ?? ""}`)
+    .join("\n\n");
+}
+
+/** 완성된 자서전 화면에서 챕터 하나를 보여주는 카드 — "직접 수정"(사용자가 텍스트를
+ * 바로 고쳐 저장, LLM 호출 없이 즉시 끝남)과 "AI로 다시 쓰기"(재집필, 기존 기능
+ * 유지)를 나란히 제공한다(2026-07-18). 두 액션은 배타적으로 노출한다 — 편집 중에
+ * 재집필을 누르면 방금 고친 내용이 AI 결과로 덮여 사라지므로 헷갈릴 수 있다. */
+function FinalChapterItem({
+  autobiographyId,
+  chapter,
+  rewriting,
+  onSaved,
+  onRewrite,
+}: {
+  autobiographyId: string;
+  chapter: ChapterDraft;
+  rewriting: boolean;
+  onSaved: (content: string) => void;
+  onRewrite: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(chapter.content ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function startEditing() {
+    setDraft(chapter.content ?? "");
+    setError(null);
+    setEditing(true);
+  }
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setError("본문을 비워둘 수는 없어요.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await autobiographiesApi.updateChapterContent(autobiographyId, chapter.id, trimmed);
+      onSaved(trimmed);
+      setEditing(false);
+    } catch {
+      setError("수정한 내용을 저장하지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <li className="rounded-2xl border border-black/10 p-6">
+      <h3 className="font-serif-kr text-lg text-black">
+        {chapter.chapter_index}장. {chapter.title ?? ""}
+      </h3>
+
+      {editing ? (
+        <div className="mt-4 flex flex-col gap-3">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={saving}
+            rows={12}
+            className="w-full rounded-xl border border-black/15 p-4 text-base leading-relaxed text-black outline-none focus:border-black disabled:opacity-60"
+          />
+          {error && <p className="text-sm text-black/60">{error}</p>}
+          <div className="flex items-center gap-3">
+            <Button onClick={() => void handleSave()} disabled={saving}>
+              {saving ? "저장하는 중..." : "저장"}
+            </Button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              disabled={saving}
+              className="text-sm text-black/50 underline underline-offset-4 hover:text-black/70 disabled:opacity-40"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-4 whitespace-pre-wrap text-base leading-loose text-black/80">
+            {rewriting ? (
+              <span className="flex items-center gap-2 text-black/40">
+                <Spinner />
+                <span className="animate-pulse">AI가 다시 쓰고 있어요...</span>
+              </span>
+            ) : (
+              chapter.content
+            )}
+          </p>
+          {!rewriting && (
+            <div className="mt-4 flex items-center gap-4">
+              <button
+                type="button"
+                onClick={startEditing}
+                className="text-sm text-black/50 underline underline-offset-4 hover:text-black/70"
+              >
+                직접 수정
+              </button>
+              <button
+                type="button"
+                onClick={onRewrite}
+                className="text-sm text-black/50 underline underline-offset-4 hover:text-black/70"
+              >
+                AI로 다시 쓰기
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </li>
   );
 }
 
