@@ -84,3 +84,8 @@ pytest-asyncio==0.24.0
 # precision/recall)와 G-Eval 서사일관성을 Solar를 judge LLM으로 삼아 측정한다.
 # 프로덕션 코드(app/)는 이 패키지에 의존하지 않는다 — evals/ 전용.
 deepeval==4.1.0
+
+# P3 비교 실험 설계(evals/baseline_ablation_comparison.py, README.md 6절) —
+# 베이스라인/어블레이션 조건 간 대응표본 유의성 검정(Wilcoxon 부호순위검정).
+# 프로덕션 코드(app/)는 이 패키지에 의존하지 않는다 — evals/ 전용.
+scipy==1.17.1

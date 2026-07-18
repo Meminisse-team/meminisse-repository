@@ -1,0 +1,360 @@
+{
+  "golden_set_size": 20,
+  "models": {
+    "solar-mini": {
+      "summary": {
+        "n": 20,
+        "accuracy": 0.95,
+        "false_grounded_count": 0,
+        "false_grounded_rate": 0.0,
+        "false_grounded_pair_ids": [],
+        "over_flagged_count": 1,
+        "over_flagged_rate": 0.1,
+        "over_flagged_pair_ids": [
+          "g05_emotion_inference_from_stated_outcome"
+        ]
+      },
+      "detail": [
+        {
+          "pair_id": "g01_sensory_detail",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g02_interior_monologue",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g03_paraphrase_relative_time",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g04_combining_two_facts",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g05_emotion_inference_from_stated_outcome",
+          "expected": "grounded",
+          "verdict": "notGrounded",
+          "correct": false,
+          "false_grounded": false,
+          "over_flagged": true
+        },
+        {
+          "pair_id": "g06_weather_consistent_with_scene",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g07_gesture_elaboration",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g08_summary_sentence",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g09_metaphor",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g10_cause_stated_explicitly",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n01_new_named_person",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n02_new_specific_date",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n03_new_location",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n04_fabricated_outcome",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n05_fabricated_dialogue",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n06_wrong_family_relation",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n07_new_number",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n08_new_event_entirely",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n09_wrong_cause_attribution",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n10_contradicted_emotion",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        }
+      ]
+    },
+    "solar-pro3": {
+      "summary": {
+        "n": 20,
+        "accuracy": 0.85,
+        "false_grounded_count": 2,
+        "false_grounded_rate": 0.2,
+        "false_grounded_pair_ids": [
+          "n02_new_specific_date",
+          "n09_wrong_cause_attribution"
+        ],
+        "over_flagged_count": 1,
+        "over_flagged_rate": 0.1,
+        "over_flagged_pair_ids": [
+          "g08_summary_sentence"
+        ]
+      },
+      "detail": [
+        {
+          "pair_id": "g01_sensory_detail",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g02_interior_monologue",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g03_paraphrase_relative_time",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g04_combining_two_facts",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g05_emotion_inference_from_stated_outcome",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g06_weather_consistent_with_scene",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g07_gesture_elaboration",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g08_summary_sentence",
+          "expected": "grounded",
+          "verdict": "notGrounded",
+          "correct": false,
+          "false_grounded": false,
+          "over_flagged": true
+        },
+        {
+          "pair_id": "g09_metaphor",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "g10_cause_stated_explicitly",
+          "expected": "grounded",
+          "verdict": "grounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n01_new_named_person",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n02_new_specific_date",
+          "expected": "notGrounded",
+          "verdict": "grounded",
+          "correct": false,
+          "false_grounded": true,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n03_new_location",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n04_fabricated_outcome",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n05_fabricated_dialogue",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n06_wrong_family_relation",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n07_new_number",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n08_new_event_entirely",
+          "expected": "notGrounded",
+          "verdict": "notSure",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n09_wrong_cause_attribution",
+          "expected": "notGrounded",
+          "verdict": "grounded",
+          "correct": false,
+          "false_grounded": true,
+          "over_flagged": false
+        },
+        {
+          "pair_id": "n10_contradicted_emotion",
+          "expected": "notGrounded",
+          "verdict": "notGrounded",
+          "correct": true,
+          "false_grounded": false,
+          "over_flagged": false
+        }
+      ]
+    }
+  }
+}
