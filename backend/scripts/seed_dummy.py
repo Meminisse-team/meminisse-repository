@@ -18,6 +18,9 @@ Meminisse 범용 더미 데이터 시드 스크립트
       --name "나폴레옹 보나파르트" \\
       --birth-year 1769 \\
       --hometown "코르시카 아작시오" \\
+      --education-level university \\
+      --marital-status married \\
+      --has-children true \\
       --file "C:\\경로\\나폴레옹_더미데이터.txt"
 
   # 도움말
@@ -64,6 +67,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.enums import (
+    EducationLevel,
     MaritalStatus,
     MessageRole,
     SessionStatus,
@@ -92,7 +96,14 @@ def parse_args() -> argparse.Namespace:
       --name "나폴레옹 보나파르트" \\
       --birth-year 1769 \\
       --hometown "코르시카 아작시오" \\
+      --education-level university \\
+      --marital-status married \\
+      --has-children true \\
       --file "C:\\경로\\나폴레옹_더미데이터.txt"
+
+교육 수준 선택값: elementary | middle_school | high_school | university | graduate_school
+혼인 여부 선택값: single | married | divorced | widowed
+자녀 여부 선택값: true | false
         """,
     )
 
@@ -135,6 +146,33 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="HOMETOWN",
         help="고향 (생략 시 NULL, 예: '코르시카 아작시오')",
+    )
+    parser.add_argument(
+        "--education-level",
+        default=None,
+        choices=[e.value for e in EducationLevel],
+        metavar="LEVEL",
+        help=(
+            "최종 학력 (생략 시 NULL). "
+            "선택값: elementary | middle_school | high_school | university | graduate_school"
+        ),
+    )
+    parser.add_argument(
+        "--marital-status",
+        default=None,
+        choices=[m.value for m in MaritalStatus],
+        metavar="STATUS",
+        help=(
+            "혼인 여부 (생략 시 NULL). "
+            "선택값: single | married | divorced | widowed"
+        ),
+    )
+    parser.add_argument(
+        "--has-children",
+        default=None,
+        choices=["true", "false"],
+        metavar="BOOL",
+        help="자녀 여부 (생략 시 NULL). 선택값: true | false",
     )
 
     return parser.parse_args()
@@ -235,6 +273,9 @@ async def insert_user(
     name: str,
     birth_year: int | None,
     hometown: str | None,
+    education_level: EducationLevel | None,
+    marital_status: MaritalStatus | None,
+    has_children: bool | None,
 ) -> User:
     """public.users 프로필 행 삽입."""
     user = User(
@@ -245,8 +286,9 @@ async def insert_user(
         hometown=hometown,
         current_stage=UserStage.INTERVIEW,
         role=UserRole.USER,
-        marital_status=MaritalStatus.MARRIED,
-        has_children=True,
+        education_level=education_level,
+        marital_status=marital_status,
+        has_children=has_children,
     )
     db.add(user)
     await db.flush()
@@ -351,6 +393,11 @@ async def verify(db: AsyncSession, user_id: uuid.UUID, expected_count: int) -> N
         print(f"  유저 생성 여부  : ✅ 존재 (email={user.email})")
         print(f"  유저 이름       : {user.name}")
         print(f"  유저 ID         : {user.id}")
+        print(f"  출생 연도       : {user.birth_year if user.birth_year else 'NULL'}")
+        print(f"  고향           : {user.hometown if user.hometown else 'NULL'}")
+        print(f"  최종 학력       : {user.education_level.value if user.education_level else 'NULL'}")
+        print(f"  혼인 여부       : {user.marital_status.value if user.marital_status else 'NULL'}")
+        print(f"  자녀 여부       : {user.has_children if user.has_children is not None else 'NULL'}")
     else:
         print("  유저 생성 여부  : ❌ 없음 (오류!)")
     print(f"  인터뷰 세션 수  : {len(sessions)}개")
@@ -407,6 +454,18 @@ async def main(args: argparse.Namespace) -> None:
                 name=args.name,
                 birth_year=args.birth_year,
                 hometown=args.hometown,
+                education_level=(
+                    EducationLevel(args.education_level)
+                    if args.education_level else None
+                ),
+                marital_status=(
+                    MaritalStatus(args.marital_status)
+                    if args.marital_status else None
+                ),
+                has_children=(
+                    args.has_children.lower() == "true"
+                    if args.has_children is not None else None
+                ),
             )
 
             question_map = await fetch_questions(db)
