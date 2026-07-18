@@ -112,6 +112,14 @@ class CustomizationConfirmRequest(BaseModel):
     concept: str
 
 
+class ChapterContentUpdate(BaseModel):
+    """PATCH /{autobiography_id}/chapters/{chapter_draft_id}/content — 완성된
+    자서전의 챕터를 사용자가 직접 고쳐 쓸 때. AI 재집필(POST .../write)과 달리
+    LLM 호출이 전혀 없는 순수 텍스트 저장이다."""
+
+    content: str = Field(..., min_length=1)
+
+
 class ChapterDraftRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

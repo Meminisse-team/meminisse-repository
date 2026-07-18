@@ -1561,6 +1561,15 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
     )
     await character_service.scan_and_classify_chapter(gateways, chapter=chapter, autobiography=autobiography)
 
+    # 이미 최종 윤문이 끝난 책(final_content 존재)에서 사용자가 개별 챕터를 다시
+    # 쓰면("이 챕터 다시 쓰기", 완성 후에도 유지되는 기능) final_content도 같이
+    # 새로 조립한다 — 안 그러면 웹에서 보는 최종본만 옛 본문에 머문다(PDF는
+    # chapter.content를 직접 읽으므로 원래 영향 없음, pdf_service 참조).
+    if autobiography.final_content is not None:
+        all_chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+        refreshed_final_content = _join_chapters_into_final_content(all_chapters)
+        await gateways.autobiographies.update(autobiography.id, final_content=refreshed_final_content)
+
     await gateways.commit()
     return chapter
 
@@ -1879,6 +1888,46 @@ def _split_revised_manuscript_by_chapter(
     return by_index
 
 
+def _join_chapters_into_final_content(chapters: list[ChapterDraftRecord]) -> str:
+    """챕터별 본문을 book 전체 final_content로 조립하는 단일 진실 원천 — 최초
+    윤문(finalize_manuscript)과 이후의 모든 챕터 단위 변경(직접 수정
+    edit_chapter_content, 완성 후 AI 재집필 write_chapter)이 이 함수 하나로
+    final_content를 다시 만든다. 형식이 두 곳 이상에 흩어져 있으면 한쪽만
+    고쳤을 때 웹 열람과 PDF가 다시 어긋날 위험이 있어(2026-07-18에 고쳤던 바로
+    그 문제) 반드시 이 헬퍼를 거치게 한다."""
+    return "\n\n".join(
+        f"[{chapter.chapter_index}장. {chapter.title}]\n{chapter.content}" for chapter in chapters
+    )
+
+
+async def edit_chapter_content(
+    gateways: Gateways, autobiography_id: uuid.UUID, chapter_draft_id: uuid.UUID, content: str
+) -> AutobiographyRecord:
+    """완성된 자서전의 챕터 본문을 사용자가 직접 고쳐 쓴다(2026-07-18, '나의 자서전'
+    직접 수정 기능). AI 재집필(write_chapter)과 달리 LLM·외부 API 호출이 전혀
+    없는 순수 텍스트 저장이라 요청이 즉시 끝난다 — 느린 외부 호출을 기다리며 DB
+    세션을 오래 붙잡다 Supabase가 idle 커넥션을 끊어버리는 문제
+    (interview_service.add_user_turn 모듈 docstring 참조: 예전에 세션 대화 저장
+    경로에서 실제로 겪었던 사고)가 애초에 발생할 여지가 없다 — 이 함수 전체가
+    조회 몇 번 + 텍스트 조립 + 커밋 하나뿐이다.
+
+    아직 최종 윤문(finalize_manuscript)이 끝나지 않은 자서전은 이 경로를 쓰지
+    않는다 — 그 단계에서는 챕터별 검토·재집필만 가능하고, 최종본이 나온 뒤에야
+    "완성된 자서전을 직접 고친다"는 개념이 성립한다(호출부인 API 라우터가 이
+    선행 조건을 확인한다)."""
+    chapter = await get_chapter_draft(gateways, chapter_draft_id)
+    if chapter is None or chapter.autobiography_id != autobiography_id:
+        raise ValueError(f"자서전 {autobiography_id}에 속한 챕터 {chapter_draft_id}를 찾을 수 없습니다.")
+
+    await gateways.chapters.update_content(chapter_draft_id, content)
+    chapters = await gateways.chapters.list_by_autobiography(autobiography_id)
+    final_content = _join_chapters_into_final_content(chapters)
+
+    autobiography = await gateways.autobiographies.update(autobiography_id, final_content=final_content)
+    await gateways.commit()
+    return autobiography
+
+
 async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -> AutobiographyRecord:
     """
     Phase 4 통일성 윤문 패스: 전 챕터 생성 후 인접 챕터 경계부와 스타일 바이블을
@@ -1943,10 +1992,8 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
     if revised_by_index is not None:
         for chapter in chapters:
             await gateways.chapters.update_content(chapter.id, revised_by_index[chapter.chapter_index])
-        final_content = "\n\n".join(
-            f"[{chapter.chapter_index}장. {chapter.title}]\n{revised_by_index[chapter.chapter_index]}"
-            for chapter in chapters
-        )
+        chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+        final_content = _join_chapters_into_final_content(chapters)
     else:
         logger.warning(
             "통일성 윤문 응답의 챕터 마커가 어긋나(autobiography_id=%s) 챕터 되써넣기를 건너뛰고 "

@@ -6,6 +6,7 @@ from app.api.deps import CurrentUserDep, GatewaysDep, require_self
 from app.gateways.dto import AutobiographyRecord, UserRecord
 from app.schemas.autobiography import (
     AutobiographyRead,
+    ChapterContentUpdate,
     ChapterDraftRead,
     CustomizationConfirmRequest,
     CustomizationOptionItem,
@@ -255,6 +256,37 @@ async def write_chapter(
 
     write_chapter_task.delay(str(chapter_draft_id))
     return {"detail": "Chapter writing queued"}
+
+
+@router.patch("/{autobiography_id}/chapters/{chapter_draft_id}/content", response_model=AutobiographyRead)
+async def update_chapter_content(
+    autobiography_id: uuid.UUID,
+    chapter_draft_id: uuid.UUID,
+    payload: ChapterContentUpdate,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> AutobiographyRead:
+    """완성된 자서전의 챕터 본문을 사용자가 직접 고쳐 저장한다("나의 자서전" 직접
+    수정 — AI 재집필(POST .../write)과는 별개 기능으로 둘 다 계속 쓸 수 있다).
+
+    이 요청은 LLM/외부 API를 전혀 호출하지 않는 즉시 완료되는 단순 텍스트
+    저장이다(autobiography_service.edit_chapter_content 참조) — 세션 대화 저장
+    경로에서 예전에 실제로 겪었던 "느린 외부 호출을 기다리며 DB 트랜잭션을
+    오래 열어둬 Supabase가 idle 커넥션을 끊어버리는" 문제(interview_service.
+    add_user_turn 모듈 docstring)가 애초에 발생할 여지가 없도록 설계했다."""
+    autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
+    chapter = await autobiography_service.get_chapter_draft(gateways, chapter_draft_id)
+    if chapter is None or chapter.autobiography_id != autobiography_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 챕터를 찾을 수 없습니다.")
+    if not autobiography.final_content:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "최종본이 완성된 뒤에만 직접 수정할 수 있습니다."
+        )
+
+    updated = await autobiography_service.edit_chapter_content(
+        gateways, autobiography_id, chapter_draft_id, payload.content
+    )
+    return AutobiographyRead.model_validate(updated)
 
 
 @router.post("/{autobiography_id}/finalize", status_code=status.HTTP_202_ACCEPTED)
