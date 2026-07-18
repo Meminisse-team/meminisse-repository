@@ -36,6 +36,13 @@ class ChatMessageCreate(BaseModel):
     content: str
 
 
+class MustIncludeUpdate(BaseModel):
+    """PATCH /interview-sessions/{id}/must-include 바디 — '나의 이야기'에서 이
+    이야기를 자서전에 꼭 수록하고 싶다고 표시(또는 해제)한다."""
+
+    value: bool
+
+
 class ChatMessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

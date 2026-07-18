@@ -49,10 +49,8 @@ async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
 
 
 async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
-    if schema_name == "tier1_detection":
-        return {"strong_negative_emotion": False}
-    if schema_name == "slot_gating":
-        return {"newly_filled_slots": []}
+    if schema_name == "turn_gating":
+        return {"strong_negative_emotion": False, "newly_filled_slots": []}
     if schema_name == "contextual_followup":
         return {"has_followup": False, "question": None}
     raise AssertionError(f"unexpected schema_name: {schema_name}")

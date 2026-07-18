@@ -274,10 +274,11 @@ def test_llm_contextual_followup_is_asked_before_wrap_up(client: TestClient) -> 
     ).json()
 
     async def _fake_structured_with_contextual(messages, *, schema_name, json_schema, **kwargs):
-        if schema_name == "tier1_detection":
-            return {"strong_negative_emotion": False}
-        if schema_name == "slot_gating":
-            return {"newly_filled_slots": list(prompts.REQUIRED_SLOTS.keys())}
+        if schema_name == "turn_gating":
+            return {
+                "strong_negative_emotion": False,
+                "newly_filled_slots": list(prompts.REQUIRED_SLOTS.keys()),
+            }
         if schema_name == "contextual_followup":
             return {"has_followup": True, "question": "그때 아버지 표정은 어떠셨어요?"}
         raise AssertionError(f"unexpected schema_name: {schema_name}")
@@ -306,10 +307,11 @@ def test_llm_contextual_followup_falls_through_to_wrap_up_in_same_turn_when_noth
     ).json()
 
     async def _fake_structured_no_contextual(messages, *, schema_name, json_schema, **kwargs):
-        if schema_name == "tier1_detection":
-            return {"strong_negative_emotion": False}
-        if schema_name == "slot_gating":
-            return {"newly_filled_slots": list(prompts.REQUIRED_SLOTS.keys())}
+        if schema_name == "turn_gating":
+            return {
+                "strong_negative_emotion": False,
+                "newly_filled_slots": list(prompts.REQUIRED_SLOTS.keys()),
+            }
         if schema_name == "contextual_followup":
             return {"has_followup": False, "question": None}
         raise AssertionError(f"unexpected schema_name: {schema_name}")

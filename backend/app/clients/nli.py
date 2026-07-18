@@ -13,8 +13,10 @@
 검증 완료, 2026-07-11). transformers의 동기 추론을 asyncio.to_thread로 감싸 이벤트
 루프를 막지 않는다(app/clients/s3.py의 boto3 래핑과 동일한 패턴).
 
-app/services/event_extraction_service.py(왜곡 탐지)와
-app/services/autobiography_service.py(근거 검증) 양쪽에서 이 모듈을 사용한다.
+app/services/event_extraction_service.py(산문 재조립 왜곡 탐지)가 이 모듈의 유일한
+사용처다 — 자서전 근거 검증(autobiography_service)도 원래 이 모듈을 썼지만, 정당한
+문학적 정교화까지 전부 플래그되는 도구 부적합 문제로 Solar LLM 판정으로 교체됐다
+(2026-07-17, autobiography_service._run_groundedness_check docstring 참조).
 """
 
 from __future__ import annotations
@@ -52,27 +54,6 @@ def _load():
     return tokenizer, model
 
 
-def _classify_sync(premise: str, hypothesis: str) -> dict[str, float]:
-    import torch
-
-    tokenizer, model = _load()
-    inputs = tokenizer(
-        premise, hypothesis, return_tensors="pt", truncation=True, max_length=_MAX_LENGTH
-    )
-    with torch.no_grad():
-        logits = model(**inputs).logits
-    probs = torch.softmax(logits, dim=-1)[0]
-    return {model.config.id2label[i]: float(p) for i, p in enumerate(probs)}
-
-
-async def classify_entailment(*, premise: str, hypothesis: str) -> dict[str, float]:
-    """premise가 hypothesis를 함의(entailment)/무관(neutral)/모순(contradiction)
-    중 무엇으로 관계 맺는지 확률 분포로 반환한다.
-    예: {"entailment": 0.91, "neutral": 0.08, "contradiction": 0.01}
-    """
-    return await asyncio.to_thread(_classify_sync, premise, hypothesis)
-
-
 def _classify_batch_sync(premise: str, hypotheses: list[str]) -> list[dict[str, float]]:
     import torch
 
@@ -96,13 +77,17 @@ def _classify_batch_sync(premise: str, hypotheses: list[str]) -> list[dict[str, 
 async def classify_entailment_batch(
     *, premise: str, hypotheses: list[str]
 ) -> list[dict[str, float]]:
-    """classify_entailment을 문장 수만큼 순차 호출하면 문장당 모델 forward pass
-    오버헤드가 그대로 곱해져 느리다(CPU 환경에서 문장 하나에 수 초~10여 초 소요를
-    실측, 2026-07-12 — evals/run_benchmark.py 합성 페르소나 벤치마크 파일럿 중
-    발견). 같은 premise에 대해 여러 hypothesis를 한 배치로 묶어 forward pass
-    한 번으로 처리하면 토큰화·모델 오버헤드가 문장 수가 아니라 배치 1회로
-    상각되어 훨씬 빠르다. event_extraction_service._passes_distortion_check처럼
-    "같은 premise, 여러 문장"을 검증하는 호출부는 이 배치 버전을 써야 한다."""
+    """문장별로 단건 추론을 순차 호출하면 문장당 모델 forward pass 오버헤드가
+    그대로 곱해져 느리다(CPU 환경에서 문장 하나에 수 초~10여 초 소요를 실측,
+    2026-07-12 — evals/run_benchmark.py 합성 페르소나 벤치마크 파일럿 중 발견).
+    같은 premise에 대해 여러 hypothesis를 한 배치로 묶어 forward pass 한 번으로
+    처리하면 토큰화·모델 오버헤드가 문장 수가 아니라 배치 1회로 상각되어 훨씬
+    빠르다 — 그래서 단건 버전(classify_entailment)은 아예 없애고 이 배치 버전만
+    둔다(2026-07-18, 프로덕션 호출부는 event_extraction_service.
+    _passes_distortion_check 하나뿐).
+
+    반환값의 각 원소는 함의/무관/모순 확률 분포다.
+    예: {"entailment": 0.91, "neutral": 0.08, "contradiction": 0.01}"""
     if not hypotheses:
         return []
     return await asyncio.to_thread(_classify_batch_sync, premise, hypotheses)

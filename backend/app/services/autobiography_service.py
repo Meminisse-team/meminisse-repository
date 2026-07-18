@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import logging
 import re
 import statistics
 import uuid
@@ -39,6 +40,8 @@ from app.gateways.dto import (
 from app.gateways.factory import Gateways
 from app.models.enums import AssetType, AutobiographyStatus, DraftStatus, LifeMilestoneCategory, UserStage
 from app.services import character_service
+
+logger = logging.getLogger(__name__)
 
 # Phase 3 이벤트 병합: 이 값보다 코사인 거리가 가까운(=유사한) 쌍만 LLM 병합 판정에
 # 회부한다. Upstage 임베딩 실측 전 잠정값 — 실제 임베딩으로 캘리브레이션 필요.
@@ -66,6 +69,56 @@ CHAPTER_RETRIEVAL_LIMIT = 20
 # 기회를 준다. 그 이상은 비용 대비 개선이 없어 잔여 플래그를 리포트에 남기고 끝낸다.
 MAX_REPAIR_PASSES = 2
 
+# 챕터 초안이 이 길이(공백 포함 문자 수) 미만이면 "새 사건 추가 금지, 기존 장면
+# 정교화만" 조건의 확장 패스를 1회 실행한다. 프롬프트 목표는 4,000~6,000자인데
+# 실제 출력이 평균 2,421자에 그치는 문제가 실측됐다(2026-07-18 호킹 계정) —
+# 하한 4,000이 아니라 3,000을 기준으로 삼는 이유는, 목표에 살짝 못 미치는
+# 초안까지 전부 재호출하는 비용을 피하고 심각한 미달만 구제하기 위해서다.
+MIN_CHAPTER_CHARS_BEFORE_EXPANSION = 3000
+
+# 검수(교열) 패스 결과가 원본 대비 이 비율을 넘게 길이가 변하면 교열 범위를
+# 벗어나 개고를 한 것으로 보고 원본을 유지한다(폭주 방어).
+PROOFREAD_MAX_LENGTH_DRIFT = 0.3
+
+# 검수 패스에 "완화 대상 반복 표현"으로 지목할 기준 — 본문에서 이 횟수 이상
+# 등장한 한글 단어를 결정론적으로 세어 프롬프트에 넘긴다("같은 표현 반복 완화"
+# 일반 지시만으로는 '덤' 4회 남발이 그대로 남던 실측 대응, 2026-07-18).
+_OVERUSED_TERM_MIN_COUNT = 4
+_OVERUSED_TERM_LIMIT = 5
+# 반복이 자연스러운 고빈도 일반어 — 반복 표현 후보에서 제외한다.
+_OVERUSED_TERM_STOPWORDS = frozenset({
+    "나는", "내가", "나의", "그리고", "하지만", "그때", "그날", "있었다", "없었다",
+    "했다", "것이", "우리는", "우리가", "지금도", "여전히", "함께", "속에서", "위에",
+})
+_KOREAN_WORD_PATTERN = re.compile(r"[가-힣]{2,}")
+
+
+def _strip_prompt_section_echo(text: str, *, body_marker: str) -> str:
+    """검수/확장 모델이 user 메시지의 섹션 헤더("[챕터 본문]" 등)를 출력에 그대로
+    되돌려보내는 에코 방어(2026-07-18 라이브 실측 — 7장 본문에 "[완화 대상 반복
+    표현 …]" 블록이 통째로 저장됨). body_marker가 출력에 남아 있으면 그 뒤부터가
+    실제 본문이다 — 마커 앞의 모든 에코(지시 블록 포함)를 버린다."""
+    if body_marker in text:
+        text = text.split(body_marker, 1)[1]
+    return text.strip()
+
+
+def _count_overused_terms(content: str) -> list[str]:
+    """본문에서 _OVERUSED_TERM_MIN_COUNT회 이상 등장한 한글 단어(불용어 제외)를
+    빈도 내림차순 상위 _OVERUSED_TERM_LIMIT개까지 반환한다. 조사·어미가 붙은
+    변형까지 묶는 형태소 분석은 하지 않는다 — 검수 프롬프트에 지목할 후보만
+    뽑으면 되는 저비용 휴리스틱이라 완벽할 필요가 없다."""
+    counts: dict[str, int] = {}
+    for word in _KOREAN_WORD_PATTERN.findall(content):
+        if word in _OVERUSED_TERM_STOPWORDS:
+            continue
+        counts[word] = counts.get(word, 0) + 1
+    frequent = [
+        (word, count) for word, count in counts.items() if count >= _OVERUSED_TERM_MIN_COUNT
+    ]
+    frequent.sort(key=lambda item: (-item[1], item[0]))
+    return [word for word, _ in frequent[:_OVERUSED_TERM_LIMIT]]
+
 # 자서전 집필 시작 가능 기준 — 완료된 세션(재조립 산문)이 이 개수 이상 쌓여야
 # 재료가 충분하다고 보고 "자서전 집필"을 열어준다(2026-07-17 제품 결정). 130은
 # 고정 질문 100개 + 사진/에피소드 세션을 더한 대략적인 전체 목표치로, 이 값
@@ -83,6 +136,11 @@ _CITATION_TAG_PATTERN = re.compile(r"\[E(\d+)\]")
 # UNITY_REVISION_SYSTEM_PROMPT가 이 마커를 최종 출력에 남기지 말라고 명시하지만,
 # LLM이 지시를 어기는 경우를 대비한 안전망이다.
 _PART_MARKER_PATTERN = re.compile(r"^=== ?PART\s+\d+:.*?===\s*$\n?", re.MULTILINE)
+
+# 최종 통일성 윤문의 챕터 경계 마커/헤더(UNITY_REVISION_SYSTEM_PROMPT 출력 규약과
+# 쌍). finalize_manuscript가 윤문 결과를 챕터별로 되나누는 데 쓴다(2026-07-18).
+_CHAPTER_MARKER_PATTERN = re.compile(r"^<<<CHAPTER\s*(\d+)>>>\s*$", re.MULTILINE)
+_CHAPTER_HEADER_PATTERN = re.compile(r"^\[\d+장\.[^\]]*\]\s*$\n?", re.MULTILINE)
 
 
 def _now_iso() -> str:
@@ -508,10 +566,15 @@ async def _merge_duplicate_events(gateways: Gateways, user_id: uuid.UUID) -> Non
             max_distance=EVENT_MERGE_CANDIDATE_MAX_DISTANCE,
             limit=EVENT_MERGE_CANDIDATE_LIMIT,
         )
-        for candidate in candidates:
-            if candidate.id in merged_ids:
-                continue
-            if await _judge_same_event(canonical, candidate):
+        # 같은 canonical에 대한 후보 판정들은 서로 독립이라 병렬로 돌린다(2026-07-18
+        # — 순차 LLM 호출이 병합 단계의 주 병목이었다). canonical 간 순서는
+        # merged_ids 의존성(이미 흡수된 이벤트 건너뛰기) 때문에 그대로 순차 유지.
+        fresh_candidates = [c for c in candidates if c.id not in merged_ids]
+        verdicts = await asyncio.gather(
+            *(_judge_same_event(canonical, candidate) for candidate in fresh_candidates)
+        )
+        for candidate, same_event in zip(fresh_candidates, verdicts):
+            if same_event:
                 await gateways.events.mark_duplicate(candidate.id, duplicate_of_event_id=canonical.id)
                 merged_ids.add(candidate.id)
 
@@ -735,13 +798,35 @@ async def select_toc_candidate(
     # 때문에 "옥스퍼드에서 태어났다"는 근거를 "도서관에서 태어났다"로 구체화해
     # 지어내는 환각이 실사용 중 확인됐다(2026-07-17) — 새 검색 호출 없이 이미
     # 여기서 구하는 chapter_events를 재사용해 근거를 붙여준다.
+    # 임베딩 HTTP 호출은 서로 독립이라 전 챕터 분량을 병렬로 먼저 구하고, DB 검색만
+    # 같은 세션을 공유하는 제약 때문에 순차로 돈다(2026-07-18 — 이전엔 임베딩까지
+    # 챕터당 순차 실행이라 19장 기준 임계 경로가 ~30초씩 걸렸다).
+    chapter_titles = [chapter_data.get("title") or "" for chapter_data in chosen["chapters"]]
+    embedded_vectors = iter(
+        await asyncio.gather(
+            *(embeddings_client.embed_query(title) for title in chapter_titles if title)
+        )
+    )
+    chapter_vectors = [next(embedded_vectors) if title else None for title in chapter_titles]
+
     chapter_events: list[list[EventRecord]] = []
-    for chapter_data in chosen["chapters"]:
+    # 주의: 루프 변수를 title로 쓰면 위의 책 제목(title)을 가려버린다 — 실제로
+    # 책 제목이 마지막 챕터 제목으로 저장되는 회귀를 테스트가 잡아냈다(2026-07-18).
+    for chapter_title, vector in zip(chapter_titles, chapter_vectors):
         chapter_events.append(
             await _retrieve_events_for_chapter(
-                gateways, autobiography.user_id, chapter_data.get("title") or ""
+                gateways, autobiography.user_id, chapter_title, query_vector=vector
             )
         )
+
+    # 배타적 배정: 같은 사건이 여러 챕터의 검색 결과에 들어 있으면 가장 관련도
+    # 높은 챕터 하나에만 남긴다 — 이 배정 결과가 시놉시스 생성과 ChapterDraft
+    # 저장(source_event_ids)에 함께 쓰여, 이후 write_chapter의 집필 재료와
+    # 시놉시스의 설계 재료가 항상 일치한다. 이어서 시기 정합 보정: 검색 순위가
+    # 시기를 무시하고 엉뚱한 챕터에 배정한 사건을 연도 중앙값 기준으로 재배치.
+    retrieved_chapter_events = chapter_events
+    chapter_events = _assign_events_to_chapters(retrieved_chapter_events)
+    chapter_events = _rebalance_assignment_by_year(chapter_events, retrieved_chapter_events)
 
     part_synopses = await _generate_part_synopses(book_synopsis, chosen, chapter_events)
     if part_synopses:
@@ -762,6 +847,7 @@ async def select_toc_candidate(
                 event_summaries=[event.one_line_summary for event in events],
                 connecting_thread=chapter_data.get("connecting_thread"),
                 part_context=_part_context_from_selected(chosen, chapter_data["chapter_index"]),
+                time_scope=_chapter_time_scope(events),
             )
             for chapter_data, events in zip(chosen["chapters"], chapter_events)
         )
@@ -775,8 +861,11 @@ async def select_toc_candidate(
                 chapter_index=chapter_data["chapter_index"],
                 title=chapter_data["title"],
                 synopsis=synopsis,
+                source_event_ids=[event.id for event in events],
             )
-            for chapter_data, synopsis in zip(chosen["chapters"], chapter_synopses)
+            for chapter_data, synopsis, events in zip(
+                chosen["chapters"], chapter_synopses, chapter_events
+            )
         ],
     )
 
@@ -989,7 +1078,11 @@ async def _generate_book_title(autobiography: AutobiographyRecord, selected_toc:
 
 
 async def _retrieve_events_for_chapter(
-    gateways: Gateways, user_id: uuid.UUID, chapter_title: str
+    gateways: Gateways,
+    user_id: uuid.UUID,
+    chapter_title: str,
+    *,
+    query_vector: list[float] | None = None,
 ) -> list[EventRecord]:
     """
     하이브리드 검색(의미 검색 + 키워드 정확 매칭). ChapterDraft는 theme_keywords를
@@ -998,13 +1091,18 @@ async def _retrieve_events_for_chapter(
     받는 이유: select_toc_candidate가 ChapterDraft 생성 전(목차 후보 dict 단계)에도
     같은 검색으로 챕터 시놉시스 재료를 소환해야 하기 때문.
 
+    query_vector: 호출부가 제목 임베딩을 미리(예: 여러 챕터 분량을 병렬로) 구해뒀으면
+    주입한다 — 없으면 여기서 단건 임베딩한다(select_toc_candidate가 19개 챕터를
+    순차 임베딩하며 임계 경로가 늘어나던 문제의 병렬화 지점, 2026-07-18).
+
     두 축 모두 EventGateway.search_verified/search_by_keywords를 통하므로 Layer 1
     검증 게이트(verified=True, duplicate_of_event_id IS NULL)가 항상 적용된다.
     """
     query_text = chapter_title
     semantic_events: list[EventRecord] = []
     if query_text:
-        query_vector = await embeddings_client.embed_query(query_text)
+        if query_vector is None:
+            query_vector = await embeddings_client.embed_query(query_text)
         semantic_events = await gateways.events.search_verified(
             user_id=user_id, query_embedding=query_vector, limit=CHAPTER_RETRIEVAL_LIMIT
         )
@@ -1023,6 +1121,160 @@ async def _retrieve_events_for_chapter(
     if not merged_ids:
         return []
     return await gateways.events.list_by_ids(merged_ids)
+
+
+# 배타적 배정 후 이벤트가 하나도 안 남은 챕터의 폴백: 원래 검색 결과 상위 N개를
+# 그대로 남긴다(이때만 다른 챕터와의 중복 허용 — 빈 챕터로 집필이 통째로
+# 무너지는 것보다 낫다).
+_MIN_EVENTS_PER_CHAPTER_FALLBACK = 3
+
+# 연도 기반 배정 보정(_rebalance_assignment_by_year)의 허용 이격 — 이벤트 연도가
+# 배정된 챕터의 중앙값 연도와 이보다 크게 벌어져 있고, 검색 결과에 함께 올랐던
+# 다른 챕터의 중앙값이 더 가까우면 그쪽으로 옮긴다. 2026-07-18 실측 오배정
+# (1979년 루카스 임명식 사건이 1967년 중심의 3장에 배정) 대응.
+_ASSIGNMENT_YEAR_TOLERANCE = 8
+
+# 서기 연도 후보(1800~2099). occurred_at_label 자유 문자열에서의 폴백 추출용 —
+# 정규화된 값은 이벤트 추출 단계의 labels.estimated_year_start가 우선이다.
+_YEAR_IN_LABEL_PATTERN = re.compile(r"(1[89]\d{2}|20\d{2})")
+
+
+def _event_estimated_year(event: EventRecord) -> int | None:
+    """이벤트의 대표 연도. 1순위는 추출 단계가 정규화한 labels.estimated_year_start
+    (2026-07-18 스키마 확장 — 신규 추출분부터 존재), 폴백은 occurred_at_label
+    문자열 속 4자리 연도다(기존 데이터 커버)."""
+    year = (event.labels or {}).get("estimated_year_start")
+    if isinstance(year, int):
+        return year
+    if event.occurred_at_label:
+        match = _YEAR_IN_LABEL_PATTERN.search(event.occurred_at_label)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _rebalance_assignment_by_year(
+    assigned: list[list[EventRecord]],
+    retrieved: list[list[EventRecord]],
+) -> list[list[EventRecord]]:
+    """배타적 배정(_assign_events_to_chapters)의 시기 정합 보정 1패스.
+
+    순위 기반 배정은 중복은 막지만 "엉뚱한 챕터가 가져가는" 오배정은 못 막는다
+    (2026-07-18 실측: 루카스 석좌 임명식(1979)이 검색 순위 때문에 아들 출생
+    챕터(1967 중심)에 배정돼 그 챕터가 임명식 장면으로 시작함). 배정 스냅샷
+    기준으로 챕터별 중앙값 연도를 구하고, 자기 챕터 중앙값과 허용 이격
+    (_ASSIGNMENT_YEAR_TOLERANCE) 초과로 벌어진 이벤트를 — 원 검색 결과에 함께
+    올랐던 챕터 중 중앙값이 가장 가까운 곳으로 옮긴다. 중앙값·이동 판단 모두
+    보정 전 스냅샷 기준이라 입력이 같으면 결과도 항상 같다(결정론). 옮긴 뒤
+    빈 챕터가 되는 이동은 하지 않는다."""
+    year_lists = [[_event_estimated_year(e) for e in events] for events in assigned]
+    medians: list[float | None] = []
+    for years in year_lists:
+        known = [y for y in years if y is not None]
+        medians.append(statistics.median(known) if known else None)
+
+    appears_in: dict[uuid.UUID, list[int]] = {}
+    for pos, events in enumerate(retrieved):
+        for event in events:
+            appears_in.setdefault(event.id, []).append(pos)
+
+    rebalanced = [list(events) for events in assigned]
+    for pos, events in enumerate(assigned):
+        median = medians[pos]
+        if median is None:
+            continue
+        for event, year in zip(events, year_lists[pos]):
+            if year is None:
+                continue
+            gap = abs(year - median)
+            if gap <= _ASSIGNMENT_YEAR_TOLERANCE:
+                continue
+            best_pos, best_gap = pos, gap
+            for alt in appears_in.get(event.id, []):
+                alt_median = medians[alt]
+                if alt == pos or alt_median is None:
+                    continue
+                alt_gap = abs(year - alt_median)
+                if alt_gap < best_gap:
+                    best_pos, best_gap = alt, alt_gap
+            if best_pos != pos and len(rebalanced[pos]) > 1:
+                rebalanced[pos].remove(event)
+                rebalanced[best_pos].append(event)
+                logger.info(
+                    "배정 시기 보정: 사건(연도 %d)을 챕터 순번 %d(중앙값 %.0f) → %d(중앙값 %.0f)로 이동",
+                    year, pos, median, best_pos, medians[best_pos],
+                )
+    return rebalanced
+
+
+def _assign_events_to_chapters(
+    chapter_events: list[list[EventRecord]],
+) -> list[list[EventRecord]]:
+    """챕터별 검색 결과(챕터 간 중복 포함)를 받아 각 이벤트를 정확히 한 챕터에만
+    배정한다. 같은 사건(루카스 석좌 임명 등)이 여러 챕터에서 각각 소환돼 반복
+    서술되는 문제(2026-07-17 호킹 계정 실측: 같은 결혼식 문장이 3장과 9장에 거의
+    동일하게 등장)를 검색 레이어에서 결정론적으로 차단한다.
+
+    배정 규칙: 이벤트가 여러 챕터의 검색 결과에 등장하면 검색 순위(리스트 내
+    인덱스, 낮을수록 관련도 높음)가 가장 좋은 챕터가 가져간다. 동순위면 앞
+    챕터 우선 — 입력이 같으면 결과도 항상 같다(전 챕터 병렬 집필과 무관하게
+    결정적)."""
+    best: dict[uuid.UUID, tuple[int, int]] = {}
+    for chapter_pos, events in enumerate(chapter_events):
+        for rank, event in enumerate(events):
+            claim = (rank, chapter_pos)
+            if event.id not in best or claim < best[event.id]:
+                best[event.id] = claim
+
+    assigned: list[list[EventRecord]] = []
+    for chapter_pos, events in enumerate(chapter_events):
+        kept = [
+            event for rank, event in enumerate(events) if best[event.id] == (rank, chapter_pos)
+        ]
+        if not kept and events:
+            kept = events[:_MIN_EVENTS_PER_CHAPTER_FALLBACK]
+            logger.info(
+                "챕터(순번 %d) 배타적 배정 결과가 비어 검색 상위 %d개로 폴백(중복 허용)",
+                chapter_pos,
+                len(kept),
+            )
+        assigned.append(kept)
+    return assigned
+
+
+def _chapter_time_scope(events: list[EventRecord]) -> str | None:
+    """배정된 사건들의 시기 라벨(occurred_at_label)을 모아 챕터의 시간 범위 문자열로
+    만든다. 집필·시놉시스 프롬프트에 "이 범위 밖 시기는 새 장면으로 서술 금지"
+    지시와 함께 주입된다 — 한 챕터가 생애 후반부 전체를 흡수하는 스코프 폭주
+    (호킹 계정 7장: 1963년 진단 챕터가 임종 직전까지 서술) 방지용."""
+    labels = list(
+        dict.fromkeys(
+            event.occurred_at_label.strip()
+            for event in events
+            if event.occurred_at_label and event.occurred_at_label.strip()
+        )
+    )
+    if not labels:
+        return None
+    return ", ".join(labels)
+
+
+def _other_chapter_titles(autobiography: AutobiographyRecord, chapter_index: int) -> list[str]:
+    """선택된 목차에서 이 챕터를 제외한 나머지 챕터 제목 목록. 집필 프롬프트에
+    "다른 챕터에서 다룰 주제 — 이 챕터에서 본격 서술 금지"로 주입된다.
+    _chapter_connecting_thread와 동일한 toc_data JSON 읽기 패턴."""
+    toc_data = autobiography.toc_data
+    if not toc_data or toc_data.get("selected_candidate_index") is None:
+        return []
+    candidates = toc_data.get("candidates", [])
+    selected_index = toc_data["selected_candidate_index"]
+    if not (0 <= selected_index < len(candidates)):
+        return []
+    return [
+        f"{chapter['chapter_index']}장. {chapter.get('title') or ''}"
+        for chapter in candidates[selected_index].get("chapters", [])
+        if chapter.get("chapter_index") != chapter_index
+    ]
 
 
 async def _previous_chapter_summary(
@@ -1146,10 +1398,18 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
 
     style_bible_text = (autobiography.style_bible or {}).get("content", "")
 
-    retrieved_events = await _retrieve_events_for_chapter(
-        gateways, autobiography.user_id, chapter.title or ""
-    )
+    # select_toc_candidate가 배타적 배정으로 저장해 둔 사건이 있으면 그대로 쓴다
+    # (재검색하면 다른 챕터에 배정된 사건이 다시 섞여 들어와 배정이 무의미해진다).
+    # 빈 리스트 = 배정 이전 구버전 초안 — 기존 하이브리드 검색으로 폴백.
+    if chapter.source_event_ids:
+        retrieved_events = await gateways.events.list_by_ids(chapter.source_event_ids)
+    else:
+        retrieved_events = await _retrieve_events_for_chapter(
+            gateways, autobiography.user_id, chapter.title or ""
+        )
     source_event_ids = [event.id for event in retrieved_events]
+    time_scope = _chapter_time_scope(retrieved_events)
+    other_titles = _other_chapter_titles(autobiography, chapter.chapter_index)
 
     chapter_synopsis = chapter.chapter_synopsis or await _generate_chapter_synopsis(
         book_synopsis=autobiography.book_synopsis,
@@ -1157,6 +1417,7 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         event_summaries=[event.one_line_summary for event in retrieved_events],
         connecting_thread=_chapter_connecting_thread(autobiography, chapter.chapter_index),
         part_context=get_chapter_part_context(autobiography, chapter.chapter_index),
+        time_scope=time_scope,
     )
 
     previous_summary = await _previous_chapter_summary(gateways, autobiography.id, chapter.chapter_index)
@@ -1171,6 +1432,8 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         retrieved_event_paragraphs=[event.prose_paragraph for event in retrieved_events],
         tone_key=confirmed["tone"] if confirmed else None,
         concept_key=confirmed["concept"] if confirmed else None,
+        time_scope=time_scope,
+        other_chapter_titles=other_titles,
     )
     if not content.strip():
         # 본문이 비어 있으면(예: reasoning_effort="high"가 max_tokens 예산을 추론
@@ -1186,7 +1449,29 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
             retrieved_event_paragraphs=[event.prose_paragraph for event in retrieved_events],
             tone_key=confirmed["tone"] if confirmed else None,
             concept_key=confirmed["concept"] if confirmed else None,
+            time_scope=time_scope,
+            other_chapter_titles=other_titles,
         )
+
+    # 분량 확장 패스: 프롬프트가 4,000~6,000자를 지시해도 실제 출력이 목표의
+    # 40~60%(평균 2,421자)에 그치는 문제가 실측됐다(2026-07-18 호킹 계정 5개 챕터).
+    # 초안이 하한에 크게 못 미치면 "새 사건 추가 금지, 기존 장면 정교화만"
+    # 조건으로 1회 확장한다. 태그 회수 전에 실행해야 확장 결과에 유지된 태그가
+    # 아래 검증 단계에서 정상 회수된다. 확장 결과가 더 짧아지거나 비면 원본 유지.
+    if content.strip() and len(content) < MIN_CHAPTER_CHARS_BEFORE_EXPANSION:
+        expansion_response = await solar.chat_completion(
+            prompts.build_chapter_expansion_prompt(
+                chapter_content=content,
+                source_events_text=_source_events_text(retrieved_events),
+            ),
+            reasoning_effort="high",
+            max_tokens=16000,
+        )
+        expanded = _strip_prompt_section_echo(
+            expansion_response.choices[0].message.content or "", body_marker="[챕터 초안]"
+        )
+        if len(expanded) > len(content):
+            content = expanded
 
     # 근거 태그([E1]...) 회수 — 태그가 하나도 없는 문단은 근거검증 판정자의 집중
     # 검토 대상으로 지목한다(집필 규약상 사실 서술 문단은 반드시 태그를 달아야 한다).
@@ -1235,6 +1520,34 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
             repaired_groundedness,
         )
 
+    # 검수(교열) 패스: 오탈자·비문("속술했다"), 1인칭 이탈(3인칭 혼입), 종결어미
+    # 격식 혼입("-습니다" 붕괴), 표현 남발, 시대착오적 묘사를 챕터 단위에서 고친다
+    # (2026-07-18 호킹 계정 실측 결함들 — 최종 통일성 윤문(finalize)만으로는 검토
+    # 화면에서 사용자가 읽는 윤문 전 본문에 그대로 노출된다). 사실 관계·문단
+    # 구조는 건드리지 않는 교열 전용 프롬프트라 팩트체크 리포트는 재실행하지
+    # 않는다. 빈 응답이거나 길이가 ±30% 넘게 변하면(교열이 아니라 개고를 한
+    # 것) 원본을 유지한다.
+    if content.strip():
+        proofread_response = await solar.chat_completion(
+            prompts.build_chapter_proofread_prompt(
+                chapter_content=content,
+                overused_terms=_count_overused_terms(content),
+            ),
+            reasoning_effort="low",
+            max_tokens=16000,
+        )
+        proofread = _strip_prompt_section_echo(
+            proofread_response.choices[0].message.content or "", body_marker="[챕터 본문]"
+        )
+        if proofread and abs(len(proofread) - len(content)) <= len(content) * PROOFREAD_MAX_LENGTH_DRIFT:
+            content = proofread
+        elif proofread:
+            logger.warning(
+                "챕터 검수 패스 결과 길이가 원본 대비 30%%를 초과해 변해 원본 유지(원본 %d자 → 검수 %d자)",
+                len(content),
+                len(proofread),
+            )
+
     chapter = await gateways.chapters.save_write_result(
         chapter_draft_id,
         ChapterDraftWriteResult(
@@ -1259,6 +1572,7 @@ async def _generate_chapter_synopsis(
     event_summaries: list[str],
     connecting_thread: str | None = None,
     part_context: dict | None = None,
+    time_scope: str | None = None,
 ) -> str:
     response = await solar.chat_completion(
         prompts.build_chapter_synopsis_prompt(
@@ -1267,6 +1581,7 @@ async def _generate_chapter_synopsis(
             event_summaries=event_summaries,
             connecting_thread=connecting_thread,
             part_context=part_context,
+            time_scope=time_scope,
         ),
         reasoning_effort="medium",
     )
@@ -1282,6 +1597,8 @@ async def _generate_chapter_content(
     retrieved_event_paragraphs: list[str],
     tone_key: str | None = None,
     concept_key: str | None = None,
+    time_scope: str | None = None,
+    other_chapter_titles: list[str] | None = None,
 ) -> str:
     if tone_key and concept_key:
         messages = prompts.build_customized_chapter_writing_prompt(
@@ -1292,6 +1609,8 @@ async def _generate_chapter_content(
             retrieved_event_paragraphs=retrieved_event_paragraphs,
             tone_key=tone_key,
             concept_key=concept_key,
+            time_scope=time_scope,
+            other_chapter_titles=other_chapter_titles,
         )
     else:
         messages = prompts.build_chapter_writing_prompt(
@@ -1300,6 +1619,8 @@ async def _generate_chapter_content(
             chapter_synopsis=chapter_synopsis,
             previous_chapter_summary=previous_chapter_summary,
             retrieved_event_paragraphs=retrieved_event_paragraphs,
+            time_scope=time_scope,
+            other_chapter_titles=other_chapter_titles,
         )
     # max_tokens=8000으로 처음 지정했다가 실사용 검증 중 본문이 통째로 빈
     # 문자열로 나오는 사고가 있었다(2026-07-17) — reasoning_effort="high"는
@@ -1396,6 +1717,13 @@ async def _run_factcheck(
     expected_places = {_normalize_place(e.place.lower()) for e in source_events if e.place}
     expected_people = {e.people.lower() for e in source_events if e.people}
     expected_time_labels = {e.occurred_at_label.lower() for e in source_events if e.occurred_at_label}
+    # 라벨(place/people/occurred_at_label)은 추출 단계의 요약이라 원문에 실재하는
+    # 사실도 빠져 있는 경우가 많다 — 라벨 대조에 실패하면 소환된 사건 원문 문단에서
+    # 한 번 더 찾아보고, 원문에 그대로 있으면 플래그하지 않는다(2026-07-18: 라벨에
+    # 없는 실존 인물이 챕터마다 반복 플래그되던 구조적 오탐의 수정).
+    source_prose_lower = " ".join(
+        e.prose_paragraph.lower() for e in source_events if e.prose_paragraph
+    )
 
     flags = []
     unchecked = 0
@@ -1419,6 +1747,9 @@ async def _run_factcheck(
                     matched = any(resolved_year in exp for exp in expected_time_labels)
         else:  # person
             matched = any(raw_text in exp or exp in raw_text for exp in expected_people)
+
+        if not matched and raw_text and raw_text in source_prose_lower:
+            matched = True
 
         if not matched:
             flags.append(
@@ -1456,10 +1787,11 @@ async def _run_groundedness_check(
     기준을 썼더니 이번엔 반대로 명백한 날조까지 통과하는 recall 붕괴가 왔다 —
     지금은 비대칭 기준(새 인물/사건/날짜·장소·결과는 애매해도 플래그, 감각 묘사·
     내적 독백은 통과) + reasoning_effort="medium"으로 판정하고, 플래그된 문장은
-    Upstage 전용 소형 모델(groundedness-check API)로 한 번 더 확인해 "grounded"로
-    확정되면 철회한다(판정자 오탐 제거 — 문장당 완료 토큰 ~3개의 병렬 호출이라
-    지연·비용이 거의 없다). 오탐이 남더라도 수리 단계가 근거 기반으로 다시 쓸
-    뿐이라 환각이 늘지는 않는다.
+    2차 게이트(clients/groundedness.py — 원래 Upstage 전용 groundedness-check
+    모델이었으나 폐기가 확인돼 solar-mini 이분 판정으로 대체됨, 2026-07-18)로
+    한 번 더 확인해 "grounded"로 확정되면 철회한다(판정자 오탐 제거 — 완료 토큰
+    한 단어짜리 병렬 호출이라 지연·비용이 거의 없다). 오탐이 남더라도 수리 단계가
+    근거 기반으로 다시 쓸 뿐이라 환각이 늘지는 않는다.
 
     attention_paragraphs: 집필 근거 태그([En]) 없이 작성된 문단들 — 판정자가
     특히 집중해서 검토하도록 프롬프트에 지목한다.
@@ -1497,7 +1829,12 @@ async def _run_groundedness_check(
                 verdict = await groundedness_client.check(
                     context=source_events_text, answer=flag["sentence"]
                 )
-            except Exception:
+            except Exception as exc:
+                # 보수적 폴백(플래그 유지)은 유지하되 반드시 로그를 남긴다 —
+                # 전용 groundedness-check 모델이 폐기된 뒤에도 이 예외가 조용히
+                # 삼켜져 2차 게이트가 무력화된 채 몇 주간 아무도 몰랐던 전례가
+                # 있다(2026-07-18 발견, clients/groundedness.py 참조).
+                logger.warning("groundedness 2차 게이트 호출 실패(플래그 유지): %s", exc)
                 return flag
             return None if verdict == groundedness_client.GROUNDED else flag
 
@@ -1513,10 +1850,46 @@ async def _run_groundedness_check(
     }
 
 
+def _split_revised_manuscript_by_chapter(
+    revised: str, chapter_indexes: list[int]
+) -> dict[int, str] | None:
+    """윤문 응답을 `<<<CHAPTER n>>>` 마커로 챕터별 본문으로 나눈다. 마커 집합이
+    입력 챕터 목록과 정확히 일치하지 않으면(누락/중복/새 마커) None — 호출부가
+    "윤문 전 챕터 유지 + 전문만 final_content" 폴백으로 처리한다.
+
+    각 조각에서 챕터 헤더(`[N장. 제목]`) 줄과 PART 마커는 제거한다 — 제목·Part는
+    별도 필드/toc_data로 관리되므로 chapter.content에는 순수 본문만 남아야
+    PDF 조판(pdf_service)이 이중 표기 없이 그대로 쓸 수 있다."""
+    matches = list(_CHAPTER_MARKER_PATTERN.finditer(revised))
+    found_indexes = [int(m.group(1)) for m in matches]
+    if found_indexes != chapter_indexes:
+        return None
+
+    by_index: dict[int, str] = {}
+    for i, match in enumerate(matches):
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(revised)
+        chunk = revised[start:end]
+        chunk = _PART_MARKER_PATTERN.sub("", chunk)
+        chunk = _CHAPTER_HEADER_PATTERN.sub("", chunk, count=1)
+        chunk = chunk.strip()
+        if not chunk:
+            return None
+        by_index[found_indexes[i]] = chunk
+    return by_index
+
+
 async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -> AutobiographyRecord:
     """
     Phase 4 통일성 윤문 패스: 전 챕터 생성 후 인접 챕터 경계부와 스타일 바이블을
     함께 검토하는 리비전을 1회 수행한다. 사실 관계·순서는 변경하지 않는다.
+
+    윤문 결과는 final_content에만 저장되는 게 아니라 챕터별로 파싱해
+    chapter.content에도 되써넣는다(2026-07-18) — 이전에는 PDF 조판이 챕터의
+    윤문 전 본문을 그대로 인쇄해, 웹에서 읽는 최종본과 실물 책의 텍스트가
+    서로 달랐다. 파싱은 `<<<CHAPTER n>>>` 마커 규약(UNITY_REVISION_SYSTEM_PROMPT)
+    에 의존하고, 마커가 어긋나면 챕터는 원본을 유지한 채 전문만 저장하는
+    보수적 폴백을 탄다(원고가 손상되는 것보다 불일치가 낫다).
     """
     autobiography = await get_autobiography_by_id(gateways, autobiography_id)
     chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
@@ -1529,7 +1902,10 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
         part_context = get_chapter_part_context(autobiography, chapter.chapter_index)
         if part_context and part_context["is_part_opening"]:
             manuscript_blocks.append(f"=== PART {part_context['part_index']}: {part_context['part_title']} ===")
-        manuscript_blocks.append(f"[{chapter.chapter_index}장. {chapter.title}]\n{chapter.content}")
+        manuscript_blocks.append(
+            f"<<<CHAPTER {chapter.chapter_index}>>>\n"
+            f"[{chapter.chapter_index}장. {chapter.title}]\n{chapter.content}"
+        )
     full_manuscript = "\n\n".join(manuscript_blocks)
 
     # 커스터마이징이 확정돼 있으면 말투·컨셉 일관성을 윤문에도 반영한다.
@@ -1557,10 +1933,27 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
     # `or full_manuscript` 폴백 덕분에 최악의 경우에도 빈 원고로 덮어쓰이지는
     # 않는다.
     response = await solar.chat_completion(revision_messages, reasoning_effort="high", max_tokens=48000)
-    final_content = response.choices[0].message.content or full_manuscript
-    # 방어적 안전망: 윤문 LLM이 지시를 어기고 "=== PART N: 제목 ===" 마커를 그대로
-    # 남겨 출력했다면 최종 인쇄본에 노출되지 않도록 제거한다.
-    final_content = _PART_MARKER_PATTERN.sub("", final_content)
+    revised = response.choices[0].message.content or full_manuscript
+
+    # 챕터별 되써넣기: 마커 파싱이 성공하면 각 챕터의 content를 윤문본으로 교체하고,
+    # final_content도 같은 윤문본들의 조립으로 만들어 웹 열람과 PDF가 항상 같은
+    # 텍스트를 보게 한다. 파싱 실패 시 챕터는 원본 유지 + 전문만 저장(보수적 폴백).
+    chapter_indexes = [chapter.chapter_index for chapter in chapters]
+    revised_by_index = _split_revised_manuscript_by_chapter(revised, chapter_indexes)
+    if revised_by_index is not None:
+        for chapter in chapters:
+            await gateways.chapters.update_content(chapter.id, revised_by_index[chapter.chapter_index])
+        final_content = "\n\n".join(
+            f"[{chapter.chapter_index}장. {chapter.title}]\n{revised_by_index[chapter.chapter_index]}"
+            for chapter in chapters
+        )
+    else:
+        logger.warning(
+            "통일성 윤문 응답의 챕터 마커가 어긋나(autobiography_id=%s) 챕터 되써넣기를 건너뛰고 "
+            "전문만 저장한다 — PDF는 윤문 전 챕터 본문으로 조판된다.",
+            autobiography_id,
+        )
+        final_content = _CHAPTER_MARKER_PATTERN.sub("", _PART_MARKER_PATTERN.sub("", revised)).strip()
 
     for chapter in chapters:
         await gateways.chapters.mark_finalized(chapter.id)

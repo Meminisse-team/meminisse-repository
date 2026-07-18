@@ -60,7 +60,14 @@ class InterviewSession(Base):
     #  "pride":false,"belief":false,"message":false}
     slots_filled = Column(JSONB, nullable=False, default=dict, server_default="{}")
     followup_count = Column(SmallInteger, nullable=False, default=0, server_default="0")  # 꼬리질문 횟수 추적 (max 2)
-    is_must_include = Column(Boolean, nullable=False, default=False, server_default="false")  # '꼭 넣기' 체크
+    # '꼭 넣기' 체크 — 사용자가 '나의 이야기'에서 이 세션의 이야기를 자서전에 꼭
+    # 수록하고 싶다고 표시(2026-07-18 실제 연결). 이 세션에서 추출된 Event들의
+    # is_must_include로 전파돼 Phase 3 중요도 스코어링(MUST_INCLUDE_BONUS)에 반영된다.
+    is_must_include = Column(Boolean, nullable=False, default=False, server_default="false")
+    # 산문 재조립본이 NLI 왜곡 탐지를 (재시도 포함) 통과하지 못한 세션(2026-07-18,
+    # 마이그레이션 016). 이벤트 추출이 보류된 상태라는 표시 — 사용자가 '나의
+    # 이야기'에서 산문을 직접 확인·수정해 저장하면 해제된다.
+    distortion_flagged = Column(Boolean, nullable=False, default=False, server_default="false")
     # Phase 2 후처리: 세션 로그 원문(Layer 0)을 보수적으로 재조립한 1인칭 산문 (Layer 2).
     # 문장 병합·재배열 없이 어미/추임새만 정돈. NLI 왜곡 탐지의 대조 대상이며,
     # 이후 Solar가 이 산문을 사건 단위로 분할해 Event.prose_paragraph로 쪼갠다.

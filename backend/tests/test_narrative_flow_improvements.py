@@ -804,6 +804,12 @@ async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_repair(
     call_count = {"n": 0}
 
     async def _fake_chat_completion(messages, **kwargs):
+        # 분량 확장/검수(교열) 패스(2026-07-18 추가)는 이 테스트의 관심사(Part 컨텍스트
+        # 주입 + 수리 시 시놉시스 재사용)가 아니므로 빈 응답으로 무력화한다(빈 응답 =
+        # 원본 유지가 두 패스의 계약) — 호출 순번(시놉시스→집필→수리)도 그대로 유지된다.
+        system = messages[0]["content"]
+        if "목표 분량(4,000~6,000자)에 크게 못 미칩니다" in system or "교열하세요" in system:
+            return _FakeCompletion("")
         call_count["n"] += 1
         if call_count["n"] == 1:
             captured_synopsis_messages.append(messages)

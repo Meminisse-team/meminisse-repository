@@ -31,19 +31,19 @@ def test_split_sentences_splits_on_sentence_boundaries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_classify_entailment_recognizes_korean_entailment() -> None:
-    premise = "스무 살 때 혼자 배낭 하나 메고 부산으로 내려갔다. 국밥집 아주머니가 밥을 챙겨주셨다."
-    hypothesis = "나는 부산에서 국밥집 아주머니에게 밥을 얻어먹었다."
-    result = await nli.classify_entailment(premise=premise, hypothesis=hypothesis)
-    assert result["entailment"] > 0.7
-
-
-@pytest.mark.asyncio
-async def test_classify_entailment_recognizes_korean_contradiction() -> None:
-    premise = "나는 부산에서 태어나 부산에서 자랐다."
-    hypothesis = "나는 서울에서 태어났다."
-    result = await nli.classify_entailment(premise=premise, hypothesis=hypothesis)
-    assert result["contradiction"] > 0.5
+async def test_classify_entailment_batch_recognizes_korean_entailment_and_contradiction() -> None:
+    # 프로덕션이 쓰는 유일한 판정 경로는 배치 버전이다(단건 classify_entailment는
+    # 호출부가 없어 제거됨, 2026-07-18) — 함의/모순 판정을 한 배치로 함께 검증한다.
+    premise = "스무 살 때 혼자 배낭 하나 메고 부산으로 내려갔다. 국밥집 아주머니가 밥을 챙겨주셨다. 나는 부산에서 태어나 부산에서 자랐다."
+    results = await nli.classify_entailment_batch(
+        premise=premise,
+        hypotheses=[
+            "나는 부산에서 국밥집 아주머니에게 밥을 얻어먹었다.",
+            "나는 서울에서 태어났다.",
+        ],
+    )
+    assert results[0]["entailment"] > 0.7
+    assert results[1]["contradiction"] > 0.5
 
 
 @pytest.mark.asyncio

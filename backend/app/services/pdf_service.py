@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 _MANUSCRIPT_FONT_FAMILY = "Gowun Batang"
 _MANUSCRIPT_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Gowun+Batang&display=swap"
+# 리포에 동봉된 폰트 원본(2026-07-18) — 조판 때마다 Google Fonts CSS API를 왕복하고
+# 그 응답에 조판 품질이 좌우되던 네트워크 의존을 제거한다. 파일이 있으면 항상 이걸
+# 쓰고, 없을 때만(체크아웃 누락 등) 기존 원격 해석으로 폴백한다.
+_LOCAL_FONT_PATH = _TEMPLATE_DIR / "fonts" / "GowunBatang-Regular.ttf"
 
 _jinja_env = Environment(
     loader=FileSystemLoader(str(_TEMPLATE_DIR)),
@@ -42,11 +46,16 @@ _jinja_env = Environment(
 
 @lru_cache(maxsize=1)
 def _resolve_manuscript_font_url() -> str:
-    """Google Fonts CSS2 API 응답에서 실제 woff2 URL을 추출한다. gstatic URL은
-    폰트 버전이 갱신될 때마다 바뀌므로 하드코딩하지 않고 매번(프로세스당 1회,
-    lru_cache) 해석한다. 실패해도 예외를 던지지 않는다 — 빈 문자열을 반환하면
-    @font-face의 src가 깨진 채로 무시되고 body의 `serif` 폴백으로 자연스럽게
-    넘어간다(WeasyPrint는 로컬에 한글 세리프가 없으면 시스템 폰트로 대체한다)."""
+    """조판에 쓸 폰트 소스 URL을 정한다. 1순위는 리포에 동봉된 로컬 TTF
+    (_LOCAL_FONT_PATH → file:// URI) — 조판마다 Google Fonts를 왕복하던 네트워크
+    의존을 제거한다(2026-07-18). 파일이 없으면 기존 원격 해석으로 폴백:
+    Google Fonts CSS2 API 응답에서 실제 폰트 URL을 추출한다(gstatic URL은 폰트
+    버전이 갱신될 때마다 바뀌므로 하드코딩하지 않고 프로세스당 1회 해석).
+    그것도 실패하면 빈 문자열 — @font-face의 src가 깨진 채로 무시되고 body의
+    `serif` 폴백으로 자연스럽게 넘어간다(WeasyPrint는 로컬에 한글 세리프가
+    없으면 시스템 폰트로 대체한다)."""
+    if _LOCAL_FONT_PATH.exists():
+        return _LOCAL_FONT_PATH.resolve().as_uri()
     try:
         response = httpx.get(
             _MANUSCRIPT_FONT_CSS_URL,

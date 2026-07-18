@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError } from "@/lib/api/client";
+import { interviewsApi } from "@/lib/api/interviews";
 import { storiesApi } from "@/lib/api/stories";
 import type { StoryCard } from "@/types/api";
 
@@ -30,6 +31,8 @@ export default function StoriesPage() {
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // '꼭 넣기' 토글 요청이 진행 중인 세션 id — 연타 방지 및 로딩 표시.
+  const [togglingMustIncludeId, setTogglingMustIncludeId] = useState<string | null>(null);
 
   // 전체를 한 번에 받지 않고 현재 페이지 분량만 서버에서 받는다(2026-07-16 —
   // 이야기를 많이 나눈 사용자의 첫 로드가 수 초씩 걸리던 문제). 페이지를 넘기면
@@ -60,6 +63,24 @@ export default function StoriesPage() {
     // 피드백이 전혀 없었다. 폴링과 별개로 수동 클릭 시엔 "새로고침 중..."을 보여준다.
     setRefreshing(true);
     void refresh().finally(() => setRefreshing(false));
+  }
+
+  function toggleMustInclude(story: StoryCard) {
+    if (togglingMustIncludeId) return;
+    setTogglingMustIncludeId(story.session_id);
+    interviewsApi
+      .setMustInclude(story.session_id, !story.is_must_include)
+      .then((session) => {
+        setStories((current) =>
+          current.map((s) =>
+            s.session_id === story.session_id
+              ? { ...s, is_must_include: session.is_must_include }
+              : s
+          )
+        );
+      })
+      .catch(() => setError("'꼭 넣기' 표시를 바꾸지 못했어요. 잠시 후 다시 시도해주세요."))
+      .finally(() => setTogglingMustIncludeId(null));
   }
 
   function startEdit(story: StoryCard) {
@@ -166,16 +187,48 @@ export default function StoriesPage() {
           const isEditing = editingId === story.session_id;
           return (
             <article key={story.session_id} className="rounded-2xl border border-black/10 p-6">
-              {story.completed_at && (
-                <p className="text-sm text-black/40">
-                  {new Date(story.completed_at).toLocaleDateString("ko-KR")}
-                </p>
-              )}
-              {/* 제목 = 이 세션에서 실제로 물었던 질문 그 자체(무엇에 대한 이야기인지
-              바로 알 수 있게, 2026-07-15 피드백). */}
-              <h2 className="mt-2 text-lg font-semibold text-black">{story.title}</h2>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  {story.completed_at && (
+                    <p className="text-sm text-black/40">
+                      {new Date(story.completed_at).toLocaleDateString("ko-KR")}
+                    </p>
+                  )}
+                  {/* 제목 = 이 세션에서 실제로 물었던 질문 그 자체(무엇에 대한 이야기인지
+                  바로 알 수 있게, 2026-07-15 피드백). */}
+                  <h2 className="mt-2 text-lg font-semibold text-black">{story.title}</h2>
+                </div>
+                {/* '꼭 넣기' 토글 — 자서전을 만들 때 이 이야기를 꼭 수록하고 싶다는
+                표시(자서전 중요도 판단에 가산점으로 반영, 2026-07-18). */}
+                <button
+                  type="button"
+                  onClick={() => toggleMustInclude(story)}
+                  disabled={togglingMustIncludeId === story.session_id}
+                  aria-pressed={story.is_must_include}
+                  title="자서전에 꼭 넣고 싶은 이야기로 표시"
+                  className={`shrink-0 rounded-full border px-3 py-1 text-sm transition-colors disabled:opacity-50 ${
+                    story.is_must_include
+                      ? "border-black bg-black text-white"
+                      : "border-black/20 text-black/50 hover:border-black hover:text-black"
+                  }`}
+                >
+                  {story.is_must_include ? "★ 꼭 넣기" : "☆ 꼭 넣기"}
+                </button>
+              </div>
               {/* 부제 = 재조립된 산문으로부터 재추출한 요약 라벨. */}
               {story.subtitle && <p className="mt-1 text-sm text-black/50">{story.subtitle}</p>}
+              {story.distortion_flagged && (
+                // AI 정리(산문 재조립)가 원문 검증(왜곡 탐지)을 통과하지 못한 세션 —
+                // 이 이야기는 아직 자서전 재료로 쓰이지 않는다. 사용자가 아래
+                // "이 이야기 수정하기"로 직접 확인·수정해 저장하면 해소된다(2026-07-18).
+                <div className="mt-3 rounded-xl bg-amber-50 p-3">
+                  <p className="text-sm leading-relaxed text-amber-900">
+                    AI가 정리한 글이 실제 하신 말씀과 다를 수 있어요. 내용을 읽어보시고
+                    &lsquo;이 이야기 수정하기&rsquo;로 직접 고쳐 저장해주시면, 그때부터
+                    자서전 재료로 사용돼요.
+                  </p>
+                </div>
+              )}
 
               {story.is_generating ? (
                 // 세션은 끝났지만 산문 재조립(Celery)이 아직 안 끝난 상태 — 대화가

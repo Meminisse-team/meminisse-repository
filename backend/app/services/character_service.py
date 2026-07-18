@@ -38,12 +38,28 @@ async def scan_and_classify_chapter(
         json_schema=prompts.NER_EXTRACTION_SCHEMA,
         reasoning_effort="low",
     )
+    people = [p for p in extraction.get("people", []) if p["name"].strip()]
+    if not people:
+        return []
+
+    # 위해성 분류는 인물 전원을 단일 호출로 배치 처리한다(2026-07-18 — 이전엔
+    # 인물마다 별도 호출이라 인물 수만큼 지연·비용이 곱해졌다). 응답에서 누락된
+    # 인물은 위해성 판단 없음으로 두는데, 기본값이 이미 가장 안전한 상태(전수
+    # 가명화 + risk 없음)라 누락이 위험을 만들지는 않는다.
+    risk_result = await solar.structured_completion(
+        prompts.build_third_party_risk_batch_prompt(
+            person_names=[p["name"].strip() for p in people],
+            chapter_content=chapter.content,
+        ),
+        schema_name="third_party_risk_batch",
+        json_schema=prompts.THIRD_PARTY_RISK_BATCH_SCHEMA,
+        reasoning_effort="low",
+    )
+    risk_by_name = {item["person_name"].strip(): item for item in risk_result.get("people", [])}
 
     characters: list[CharacterRecord] = []
-    for person in extraction.get("people", []):
+    for person in people:
         name = person["name"].strip()
-        if not name:
-            continue
         character = await gateways.characters.get_or_create(
             CharacterCreateData(
                 autobiography_id=autobiography.id,
@@ -51,7 +67,7 @@ async def scan_and_classify_chapter(
                 relation_to_user=person.get("relation_to_narrator"),
             )
         )
-        risk = await _classify_risk(person_name=name, chapter_excerpt=chapter.content)
+        risk = risk_by_name.get(name, {})
         if risk.get("risk_detected"):
             await gateways.characters.update_risk_classification(
                 character.id, RiskClassification(risk["risk_classification"])
@@ -60,15 +76,6 @@ async def scan_and_classify_chapter(
         characters.append(character)
 
     return characters
-
-
-async def _classify_risk(*, person_name: str, chapter_excerpt: str) -> dict:
-    return await solar.structured_completion(
-        prompts.build_third_party_risk_prompt(person_name=person_name, chapter_excerpts=[chapter_excerpt]),
-        schema_name="third_party_risk",
-        json_schema=prompts.THIRD_PARTY_RISK_SCHEMA,
-        reasoning_effort="low",
-    )
 
 
 async def list_characters(gateways: Gateways, autobiography_id: uuid.UUID) -> list[CharacterRecord]:

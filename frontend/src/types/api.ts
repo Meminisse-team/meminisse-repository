@@ -145,26 +145,6 @@ export interface AdminLogLines {
   lines: string[];
 }
 
-/** GET /api/v1/events 응답 단위 — '나의 이야기' 탭(backend/app/schemas/event.py:EventRead). */
-export interface EventItem {
-  id: string;
-  source_type: EventSourceType;
-  session_id: string | null;
-  media_asset_id: string | null;
-  life_period: LifePeriod | null;
-  occurred_at_label: string | null;
-  place: string | null;
-  people: string | null;
-  one_line_summary: string;
-  prose_paragraph: string;
-  emotion_tag: string | null;
-  emotion_intensity: number | null;
-  emotion_inferred: boolean;
-  is_must_include: boolean;
-  life_milestone_category: LifeMilestoneCategory | null;
-  created_at: string;
-}
-
 /** GET /api/v1/stories 응답 단위 — 사건이 아니라 완료된 세션 단위 카드
  * (backend/app/schemas/story.py:StoryCardRead). 제목은 그 세션이 다룬 질문/사진
  * 오프닝 문구 그 자체, 부제는 재조립된 산문(prose)으로부터 재추출한 요약 라벨. */
@@ -177,6 +157,11 @@ export interface StoryCard {
   /** true면 세션은 끝났지만 산문 재조립(Celery)이 아직 안 끝난 placeholder 카드
    * — prose는 빈 문자열이다. "생성 중..." 임시 셀로 표시한다. */
   is_generating: boolean;
+  /** '꼭 넣기' 표시 — 자서전 중요도 스코어링에 가산점으로 반영된다. */
+  is_must_include: boolean;
+  /** AI 정리(산문 재조립)가 왜곡 탐지를 통과하지 못해 자서전 재료 추출이 보류된
+   * 세션 — 사용자가 산문을 직접 수정·저장하면 해제된다. */
+  distortion_flagged: boolean;
 }
 
 /** GET /stories 응답 봉투(backend/app/schemas/story.py:StoryCardPageRead).

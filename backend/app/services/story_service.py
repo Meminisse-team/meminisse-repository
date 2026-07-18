@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.gateways.dto import InterviewSessionRecord
 from app.gateways.factory import Gateways
-from app.models.enums import MessageRole, SessionType
+from app.models.enums import SessionType
 from app.services import event_extraction_service
 
 _SUBTITLE_SEPARATOR = " · "
@@ -64,6 +64,8 @@ class StoryCard:
     prose: str
     completed_at: datetime | None
     is_generating: bool = False
+    is_must_include: bool = False
+    distortion_flagged: bool = False
 
 
 @dataclass
@@ -100,12 +102,17 @@ async def list_story_cards(
     "끝난 이야기"가 아니므로 제외한다(게이트웨이 쿼리 자체가 COMPLETED만 대상)."""
     sessions = await gateways.sessions.list_completed_by_user(user_id, limit=limit, offset=offset)
     total = await gateways.sessions.count_completed_by_user(user_id)
+    # 카드 제목(오프닝 문구)은 페이지 세션 전체를 한 번에 조회한다 — 예전엔
+    # _resolve_title이 카드마다 get_by_id로 chat_logs 전체를 다시 불러오는
+    # N+1이었다(2026-07-18).
+    openings = await gateways.sessions.get_opening_contents([s.id for s in sessions])
     cards: list[StoryCard] = []
     for session in sessions:
+        opening = openings.get(session.id)
         if session.session_prose is None:
-            cards.append(await _to_placeholder_card(gateways, session))
+            cards.append(await _to_placeholder_card(gateways, session, opening=opening))
         else:
-            cards.append(await _to_story_card(gateways, session))
+            cards.append(await _to_story_card(gateways, session, opening=opening))
     return StoryCardPage(items=cards, total=total)
 
 
@@ -136,11 +143,14 @@ async def update_session_prose(
     await event_extraction_service.reextract_events_from_edited_prose(gateways, session_id)
 
     updated_session = await gateways.sessions.get_by_id(session_id)
-    return await _to_story_card(gateways, updated_session)
+    openings = await gateways.sessions.get_opening_contents([session_id])
+    return await _to_story_card(gateways, updated_session, opening=openings.get(session_id))
 
 
-async def _to_story_card(gateways: Gateways, session: InterviewSessionRecord) -> StoryCard:
-    title = await _resolve_title(gateways, session)
+async def _to_story_card(
+    gateways: Gateways, session: InterviewSessionRecord, *, opening: str | None = None
+) -> StoryCard:
+    title = await _resolve_title(gateways, session, opening=opening)
     events = await gateways.events.list_by_session(session.id)
     subtitle = (
         _SUBTITLE_SEPARATOR.join(event.one_line_summary for event in events) if events else None
@@ -152,14 +162,18 @@ async def _to_story_card(gateways: Gateways, session: InterviewSessionRecord) ->
         prose=session.session_prose,
         completed_at=session.completed_at,
         is_generating=False,
+        is_must_include=session.is_must_include,
+        distortion_flagged=session.distortion_flagged,
     )
 
 
-async def _to_placeholder_card(gateways: Gateways, session: InterviewSessionRecord) -> StoryCard:
+async def _to_placeholder_card(
+    gateways: Gateways, session: InterviewSessionRecord, *, opening: str | None = None
+) -> StoryCard:
     """세션은 끝났지만(status=COMPLETED) 산문 재조립이 아직 안 끝난 경우의 임시 카드.
     제목은 chat_logs에 이미 저장돼 있어(세션 생성 시점) 정상적으로 보여줄 수 있지만,
     부제·본문은 Celery 작업이 끝나야 알 수 있으므로 비워둔다."""
-    title = await _resolve_title(gateways, session)
+    title = await _resolve_title(gateways, session, opening=opening)
     return StoryCard(
         session_id=session.id,
         title=title,
@@ -167,21 +181,23 @@ async def _to_placeholder_card(gateways: Gateways, session: InterviewSessionReco
         prose="",
         completed_at=session.completed_at,
         is_generating=True,
+        is_must_include=session.is_must_include,
     )
 
 
-async def _resolve_title(gateways: Gateways, session: InterviewSessionRecord) -> str:
-    """이 세션의 카드 제목을 정한다 — 우선순위: (1) 첫 chat_log가 assistant 턴이면
-    그 내용(정상 경로, 2026-07-15 이후 생성된 모든 세션), (2) FIXED_QUESTION이고
+async def _resolve_title(
+    gateways: Gateways, session: InterviewSessionRecord, *, opening: str | None = None
+) -> str:
+    """이 세션의 카드 제목을 정한다 — 우선순위: (1) 오프닝 문구(첫 chat_log가
+    assistant 턴일 때 그 내용 — 정상 경로, 2026-07-15 이후 생성된 모든 세션;
+    호출부가 get_opening_contents 배치 조회로 미리 구해 opening으로 넘긴다,
+    카드마다 get_by_id를 다시 부르던 N+1 제거), (2) FIXED_QUESTION이고
     question_id가 남아있으면 Question을 다시 찾아 그 문구(2026-07-15 이전에 만들어진
     구 세션 — 오프닝 chat_log가 없다), (3) 그래도 못 찾으면 일반 라벨. 카드를 통째로
     건너뛰지 않는 게 핵심 — 실사용 중 이 폴백이 없어 session_prose가 있는 세션이
     "나의 이야기"에서 전부 사라지는 회귀가 있었다."""
-    detail = await gateways.sessions.get_by_id(session.id)
-    if detail is not None and detail.chat_logs:
-        opening_log = detail.chat_logs[0]
-        if opening_log.role == MessageRole.ASSISTANT:
-            return opening_log.content
+    if opening:
+        return opening
 
     if session.session_type == SessionType.FIXED_QUESTION and session.question_id is not None:
         question = await gateways.questions.get_by_id(session.question_id)

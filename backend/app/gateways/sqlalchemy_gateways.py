@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -296,7 +296,33 @@ class SqlAlchemyInterviewSessionGateway(InterviewSessionGateway):
             session_obj.session_prose_original = session_obj.session_prose
         session_obj.session_prose = new_prose
         session_obj.prose_last_edited_at = edited_at
+        # 사람이 직접 확인·수정한 텍스트는 왜곡 의심 대상이 아니다(인터페이스 계약).
+        session_obj.distortion_flagged = False
         await self._session.flush()
+
+    async def set_distortion_flagged(self, session_id: UUID, flagged: bool) -> None:
+        session_obj = await self._require_session(session_id)
+        session_obj.distortion_flagged = flagged
+        await self._session.flush()
+
+    async def set_must_include(self, session_id: UUID, value: bool) -> None:
+        session_obj = await self._require_session(session_id)
+        session_obj.is_must_include = value
+        await self._session.flush()
+
+    async def get_opening_contents(self, session_ids: Sequence[UUID]) -> dict[UUID, str]:
+        if not session_ids:
+            return {}
+        stmt = (
+            select(ChatLog.session_id, ChatLog.content)
+            .where(
+                ChatLog.session_id.in_(list(session_ids)),
+                ChatLog.turn_index == 0,
+                ChatLog.role == MessageRole.ASSISTANT,
+            )
+        )
+        result = await self._session.execute(stmt)
+        return {row.session_id: row.content for row in result.all()}
 
     async def list_stale_completed(self, *, older_than: datetime) -> list[InterviewSessionRecord]:
         result = await self._session.execute(
@@ -386,6 +412,7 @@ class SqlAlchemyEventGateway(EventGateway):
                 labels=item.labels,
                 confidence=item.confidence,
                 verified=item.verified,
+                is_must_include=item.is_must_include,
                 embedding=item.embedding,
             )
             for item in data
@@ -477,19 +504,6 @@ class SqlAlchemyEventGateway(EventGateway):
         result = await self._session.execute(stmt)
         return [_to_event_record(obj) for obj in result.scalars().all()]
 
-    async def list_for_timeline(self, user_id: UUID) -> list[EventRecord]:
-        # id 보조 정렬 키: SqlAlchemyInterviewSessionGateway.list_by_user 주석 참조.
-        stmt = (
-            select(Event)
-            .where(
-                Event.user_id == user_id,
-                Event.verified.is_(True),
-                Event.duplicate_of_event_id.is_(None),
-            )
-            .order_by(Event.created_at.desc(), Event.id.desc())
-        )
-        result = await self._session.execute(stmt)
-        return [_to_event_record(obj) for obj in result.scalars().all()]
 
     async def list_mergeable(self, user_id: UUID) -> list[EventRecord]:
         stmt = (
@@ -554,6 +568,12 @@ class SqlAlchemyEventGateway(EventGateway):
         if obj is None:
             raise KeyError(f"event not found: {event_id}")
         obj.duplicate_of_event_id = duplicate_of_event_id
+        await self._session.flush()
+
+    async def set_must_include_by_session(self, session_id: UUID, value: bool) -> None:
+        await self._session.execute(
+            update(Event).where(Event.session_id == session_id).values(is_must_include=value)
+        )
         await self._session.flush()
 
     async def count_mentions(self, event_ids: Sequence[UUID]) -> dict[UUID, int]:
@@ -793,12 +813,23 @@ class SqlAlchemyChapterDraftGateway(ChapterDraftGateway):
                 chapter_index=item.chapter_index,
                 title=item.title,
                 chapter_synopsis=item.synopsis,
+                # 컬럼이 NOT NULL(default=[])이라 미배정 시 None 대신 빈 리스트로 저장한다 —
+                # ChapterDraftRecord.source_event_ids도 항상 리스트이므로 "빈 리스트 = 미배정"이
+                # 서비스 레이어의 폴백 판단 기준이 된다(write_chapter 참조).
+                source_event_ids=list(item.source_event_ids or []),
             )
             for item in chapters
         ]
         self._session.add_all(objs)
         await self._session.flush()
         return [_to_chapter_draft_record(obj) for obj in objs]
+
+    async def update_content(self, chapter_draft_id: UUID, content: str) -> None:
+        obj = await self._session.get(ChapterDraft, chapter_draft_id)
+        if obj is None:
+            raise KeyError(f"chapter draft not found: {chapter_draft_id}")
+        obj.content = content
+        await self._session.flush()
 
     async def save_write_result(
         self, chapter_draft_id: UUID, result: ChapterDraftWriteResult
@@ -1025,6 +1056,7 @@ def _to_session_record(
         slots_filled=session_obj.slots_filled,
         followup_count=session_obj.followup_count,
         is_must_include=session_obj.is_must_include,
+        distortion_flagged=session_obj.distortion_flagged,
         session_prose=session_obj.session_prose,
         started_at=session_obj.started_at,
         completed_at=session_obj.completed_at,

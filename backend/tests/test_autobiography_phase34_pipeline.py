@@ -72,8 +72,11 @@ _STRUCTURED_RESPONSES = {
     "fact_reextraction": {"facts": [{"fact_type": "person", "raw_text": "김철수"}]},
     "groundedness_judge": {"flags": []},  # 이 테스트의 관심사는 파이프라인 배선이라 항상 근거 있음으로 고정.
     "ner_extraction": {"people": [{"name": "김철수", "relation_to_narrator": "친구"}]},
-    "third_party_risk": {
-        "person_name": "김철수", "risk_detected": False, "risk_classification": "none", "risk_reasons": [],
+    # 위해성 분류는 챕터당 인물 전원 배치 호출로 통합됐다(2026-07-18, character_service).
+    "third_party_risk_batch": {
+        "people": [
+            {"person_name": "김철수", "risk_detected": False, "risk_classification": "none", "risk_reasons": []},
+        ]
     },
 }
 

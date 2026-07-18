@@ -395,6 +395,51 @@ def build_tier1_detection_prompt(*, latest_answer: str) -> list[dict[str, str]]:
     ]
 
 
+# 매 턴 통합 게이팅 — 감정 세이프가드 1층 판정(TIER1_DETECTION)과 슬롯 게이팅
+# (SLOT_GATING)은 매 사용자 턴마다 각각 별도 LLM 호출로 돌던 것을 하나로 합쳤다
+# (2026-07-18 — 턴당 지연·비용 절반). 두 원본 프롬프트를 그대로 이어붙여 단일
+# 진실 원천을 유지한다(각 기준이 바뀌면 이 통합본도 자동 반영). 원본 프롬프트/
+# 스키마는 샌드박스 개별 튜닝용으로 남겨둔다.
+TURN_GATING_SYSTEM_PROMPT = (
+    "당신은 인터뷰의 매 사용자 턴마다 서로 독립적인 두 판정을 한 번의 호출로 "
+    "수행하는 분류기입니다. 두 판정은 서로 영향을 주지 않습니다 — 아래 각 판정의 "
+    "기준만 따르세요.\n\n"
+    "[판정 1 — strong_negative_emotion]\n"
+    + TIER1_DETECTION_SYSTEM_PROMPT
+    + "\n[판정 2 — newly_filled_slots]\n"
+    + SLOT_GATING_SYSTEM_PROMPT
+)
+
+TURN_GATING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "strong_negative_emotion": {"type": "boolean"},
+        "newly_filled_slots": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(ALL_SLOTS.keys())},
+        },
+    },
+    "required": ["strong_negative_emotion", "newly_filled_slots"],
+    "additionalProperties": False,
+}
+
+
+def build_turn_gating_prompt(
+    *, latest_answer: str, slots_filled: dict[str, bool]
+) -> list[dict[str, str]]:
+    missing = [ALL_SLOTS[k] for k, v in slots_filled.items() if not v]
+    user_prompt = (
+        f"아직 채워지지 않은 슬롯: {', '.join(missing) if missing else '없음'}\n"
+        f"방금 답변: \"{latest_answer}\"\n"
+        "strong_negative_emotion(감정 판정)과, 이 답변으로 새로 채워진 슬롯 키 배열"
+        "(newly_filled_slots, 예: [\"place\", \"emotion\"])을 함께 반환하세요."
+    )
+    return [
+        {"role": "system", "content": TURN_GATING_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 TIER1_BUFFER_SYSTEM_PROMPT = """\
 사용자의 답변에서 강한 부정적 감정이 감지되었습니다. 심화 질문을 하지 마세요.
 공감을 표현하는 짧은 완충 응답 한 문장과, 부담 없이 다른 주제로 넘어가자는 제안을
@@ -562,7 +607,19 @@ EVENT_EXTRACTION_SCHEMA: dict[str, Any] = {
                     "place": _NULLABLE_STRING,
                     "occurred_at_label": {
                         **_NULLABLE_STRING,
-                        "description": "확정 연도가 아니면 상대적 표현 허용 (예: '고등학교 시절').",
+                        "description": "확정 연도가 아니면 상대적 표현 허용 (예: '고등학교 시절'). "
+                        "반드시 한국어로 쓰세요.",
+                    },
+                    "estimated_year_start": {
+                        "type": ["integer", "null"],
+                        "description": "이 사건이 시작된 것으로 추정되는 서기 연도(예: 1963). "
+                        "본문의 명시적 연도·나이·시기 표현에서 합리적으로 추정 가능할 때만 채우고, "
+                        "근거가 전혀 없으면 null. 챕터 시간 범위 강제·시기 정렬에 쓰인다.",
+                    },
+                    "estimated_year_end": {
+                        "type": ["integer", "null"],
+                        "description": "이 사건이 끝난 것으로 추정되는 서기 연도. 단일 시점 사건이면 "
+                        "estimated_year_start와 같은 값, 추정 불가면 null.",
                     },
                     "people": {
                         **_NULLABLE_STRING,
@@ -617,6 +674,7 @@ EVENT_EXTRACTION_SCHEMA: dict[str, Any] = {
                 },
                 "required": [
                     "one_line_summary", "prose_paragraph", "place", "occurred_at_label",
+                    "estimated_year_start", "estimated_year_end",
                     "people", "event_subject", "emotion_tag", "emotion_intensity", "emotion_inferred",
                     "values_reflected", "reason", "process", "gratitude", "regret", "turning_point",
                     "pride", "belief", "message",
@@ -653,6 +711,14 @@ EVENT_EXTRACTION_SYSTEM_PROMPT = """\
 confidence 점수로 불확실성을 표현하세요. 감정은 명시적 발화가 없으면
 emotion_inferred=true로 표시하고, source_span.quoted_text는 반드시 원문에
 실제로 존재하는 문자열이어야 합니다(사후 로컬 대조로 검증됩니다).
+
+모든 문자열 출력(one_line_summary, occurred_at_label, place, people 등)은 예외
+없이 한국어로 쓰세요 — 산문에 외국 지명·인명이 나와도 라벨 표기는 한국어입니다
+(예: "age 21 onward"가 아니라 "21살 이후").
+
+estimated_year_start/end(추정 서기 연도)는 본문의 명시적 연도("1963년"), 나이
+표현("스물한 살 때" — 출생 정보가 본문에 있으면 환산), 명확한 시기 표현에서
+합리적으로 추정 가능할 때만 채우세요. 근거 없는 추측은 금지 — 불확실하면 null.
 
 people(누구와)은 화자 혼자 겪은 사건이어도 null로 비워두지 말고 "혼자"처럼
 명시적으로 채우세요 — 언급이 아예 없는 경우에만 null입니다.
@@ -855,6 +921,14 @@ STYLE_BIBLE_SYSTEM_PROMPT = """\
 생성하세요: 문체 특징과 상용 표현 샘플, 삶을 관통하는 가치관·주제 키워드,
 전체 감정 아크(생애 전반의 감정 흐름 요약). 이 문서는 이후 모든 집필 프롬프트에
 전역 상수로 주입되어 어조의 일관성을 보장하는 역할을 합니다.
+
+반드시 함께 포함할 두 항목(집필 단계가 규칙으로 참조합니다):
+- 종결어미 규정: 본문 서술에 쓸 종결어미를 정확히 하나 지정해 명시하세요
+  (예: "종결어미 규정: -다체"). 화자의 실제 말투에서 자연스러운 쪽을 고르되,
+  이후 사용자가 별도의 말투를 확정하면 그 지시가 이 규정보다 우선합니다.
+- 과용 주의 표현: 화자가 습관처럼 반복하는 단어·구절이 있으면 목록으로
+  적으세요(예: "과용 주의 표현: 덤, 그러니까"). 집필 단계가 이 표현들을
+  챕터당 1회 이하로 제한하는 근거가 됩니다. 없으면 "없음"이라고 쓰세요.
 """
 
 
@@ -925,6 +999,11 @@ TOC_GENERATION_SYSTEM_PROMPT = """\
   반드시 하나의 뚜렷한 전환점(사건·시간·장소·관점 중 하나)이 있어야 하며,
   그 전환은 앞 Part의 마지막 챕터와 다음 Part의 첫 챕터의 connecting_thread에
   구체적으로 드러나야 합니다.
+- 챕터마다 그 챕터를 채울 사건 재료가 실제로 충분해야 합니다. 사건 목록에서
+  해당 주제를 뒷받침하는 사건이 한두 개뿐인 주제는 독립 챕터로 만들지 말고
+  인접한 주제의 챕터에 합치세요 — 재료가 얇은 챕터는 결국 분량 미달이거나
+  같은 내용을 부풀린 챕터가 됩니다. 챕터 수를 늘리는 것보다 챕터 하나하나가
+  충분히 두툼한 것이 좋은 책입니다.
 
 언어: narrative_arc, part_title, part_arc, title(챕터 제목), connecting_thread,
 theme_keywords를 포함해 이 스키마의 모든 텍스트 필드는 예외 없이 한국어로만
@@ -1133,6 +1212,8 @@ CHAPTER_SYNOPSIS_SYSTEM_PROMPT = """\
 - 이 챕터가 속한 Part 안에서 맡는 역할, 그리고 Part의 첫/마지막 챕터라면 그
   경계를 매끄럽게 지우지 말고 국면 전환으로 드러내는 방법(아래 [소속 Part]
   참고).
+- [이 챕터의 시간 범위]가 주어지면 시놉시스의 장면 설계도 그 범위 안에
+  머물러야 합니다 — 범위 밖 시기의 사건을 이 챕터의 장면으로 계획하지 마세요.
 
 형식 — 반드시 지킬 것: 400~700자 내외의 응집된 산문 한 편으로 작성하세요.
 표, 헤더(#, ##), 굵게(**), 글머리기호 같은 마크다운 서식은 쓰지 마세요 — 이
@@ -1150,6 +1231,7 @@ def build_chapter_synopsis_prompt(
     event_summaries: list[str],
     connecting_thread: str | None = None,
     part_context: dict | None = None,
+    time_scope: str | None = None,
 ) -> list[dict[str, str]]:
     events_block = "\n".join(f"- {s}" for s in event_summaries)
     thread_block = connecting_thread or "(목차 단계에서 정해진 연결고리 없음 — 첫 챕터이거나 커스터마이징 이전 생성)"
@@ -1176,11 +1258,13 @@ def build_chapter_synopsis_prompt(
             )
         part_block = "\n".join(lines)
 
+    scope_block = f"[이 챕터의 시간 범위]\n{time_scope}\n\n" if time_scope else ""
     user_prompt = (
         f"[책 전체 시놉시스]\n{book_synopsis}\n\n"
         f"[챕터 제목] {chapter_title}\n\n"
         f"[소속 Part]\n{part_block}\n\n"
         f"[연결고리]\n{thread_block}\n\n"
+        f"{scope_block}"
         f"[배정된 사건들]\n{events_block}"
     )
     return [
@@ -1194,17 +1278,36 @@ CHAPTER_WRITING_SYSTEM_PROMPT = """\
 [전체 시놉시스]와 [챕터 시놉시스]의 설계를 벗어나지 마세요.
 
 분량: 이 챕터는 4,000~6,000자(공백 포함) 분량으로, 얇은 문고본이 아니라
-실제 출간 자서전 한 챕터만큼 충분히 상세하게 쓰세요. 짧게 요약하고
-끝내지 마세요 — 아래 "집필 기술"을 활용해 장면을 충분히 펼쳐서 분량을
-채우세요.
+실제 출간 자서전 한 챕터만큼 충분히 상세하게 쓰세요. 분량은 사건을 많이
+나열해서가 아니라, 중심 장면 3~5개를 골라 장면당 4~8문단으로 깊이 펼쳐서
+채우세요. 출력을 마치기 전에 본문이 4,000자에 못 미친다고 판단되면, 새
+사건을 추가하지 말고 이미 쓴 장면을 더 깊이 파고들어(감각, 행동의 세부,
+내적 성찰) 분량을 채우세요.
 
 사실 관계: [RAG 검색된 사건 문단]에 없는 새로운 사건이나 사실(없던 사람,
 없던 사건, 없던 결과 등)을 지어내지 마세요 — 서술은 반드시 제공된 사건에
-근거해야 합니다(사후 근거 검증 대상). 다만 이것이 "짧게 쓰라"는 뜻은
-아닙니다 — 이미 있는 사건을 장면·감각·내적 성찰·있었을 법한 대화로
-정교하게 풀어내는 것(정교화)은 지어내는 것(날조)이 아니라 오히려 장려되는
-집필 방식입니다. 분량은 새 사건을 추가해서가 아니라, 주어진 사건 하나하나를
-더 깊이 있게 그려서 채우세요.
+근거해야 합니다(사후 근거 검증 대상). 특히, 화자가 실존 인물이거나 실존
+인물과 닮았더라도 당신이 학습으로 알고 있는 그 인물의 실제 정보(가족·동료의
+이름, 지명, 주소, 직장, 연도, 작품명 등)를 절대 가져오지 마세요 — 이 책에서
+사실로 인정되는 것은 오직 [RAG 검색된 사건 문단]에 적힌 내용뿐이며, 백과사전적
+지식으로 빈칸을 메우는 것은 가장 나쁜 종류의 날조입니다. 다만 이것이 "짧게
+쓰라"는 뜻은 아닙니다 — 이미 있는 사건을 장면·감각·내적 성찰로 정교하게
+풀어내는 것(정교화)은 지어내는 것(날조)이 아니라 오히려 장려되는 집필
+방식입니다.
+
+직접인용: 따옴표("")로 감싼 대화는 "실제로 이렇게 말했다"는 강한 주장입니다.
+[RAG 검색된 사건 문단]에 실제 발화 내용이 담겨 있을 때만 따옴표 직접인용을
+쓰고, 그 외에는 간접화법("~라고 말했던 기억이 난다", "~라던 목소리가
+떠오른다")으로 쓰세요. 있었을 법한 대화를 따옴표에 넣어 지어내지 마세요.
+
+시간 범위: [이 챕터의 시간 범위]가 주어지면 이 챕터의 장면은 그 범위 안에
+머물러야 합니다. 범위 밖 시기의 일은 새 장면으로 서술하지 말고, 꼭 필요할
+때만 한 문장 이내의 언급이나 복선으로 처리하세요 — 그 시기의 이야기는 다른
+챕터가 맡습니다.
+
+챕터 경계: [다른 챕터에서 다룰 주제]가 주어지면 그 주제들은 이 챕터에서 본격
+서술하지 마세요. 같은 사건이 여러 챕터에서 반복해 서술되면 독자는 같은 책
+안에서 같은 이야기를 두 번 읽게 됩니다.
 
 근거 태그: [RAG 검색된 사건 문단]의 각 사건에는 [E1], [E2] 같은 번호가
 붙어 있습니다. 사실 서술(무슨 일이 있었는지)을 담은 문단은 반드시 그 문단이
@@ -1220,16 +1323,34 @@ CHAPTER_WRITING_SYSTEM_PROMPT = """\
 사실 주장이므로 반드시 태그가 필요합니다).
 
 집필 기술 — 시중에 파는 자서전처럼 읽히도록 다음을 지키세요:
+- 선택과 집중: [RAG 검색된 사건 문단]의 모든 사건을 빠짐없이 다루려 하지
+  마세요. 챕터 주제와 직접 관련된 사건을 중심 장면으로 삼고, 주제와 거리가
+  있는 사건은 과감히 생략하세요 — 생략은 결함이 아니라 편집입니다. 사건을
+  하나씩 요약해 나열한 "하이라이트 모음"은 챕터가 아닙니다.
 - "그리고 -했다. 그리고 -했다" 식의 사건 나열이나 요약형 진술로 열지 말고,
   구체적인 장면·감각(공간, 소리, 냄새, 몸짓)으로 문을 여세요.
 - 감정을 이름 붙여 설명("슬펐다", "기뻤다")하기보다, 행동과 디테일로 그 감정이
   드러나게 하세요(보여주기, showing not telling).
+- 문단 연결: 각 문단은 바로 앞 문단에서 인과, 시간의 흐름, 정서적 여운 중
+  하나로 이어져야 합니다. 서로 다른 사건을 다루는 문단이라도 독립된 장면의
+  나열이 아니라 하나의 연속된 흐름으로 읽혀야 합니다. 이를 위한 연결
+  문장·전환 문단(새로운 사실 주장이 없는)은 자유롭게 쓰세요 — 근거 태그도
+  필요 없습니다.
+- 시점·어조 일관: 처음부터 끝까지 1인칭("나")을 유지하세요 — 자기 자신을
+  3인칭("그", 이름)으로 부르는 문단이 섞이면 안 됩니다. 종결어미는 [스타일
+  바이블]의 "종결어미 규정"이 지정한 하나로 챕터 끝까지 유지하세요(사용자가
+  선택한 말투 지시가 있으면 그쪽이 우선).
+- 모티프 절제: 같은 상징·표현(특정 단어, 반복되는 이미지)은 챕터당 1~2회까지만
+  쓰세요. 좋은 라이트모티프도 문단마다 반복되면 버릇이 됩니다. [스타일 바이블]의
+  "과용 주의 표현" 목록에 있는 단어·구절은 챕터당 1회 이하로 제한하세요.
 - [직전 챕터 요약]이 주어지면 완전히 새로 시작하지 말고, 그 여운이나 감정을
   자연스럽게 이어받으며 도입부를 여세요.
 - [챕터 시놉시스]에 담긴 연결고리를 살려, 다음 챕터를 향한 여운이나 전환으로
-  마무리하세요(마지막 챕터라면 책 전체를 회수하는 여운으로). 챕터 시놉시스가
-  이 챕터를 Part의 마지막 챕터라고 안내한다면 단순한 여운이 아니라 국면이
-  전환된다는 사실이 분명히 느껴지는 매듭으로 마무리하세요.
+  마무리하세요(마지막 챕터라면 책 전체를 회수하는 여운으로). 단, "다음
+  장에서는 ~가 기다리고 있다" 같은 예고형 상투구로 챕터를 닫지 마세요 —
+  장면과 감정 자체가 다음을 향하게 하세요. 챕터 시놉시스가 이 챕터를 Part의
+  마지막 챕터라고 안내한다면 단순한 여운이 아니라 국면이 전환된다는 사실이
+  분명히 느껴지는 매듭으로 마무리하세요.
 
 출력 형식 — 반드시 지킬 것:
 - 완성된 산문 본문만 출력하세요. "여기 챕터입니다", "**제1장**" 같은 제목·안내
@@ -1249,6 +1370,36 @@ def _numbered_events_block(retrieved_event_paragraphs: list[str]) -> str:
     )
 
 
+def _chapter_writing_user_prompt(
+    *,
+    style_bible: str,
+    book_synopsis: str,
+    chapter_synopsis: str,
+    previous_chapter_summary: str | None,
+    retrieved_event_paragraphs: list[str],
+    time_scope: str | None,
+    other_chapter_titles: list[str] | None,
+) -> str:
+    """기본/커스터마이징 집필 프롬프트가 공유하는 user 메시지 조립. 시스템
+    프롬프트의 "시간 범위"/"챕터 경계" 지시와 짝을 이루는 블록은 재료가 있을
+    때만 넣는다(없는데 빈 헤더만 있으면 지시가 공허해진다)."""
+    events_block = _numbered_events_block(retrieved_event_paragraphs)
+    prev_block = previous_chapter_summary or "(첫 챕터)"
+    sections = [
+        f"[스타일 바이블]\n{style_bible}",
+        f"[전체 시놉시스]\n{book_synopsis}",
+        f"[챕터 시놉시스]\n{chapter_synopsis}",
+        f"[직전 챕터 요약]\n{prev_block}",
+    ]
+    if time_scope:
+        sections.append(f"[이 챕터의 시간 범위]\n{time_scope}")
+    if other_chapter_titles:
+        titles_block = "\n".join(f"- {title}" for title in other_chapter_titles)
+        sections.append(f"[다른 챕터에서 다룰 주제 — 이 챕터에서 본격 서술 금지]\n{titles_block}")
+    sections.append(f"[RAG 검색된 사건 문단]\n{events_block}")
+    return "\n\n".join(sections)
+
+
 def build_chapter_writing_prompt(
     *,
     style_bible: str,
@@ -1256,15 +1407,17 @@ def build_chapter_writing_prompt(
     chapter_synopsis: str,
     previous_chapter_summary: str | None,
     retrieved_event_paragraphs: list[str],
+    time_scope: str | None = None,
+    other_chapter_titles: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    events_block = _numbered_events_block(retrieved_event_paragraphs)
-    prev_block = previous_chapter_summary or "(첫 챕터)"
-    user_prompt = (
-        f"[스타일 바이블]\n{style_bible}\n\n"
-        f"[전체 시놉시스]\n{book_synopsis}\n\n"
-        f"[챕터 시놉시스]\n{chapter_synopsis}\n\n"
-        f"[직전 챕터 요약]\n{prev_block}\n\n"
-        f"[RAG 검색된 사건 문단]\n{events_block}"
+    user_prompt = _chapter_writing_user_prompt(
+        style_bible=style_bible,
+        book_synopsis=book_synopsis,
+        chapter_synopsis=chapter_synopsis,
+        previous_chapter_summary=previous_chapter_summary,
+        retrieved_event_paragraphs=retrieved_event_paragraphs,
+        time_scope=time_scope,
+        other_chapter_titles=other_chapter_titles,
     )
     return [
         {"role": "system", "content": CHAPTER_WRITING_SYSTEM_PROMPT},
@@ -1289,6 +1442,83 @@ def build_chapter_recap_prompt(*, chapter_content: str) -> list[dict[str, str]]:
     ]
 
 
+CHAPTER_EXPANSION_SYSTEM_PROMPT = """\
+아래 [챕터 초안]은 목표 분량(4,000~6,000자)에 크게 못 미칩니다. 초안의 사실
+관계·사건 순서·문단 구조를 그대로 유지하면서, 이미 있는 장면들을 더 깊이
+파고들어 분량을 목표 범위까지 늘리세요.
+
+확장 방법 — 반드시 지킬 것:
+- 새로운 사건·인물·사실을 추가하지 마세요. [근거 사건 목록]에 없는 내용은
+  이 확장에서도 여전히 금지입니다.
+- 늘리는 수단은 오직 정교화입니다: 공간·소리·냄새·몸짓 같은 감각 묘사,
+  행동의 세부, 내적 성찰, 감정의 결. 이미 요약된 문장을 장면으로 풀어 쓰세요.
+- 초안에 있는 근거 태그([E1] 등)는 해당 문단 확장 후에도 문단 끝에 그대로
+  유지하세요.
+- 문체·시점·종결어미는 초안과 동일하게 유지하세요.
+- 완성된 산문 본문만 출력하세요. 안내 문구나 메타 설명을 붙이지 마세요.
+"""
+
+
+def build_chapter_expansion_prompt(
+    *, chapter_content: str, source_events_text: str
+) -> list[dict[str, str]]:
+    user_prompt = (
+        f"[근거 사건 목록]\n{source_events_text}\n\n"
+        f"[챕터 초안]\n{chapter_content}"
+    )
+    return [
+        {"role": "system", "content": CHAPTER_EXPANSION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+CHAPTER_PROOFREAD_SYSTEM_PROMPT = """\
+아래 [챕터 본문]을 교열하세요. 이 작업은 내용을 다시 쓰는 개고가 아니라,
+표면 결함만 고치는 교정·교열입니다.
+
+고칠 것:
+1. 오탈자와 비문: 존재하지 않는 단어(예: "속술했다"), 문법적으로 깨진 문장,
+   의미가 통하지 않는 구절을 문맥에 맞는 자연스러운 표현으로 바로잡으세요.
+2. 시점 이탈: 1인칭("나") 서술 중에 자기 자신을 3인칭(이름, "그")으로 부르는
+   문장이 있으면 1인칭으로 되돌리세요.
+3. 종결어미 격식 혼입: 본문 전체의 지배적인 종결어미(예: "-다"체)와 다른
+   격식(예: "-습니다"체)이 섞인 문장을 지배적인 쪽으로 통일하세요.
+4. 표현 남발: 같은 단어·이미지가 세 번 이상 반복되면, 문장의 의미를 바꾸지
+   않는 선에서 일부를 다른 표현으로 바꾸거나 덜어내세요.
+5. 시대착오적 묘사: 본문 안의 시간 정보와 명백히 모순되는 소품·행동 묘사가
+   있으면, 사실 주장을 새로 만들지 않는 범위에서 모순이 사라지게 다듬으세요.
+
+고치지 말 것:
+- 사실 관계·사건 순서·문단 구성(문단 추가/삭제/합치기 금지).
+- 문체와 어조(교정 대상이 아닌 문장은 한 글자도 바꾸지 마세요).
+- 근거 태그([E1] 등)가 남아 있으면 위치 그대로 유지하세요.
+
+출력: 교열이 끝난 본문 전문만 출력하세요. 고친 부분 목록, 설명, 안내 문구를
+붙이지 마세요.
+"""
+
+
+def build_chapter_proofread_prompt(
+    *, chapter_content: str, overused_terms: list[str] | None = None
+) -> list[dict[str, str]]:
+    """overused_terms: 서비스 레이어가 본문에서 결정론적으로 센 고빈도 표현 목록
+    (autobiography_service._count_overused_terms) — "같은 표현 3회 이상 완화"라는
+    일반 지시만으로는 실제 남발('덤' 4회 잔존, 2026-07-18 실측)이 잡히지 않아,
+    구체적인 단어를 지목해 전달한다."""
+    sections = [f"[챕터 본문]\n{chapter_content}"]
+    if overused_terms:
+        terms_block = ", ".join(overused_terms)
+        sections.insert(
+            0,
+            "[완화 대상 반복 표현 — 본문에서 4회 이상 등장한 단어들입니다. 각각 1~2회만 "
+            f"남기고 나머지는 다른 표현으로 바꾸거나 덜어내세요]\n{terms_block}",
+        )
+    return [
+        {"role": "system", "content": CHAPTER_PROOFREAD_SYSTEM_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
 UNITY_REVISION_SYSTEM_PROMPT = """\
 전체 챕터와 스타일 바이블을 함께 검토해 인접 챕터 경계부의 어조·문체 단절을
 매끄럽게 다듬으세요. 각 챕터의 첫 문장·마지막 문장 같은 "이음매" 부분이
@@ -1307,11 +1537,16 @@ UNITY_REVISION_SYSTEM_PROMPT = """\
 출력 형식 — 반드시 지킬 것:
 - 윤문이 끝난 전체 원고 본문만 그대로 출력하세요. "**수정된 원고**", "아래는 수정
   본입니다" 같은 안내 문구나 지시사항을 되뇌는 메타 설명을 앞뒤에 절대 붙이지
-  마세요 — 이 출력이 그대로 final_content로 저장되어 PDF에 인쇄됩니다.
+  마세요 — 이 출력이 그대로 최종 원고로 저장되어 PDF에 인쇄됩니다.
+- 각 챕터 시작 직전에 있는 `<<<CHAPTER N>>>` 줄은 챕터 경계 마커입니다. 출력에서도
+  각 챕터가 시작되는 지점에 정확히 같은 마커 줄을 그대로 유지하세요 — 개수와 순서가
+  입력과 완전히 동일해야 하며, 마커를 빠뜨리거나 새로 만들면 안 됩니다(시스템이 이
+  마커로 윤문된 본문을 챕터별로 다시 나눠 저장합니다). 마커 바로 다음 줄의
+  `[N장. 제목]` 헤더 줄도 그대로 유지하세요.
 - `=== PART N: 제목 ===` 표시는 당신에게 구조를 알려주기 위한 안내용일
   뿐입니다. 최종 출력 어디에도 이 표시나 이와 비슷한 마커를 그대로 남기지
   마세요 — Part가 바뀌었다는 사실은 문장의 흐름과 전환 자체로 드러내야지,
-  표시로 나타내면 안 됩니다.
+  표시로 나타내면 안 됩니다(챕터 경계 마커 `<<<CHAPTER N>>>`와 챕터 헤더만 예외).
 - 마크다운 문법(**굵게**, ### 제목, > 인용, - 목록 등)을 쓰지 마세요. 입력 원고에
   이미 마크다운이 섞여 있다면 윤문하면서 순수 텍스트로 정리하세요.
 """
@@ -1389,9 +1624,15 @@ GROUNDEDNESS_JUDGE_SYSTEM_PROMPT = """\
 - 내적 독백·감정·다짐. 예: "시간이 천천히 흐르는 듯한 착각이 들었다",
   "이 순간을 덤으로 살아보자고 되뇌었다" — 감정 반응이지 사실 주장이
   아닙니다.
-- 이미 확인된 사건(예: 배우자와 대화했다) 속 대사의 재구성. "그녀가
-  대답하는 목소리는 부드러웠다"처럼 대화의 분위기·어조를 지어내는 것은
-  정교화입니다.
+- 이미 확인된 사건(예: 배우자와 대화했다) 속 대화의 분위기·어조 묘사.
+  "그녀가 대답하는 목소리는 부드러웠다"처럼 어조를 그리는 것은 정교화입니다.
+  단, 이 예외는 따옴표 밖의 서술에만 적용됩니다 — 아래 직접인용 기준 참조.
+
+직접인용은 더 엄격하게: 따옴표("")로 감싼 대사는 "실제로 이렇게 말했다"는
+검증 가능한 사실 주장입니다. 근거 사건 목록에 해당 발화 내용(또는 그 취지)이
+실제로 담겨 있지 않다면, 대화 장면 자체가 근거에 있더라도 그 따옴표 대사는
+플래그하세요. 애매하면 플래그하는 쪽입니다 — 일반 서술의 "애매하면 통과"
+기준이 직접인용에는 적용되지 않습니다.
 
 주의 — 위 예외들은 문장의 "내용"이 감정·분위기일 때만 적용됩니다. "~을
 떠올린다", "~라는 기억이 있다"처럼 회상·감상의 문형을 취했다고 자동으로
@@ -1554,6 +1795,52 @@ def build_third_party_risk_prompt(*, person_name: str, chapter_excerpts: list[st
     user_prompt = f"인물: {person_name}\n\n[등장 문단들]\n{excerpts_block}"
     return [
         {"role": "system", "content": THIRD_PARTY_RISK_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+# 배치판 — write_chapter의 등장인물 스캔(character_service)이 챕터 하나에서 발견된
+# 인물 전원을 단일 호출로 분류한다(2026-07-18 — 이전엔 인물마다 별도 호출이라
+# 인물 수만큼 지연·비용이 곱해졌다). 단건판은 샌드박스 개별 튜닝용으로 유지.
+THIRD_PARTY_RISK_BATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "people": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "person_name": {"type": "string"},
+                    "risk_detected": {"type": "boolean"},
+                    "risk_classification": {
+                        "type": "string",
+                        "enum": ["none", "negative_portrayal", "conflict", "crime_mention"],
+                    },
+                    "risk_reasons": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["person_name", "risk_detected", "risk_classification", "risk_reasons"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["people"],
+    "additionalProperties": False,
+}
+
+
+def build_third_party_risk_batch_prompt(
+    *, person_names: list[str], chapter_content: str
+) -> list[dict[str, str]]:
+    system_prompt = (
+        THIRD_PARTY_RISK_SYSTEM_PROMPT
+        + "\n[분류 대상 인물] 목록의 모든 인물을 각각 한 항목씩, 정확히 같은 이름"
+        "(person_name)으로 분류하세요. 목록에 없는 인물을 추가하거나 목록의 인물을 "
+        "빠뜨리지 마세요."
+    )
+    names_block = "\n".join(f"- {name}" for name in person_names)
+    user_prompt = f"[분류 대상 인물]\n{names_block}\n\n[챕터 본문]\n{chapter_content}"
+    return [
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
@@ -2026,6 +2313,8 @@ def build_customized_chapter_writing_prompt(
     retrieved_event_paragraphs: list[str],
     tone_key: str,
     concept_key: str,
+    time_scope: str | None = None,
+    other_chapter_titles: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """CHAPTER_WRITING_SYSTEM_PROMPT에 말투(tone)·컨셉(concept) 지시문을 주입한다.
     기존 build_chapter_writing_prompt의 커스터마이징 확장판. instruction과 함께
@@ -2043,14 +2332,14 @@ def build_customized_chapter_writing_prompt(
         f"[컨셉 예시 — 관점과 초점만 참고하고, 예시의 구체적 사실·소재는 "
         f"절대 가져오지 말 것] {concept['example']}"
     )
-    events_block = _numbered_events_block(retrieved_event_paragraphs)
-    prev_block = previous_chapter_summary or "(첫 챕터)"
-    user_prompt = (
-        f"[스타일 바이블]\n{style_bible}\n\n"
-        f"[전체 시놉시스]\n{book_synopsis}\n\n"
-        f"[챕터 시놉시스]\n{chapter_synopsis}\n\n"
-        f"[직전 챕터 요약]\n{prev_block}\n\n"
-        f"[RAG 검색된 사건 문단]\n{events_block}"
+    user_prompt = _chapter_writing_user_prompt(
+        style_bible=style_bible,
+        book_synopsis=book_synopsis,
+        chapter_synopsis=chapter_synopsis,
+        previous_chapter_summary=previous_chapter_summary,
+        retrieved_event_paragraphs=retrieved_event_paragraphs,
+        time_scope=time_scope,
+        other_chapter_titles=other_chapter_titles,
     )
     return [
         {"role": "system", "content": system_prompt},

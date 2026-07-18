@@ -263,6 +263,22 @@ class MockInterviewSessionGateway(InterviewSessionGateway):
             session.session_prose_original = session.session_prose
         session.session_prose = new_prose
         session.prose_last_edited_at = edited_at
+        # 사람이 직접 확인·수정한 텍스트는 왜곡 의심 대상이 아니다(인터페이스 계약).
+        session.distortion_flagged = False
+
+    async def set_distortion_flagged(self, session_id: uuid.UUID, flagged: bool) -> None:
+        self._require_session(session_id).distortion_flagged = flagged
+
+    async def set_must_include(self, session_id: uuid.UUID, value: bool) -> None:
+        self._require_session(session_id).is_must_include = value
+
+    async def get_opening_contents(self, session_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, str]:
+        result: dict[uuid.UUID, str] = {}
+        for session_id in session_ids:
+            session = self._store.sessions.get(session_id)
+            if session and session.chat_logs and session.chat_logs[0].role == MessageRole.ASSISTANT:
+                result[session_id] = session.chat_logs[0].content
+        return result
 
     async def list_stale_completed(self, *, older_than: datetime) -> list[InterviewSessionRecord]:
         return [
@@ -337,7 +353,7 @@ class MockEventGateway(EventGateway):
                 labels=item.labels,
                 confidence=item.confidence,
                 verified=item.verified,
-                is_must_include=False,
+                is_must_include=item.is_must_include,
                 embedding=item.embedding,
                 created_at=datetime.now(timezone.utc),
             )
@@ -401,18 +417,6 @@ class MockEventGateway(EventGateway):
         events.sort(key=lambda e: (e.importance_score is None, -(e.importance_score or 0)))
         return events
 
-    async def list_for_timeline(self, user_id: uuid.UUID) -> list[EventRecord]:
-        events = [
-            event
-            for event in self._store.events.values()
-            if event.user_id == user_id and event.verified and event.duplicate_of_event_id is None
-        ]
-        # "오름차순 정렬 + reverse()" 이유: MockInterviewSessionGateway.list_by_user
-        # 주석 참조 — sort(reverse=True)는 동일 created_at일 때 삽입 순서를 그대로
-        # 유지해 "최신순" 계약이 깨질 수 있다.
-        events.sort(key=lambda e: e.created_at)
-        events.reverse()
-        return events
 
     async def list_mergeable(self, user_id: uuid.UUID) -> list[EventRecord]:
         events = [
@@ -473,6 +477,11 @@ class MockEventGateway(EventGateway):
 
     async def mark_duplicate(self, event_id: uuid.UUID, *, duplicate_of_event_id: uuid.UUID) -> None:
         self._require_event(event_id).duplicate_of_event_id = duplicate_of_event_id
+
+    async def set_must_include_by_session(self, session_id: uuid.UUID, value: bool) -> None:
+        for event in self._store.events.values():
+            if event.session_id == session_id:
+                event.is_must_include = value
 
     async def count_mentions(self, event_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]:
         id_set = set(event_ids)
@@ -710,7 +719,7 @@ class MockChapterDraftGateway(ChapterDraftGateway):
                 title=item.title,
                 chapter_synopsis=item.synopsis,
                 content=None,
-                source_event_ids=[],
+                source_event_ids=list(item.source_event_ids or []),
                 factcheck_report=None,
                 groundedness_report=None,
                 status=DraftStatus.DRAFT,
@@ -720,6 +729,13 @@ class MockChapterDraftGateway(ChapterDraftGateway):
             self._store.chapter_drafts[chapter.id] = chapter
             created.append(chapter)
         return created
+
+    async def update_content(self, chapter_draft_id: uuid.UUID, content: str) -> None:
+        chapter = self._store.chapter_drafts.get(chapter_draft_id)
+        if chapter is None:
+            raise KeyError(f"chapter draft not found in mock store: {chapter_draft_id}")
+        chapter.content = content
+        chapter.updated_at = datetime.now(timezone.utc)
 
     async def save_write_result(
         self, chapter_draft_id: uuid.UUID, result: ChapterDraftWriteResult

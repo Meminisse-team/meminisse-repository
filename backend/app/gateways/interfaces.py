@@ -205,7 +205,23 @@ class InterviewSessionGateway(ABC):
         그리로 백업한 뒤, session_prose를 new_prose로 덮어쓰고 prose_last_edited_at을
         edited_at으로 갱신한다 — "최초 편집 시에만 원본 백업" 판단을 호출부가 아니라
         구현체 내부에서 원자적으로 처리해, 서비스 레이어가 원본 존재 여부를 미리
-        조회해야 하는 경쟁 상태를 피한다."""
+        조회해야 하는 경쟁 상태를 피한다.
+
+        distortion_flagged도 함께 False로 되돌린다 — 사람이 직접 확인·수정한
+        텍스트는 왜곡 의심 대상이 아니므로, 편집 저장이 곧 플래그 해소 액션이다
+        (2026-07-18)."""
+
+    @abstractmethod
+    async def set_distortion_flagged(self, session_id: UUID, flagged: bool) -> None:
+        """산문 재조립본이 왜곡 탐지를 (재시도 포함) 통과하지 못했음을 표시한다
+        (event_extraction_service, 2026-07-18). 해제는 보통 apply_user_prose_edit이
+        함께 처리하지만, 재처리 경로 등에서 직접 되돌릴 수 있게 양방향으로 둔다."""
+
+    @abstractmethod
+    async def set_must_include(self, session_id: UUID, value: bool) -> None:
+        """'꼭 넣기' 토글(PATCH /interview-sessions/{id}/must-include). 이 세션에서
+        추출된 이벤트로의 전파(EventGateway.set_must_include_by_session)는 서비스
+        레이어가 함께 호출한다 — 중요도 스코어링이 읽는 건 Event 쪽 플래그다."""
 
     @abstractmethod
     async def list_stale_completed(self, *, older_than: datetime) -> list[InterviewSessionRecord]:
@@ -225,6 +241,14 @@ class InterviewSessionGateway(ABC):
         """전체 유저를 통틀어 started_at 내림차순. 관리자 DB 열람 화면 전용 —
         list_by_user와 달리 특정 유저로 좁히지 않는다. chat_logs는 채우지 않는다
         (list_by_user와 동일한 이유: 목록 조회 페이로드를 가볍게 유지)."""
+
+    @abstractmethod
+    async def get_opening_contents(self, session_ids: Sequence[UUID]) -> dict[UUID, str]:
+        """각 세션의 오프닝 문구(첫 chat_log가 assistant 턴일 때 그 content)를 한
+        번에 조회한다 — '나의 이야기' 카드 제목용. 첫 로그가 없거나 user 턴인
+        구버전 세션은 결과 dict에서 빠진다(호출부가 질문 재조회/일반 라벨로 폴백,
+        story_service._resolve_title 참조). 카드마다 get_by_id로 전체 chat_logs를
+        다시 불러오던 N+1 제거(2026-07-18)."""
 
     @abstractmethod
     async def list_completed_by_user(
@@ -292,13 +316,10 @@ class EventGateway(ABC):
         importance_score 내림차순(null은 마지막)으로 정렬해 반환한다."""
 
     @abstractmethod
-    async def list_for_timeline(self, user_id: UUID) -> list[EventRecord]:
-        """list_unmerged_verified와 필터 조건은 동일(verified=True AND
-        duplicate_of_event_id IS NULL)하지만 정렬 기준이 다르다 — 이쪽은
-        created_at 내림차순(최근에 나눈 대화가 먼저)으로, '나의 이야기' 탭처럼
-        사용자가 시간순으로 훑어보는 화면 전용이다(GET /events). 목차 생성용
-        중요도 정렬(list_unmerged_verified)과 표시용 시간 정렬의 관심사가 달라
-        메서드를 분리했다 — 같은 쿼리에 정렬 파라미터를 얹지 않은 이유."""
+    async def set_must_include_by_session(self, session_id: UUID, value: bool) -> None:
+        """이 세션에서 추출된 모든 이벤트의 is_must_include를 일괄 갱신한다 —
+        세션 단위 '꼭 넣기' 토글(InterviewSessionGateway.set_must_include)의 전파.
+        Phase 3 중요도 스코어링(MUST_INCLUDE_BONUS)이 읽는 것은 이 플래그다."""
 
     @abstractmethod
     async def list_mergeable(self, user_id: UUID) -> list[EventRecord]:
@@ -468,6 +489,12 @@ class ChapterDraftGateway(ABC):
         self, autobiography_id: UUID, chapters: Sequence[ChapterDraftCreateData]
     ) -> list[ChapterDraftRecord]:
         """목차 후보 재선택 시 이전 챕터 초안을 대체한다(select_toc_candidate, idempotent)."""
+
+    @abstractmethod
+    async def update_content(self, chapter_draft_id: UUID, content: str) -> None:
+        """본문만 교체한다 — 최종 통일성 윤문(finalize_manuscript)이 챕터별 윤문
+        결과를 되써넣는 전용 경로(2026-07-18). 윤문 전 본문으로 PDF가 조판되던
+        불일치의 수정: 이후 PDF는 chapter.content만 읽으면 윤문이 반영된다."""
 
     @abstractmethod
     async def save_write_result(

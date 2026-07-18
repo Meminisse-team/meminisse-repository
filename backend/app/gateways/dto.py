@@ -112,6 +112,9 @@ class InterviewSessionRecord:
     chat_logs: list[ChatLogRecord] = field(default_factory=list)
     session_prose_original: str | None = None
     prose_last_edited_at: datetime | None = None
+    # 산문 재조립본이 왜곡 탐지를 (재시도 포함) 통과하지 못한 세션 — 이벤트 추출이
+    # 보류돼 있고, 사용자가 산문을 직접 확인·수정하면 해제된다(2026-07-18).
+    distortion_flagged: bool = False
 
 
 @dataclass
@@ -208,6 +211,10 @@ class EventCreateData:
     labels: dict = field(default_factory=dict)
     confidence: dict | None = None
     embedding: list[float] | None = None
+    # 세션 단위 '꼭 넣기' 표시의 상속 — 이미 토글된 세션에서 (재)추출되는 이벤트가
+    # 플래그를 잃지 않게 호출부(event_extraction_service)가 session.is_must_include를
+    # 넘긴다(2026-07-18).
+    is_must_include: bool = False
 
 
 @dataclass
@@ -314,6 +321,12 @@ class ChapterDraftCreateData:
     # write_chapter가 이 값을 읽어 집필하고, 다음 챕터의 "직전 챕터 요약"으로도
     # 쓰인다(직전 챕터 완성 본문 의존 제거 → 전 챕터 병렬 집필 가능).
     synopsis: str | None = None
+    # select_toc_candidate가 목차 확정 시점에 배타적으로 배정하는 근거 사건.
+    # 같은 사건이 여러 챕터에서 반복 서술되는 문제를 검색 레이어에서 차단하기
+    # 위해, write_chapter는 이 값이 있으면 재검색하지 않고 그대로 사용한다
+    # (시놉시스에 쓰인 사건과 집필에 쓰이는 사건이 항상 일치). None이면 구버전
+    # 초안 — write_chapter가 기존 하이브리드 검색으로 폴백한다.
+    source_event_ids: list[UUID] | None = None
 
 
 @dataclass

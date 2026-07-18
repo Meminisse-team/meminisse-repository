@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -262,4 +263,6 @@ def get_app_log_lines(*, service: str, lines: int) -> list[str]:
     if not log_path.exists():
         return []
     with log_path.open(encoding="utf-8", errors="replace") as f:
-        return f.readlines()[-lines:]
+        # readlines()[-N:]은 파일 전체를 메모리에 올린다 — 로그가 수십 MB로 자라도
+        # 마지막 N줄만 유지하는 고정 크기 버퍼로 스트리밍한다(2026-07-18).
+        return list(deque(f, maxlen=lines))

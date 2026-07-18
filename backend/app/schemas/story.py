@@ -19,6 +19,13 @@ class StoryCardRead(BaseModel):
     # prose가 빈 문자열인 placeholder 카드다 — 프론트가 "생성 중..." 임시 셀로
     # 표시한다(story_service.py:list_story_cards 참조).
     is_generating: bool = False
+    # '꼭 넣기' 표시(PATCH /interview-sessions/{id}/must-include) — 자서전 중요도
+    # 스코어링에 가산점으로 반영된다.
+    is_must_include: bool = False
+    # 산문 재조립본이 왜곡 탐지를 통과하지 못해 이벤트 추출이 보류된 세션 —
+    # 프론트가 "원문과 다를 수 있어요" 배지를 보여주고, 사용자가 산문을 직접
+    # 수정·저장하면 해제된다.
+    distortion_flagged: bool = False
 
 
 class StoryCardPageRead(BaseModel):

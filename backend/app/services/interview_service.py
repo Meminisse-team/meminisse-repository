@@ -332,6 +332,21 @@ async def get_session(gateways: Gateways, session_id: uuid.UUID) -> InterviewSes
     return await gateways.sessions.get_by_id(session_id)
 
 
+async def set_must_include(
+    gateways: Gateways, session: InterviewSessionRecord, value: bool
+) -> InterviewSessionRecord:
+    """'꼭 넣기' 토글 — 세션 플래그와 함께, 이 세션에서 이미 추출된 이벤트들의
+    is_must_include도 일괄 갱신한다(Phase 3 중요도 스코어링의 MUST_INCLUDE_BONUS가
+    읽는 건 이벤트 쪽이다). 아직 이벤트가 추출되지 않은 세션이면 이벤트 갱신은
+    자연히 0건이고, 이후 추출(_persist_events)이 세션 플래그를 상속한다."""
+    await gateways.sessions.set_must_include(session.id, value)
+    await gateways.events.set_must_include_by_session(session.id, value)
+    await gateways.commit()
+    updated = await gateways.sessions.get_by_id(session.id)
+    assert updated is not None
+    return updated
+
+
 async def list_sessions(gateways: Gateways, user_id: uuid.UUID) -> list[InterviewSessionRecord]:
     """GET /interview-sessions(대시보드 '오늘의 대화'가 이어갈 세션을 찾거나,
     최근 세션 미리보기를 보여주는 데 사용). started_at 내림차순 — 가장 최근
@@ -374,84 +389,87 @@ async def add_user_turn(
         # 매칭이라 Solar 호출이 없다(app/agents/prompts.py:CRISIS_KEYWORDS).
         assistant_content = prompts.TIER2_CRISIS_RESPONSE
         is_crisis = True
-    elif await _detect_strong_negative_emotion(content):
-        # 1층: 위기까지는 아니지만 심화 질문은 피해야 할 만큼 강한 부정적 감정 —
-        # 슬롯/꼬리질문 진행 없이 완충 응답만 돌려주고 세션은 계속 열어 둔다(2층과
-        # 달리 세션을 종료하지 않는다 — 사용자가 원하면 다른 이야기로 이어갈 수 있게).
-        assistant_content = await _generate_tier1_buffer(content)
     else:
-        newly_filled = await _run_slot_gating(content=content, slots_filled=session.slots_filled)
-        updated_slots = {**session.slots_filled, **{slot: True for slot in newly_filled}}
-        missing_required = [key for key in prompts.REQUIRED_SLOTS if not updated_slots.get(key)]
-        # "한 세션 = 사건 하나" 관례를 따르는 세션 타입 전부 — 슬롯 충족 후 마무리
-        # 확인을 거쳐 자동 완료되고, 맥락 기반 꼬리질문도 이 타입들에서만 시도한다.
-        # EPISODE(사용자가 직접 시작한 자유 에피소드, 2026-07-16)도 같은 관례를
-        # 따른다 — 여기 빠지면 세션이 에러 없이 영원히 OPEN 상태로 남는다.
-        is_single_event_session = session.session_type in (
-            SessionType.FIXED_QUESTION, SessionType.PHOTO, SessionType.EPISODE,
-        )
-
-        def _finalize_wrap_up_or_complete() -> str:
-            """슬롯·풍부함·맥락 기반 꼬리질문까지 다 거친 뒤 도달하는 마지막 갈림길
-            — 마무리 확인을 아직 안 했으면 그것부터, 이미 했으면 진짜로 완료한다.
-            둘 이상의 분기(맥락 꼬리질문이 "없음"으로 나온 경우와, 애초에 그 단계
-            자체가 스킵된 경우)에서 공통으로 이 지점에 도달하므로 헬퍼로 뺐다."""
-            nonlocal should_complete
-            if not updated_slots.get(_WRAP_UP_OFFERED_KEY):
-                updated_slots[_WRAP_UP_OFFERED_KEY] = True
-                return prompts.WRAP_UP_CHECK_IN_MESSAGE
-            # PHOTO 세션도 FIXED_QUESTION과 동일하게 다룬다(docs/QUESTION_BANK_
-            # GUIDE.md 5절 — "이후 대화는 일반 인터뷰와 동일하게 진행된다"). 다음
-            # 질문 미리보기는 더 이상 여기서 만들지 않는다 — 프론트가 "다음 이야기
-            # 계속하기" 버튼을 누르는 시점에 GET next-preview로 새로 가져간다
-            # (2026-07-15 — 이전엔 여기서 미리 다음 질문을 만들어 보여줘, 세션이
-            # 끝나도 새 채팅이 열리는 느낌 없이 한 세션 안에서 여러 질문을 받는
-            # 것처럼 보인다는 피드백이 있었다).
-            should_complete = is_single_event_session
-            return (
-                "네, 잘 들었어요. 소중한 이야기 들려주셔서 감사해요."
-                if should_complete
-                else "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+        # 1층 감정 판정과 슬롯 게이팅을 단일 호출로 통합(2026-07-18 — 이전엔 매
+        # 턴 별도 LLM 호출 2회라 지연·비용이 두 배였다). 강한 부정적 감정이면
+        # 슬롯 판정 결과는 버리고 완충 응답만 돌려준다(기존 동작 동일 — 세션은
+        # 계속 열어 둬 사용자가 원하면 다른 이야기로 이어갈 수 있게).
+        gating = await _run_turn_gating(content=content, slots_filled=session.slots_filled)
+        if gating.get("strong_negative_emotion"):
+            assistant_content = await _generate_tier1_buffer(content)
+        else:
+            newly_filled = gating.get("newly_filled_slots", [])
+            updated_slots = {**session.slots_filled, **{slot: True for slot in newly_filled}}
+            missing_required = [key for key in prompts.REQUIRED_SLOTS if not updated_slots.get(key)]
+            # "한 세션 = 사건 하나" 관례를 따르는 세션 타입 전부 — 슬롯 충족 후 마무리
+            # 확인을 거쳐 자동 완료되고, 맥락 기반 꼬리질문도 이 타입들에서만 시도한다.
+            # EPISODE(사용자가 직접 시작한 자유 에피소드, 2026-07-16)도 같은 관례를
+            # 따른다 — 여기 빠지면 세션이 에러 없이 영원히 OPEN 상태로 남는다.
+            is_single_event_session = session.session_type in (
+                SessionType.FIXED_QUESTION, SessionType.PHOTO, SessionType.EPISODE,
             )
 
-        if missing_required and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT:
-            assistant_content = await _generate_followup_question(
-                event_summary=content,
-                missing_required_slots=missing_required,
-                followup_count=session.followup_count,
-            )
-            new_followup_count = session.followup_count + 1
-        elif (
-            _total_user_content_length(session, content) < prompts.MIN_RICH_ANSWER_LENGTH
-            and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
-        ):
-            # 필수 슬롯은 다 찼지만 이 사건에 대해 실제로 쓴 글자 수가 너무 적다 —
-            # 채팅 말풍선 UI가 카카오톡처럼 짧은 대답을 유도한다는 피드백(2026-07-14)
-            # 대응. 남은 꼬리 질문 예산 안에서(MAX_FOLLOWUP_PER_EVENT 공유) 한 번 더
-            # 자연스러운 구체화 질문을 던진다.
-            assistant_content = await _generate_elaboration_question(content)
-            new_followup_count = session.followup_count + 1
-        elif (
-            not updated_slots.get(_CONTEXTUAL_FOLLOWUP_OFFERED_KEY)
-            and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
-            and is_single_event_session
-        ):
-            # 슬롯(필수 정보)과 풍부함(길이)은 기계적 기준이었다 — 여기서는 그와
-            # 별개로, 진짜 전기 작가라면 자연스럽게 캐물었을 만한 지점이 대화 속에
-            # 있는지 LLM이 직접 판단한다(2026-07-15 피드백, INTERVIEW_PERSONA_
-            # SYSTEM_PROMPT가 원래 표방했지만 실제로는 연결된 적 없던 역할). 세션당
-            # 한 번만 시도하고(플래그로 기록), 꼬리 질문 예산을 공유해 무한정
-            # 캐묻지 않는다. "캐물을 게 없다"는 결과가 나오면 같은 턴 안에서 바로
-            # 마무리 확인으로 넘어간다 — 빈 라운드트립으로 한 턴을 낭비하지 않는다.
-            updated_slots[_CONTEXTUAL_FOLLOWUP_OFFERED_KEY] = True
-            contextual_question = await _generate_contextual_followup(session=session, latest_content=content)
-            if contextual_question is not None:
-                assistant_content = contextual_question
+            def _finalize_wrap_up_or_complete() -> str:
+                """슬롯·풍부함·맥락 기반 꼬리질문까지 다 거친 뒤 도달하는 마지막 갈림길
+                — 마무리 확인을 아직 안 했으면 그것부터, 이미 했으면 진짜로 완료한다.
+                둘 이상의 분기(맥락 꼬리질문이 "없음"으로 나온 경우와, 애초에 그 단계
+                자체가 스킵된 경우)에서 공통으로 이 지점에 도달하므로 헬퍼로 뺐다."""
+                nonlocal should_complete
+                if not updated_slots.get(_WRAP_UP_OFFERED_KEY):
+                    updated_slots[_WRAP_UP_OFFERED_KEY] = True
+                    return prompts.WRAP_UP_CHECK_IN_MESSAGE
+                # PHOTO 세션도 FIXED_QUESTION과 동일하게 다룬다(docs/QUESTION_BANK_
+                # GUIDE.md 5절 — "이후 대화는 일반 인터뷰와 동일하게 진행된다"). 다음
+                # 질문 미리보기는 더 이상 여기서 만들지 않는다 — 프론트가 "다음 이야기
+                # 계속하기" 버튼을 누르는 시점에 GET next-preview로 새로 가져간다
+                # (2026-07-15 — 이전엔 여기서 미리 다음 질문을 만들어 보여줘, 세션이
+                # 끝나도 새 채팅이 열리는 느낌 없이 한 세션 안에서 여러 질문을 받는
+                # 것처럼 보인다는 피드백이 있었다).
+                should_complete = is_single_event_session
+                return (
+                    "네, 잘 들었어요. 소중한 이야기 들려주셔서 감사해요."
+                    if should_complete
+                    else "말씀해주셔서 감사해요. 다음 이야기로 넘어가 볼까요?"
+                )
+
+            if missing_required and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT:
+                assistant_content = await _generate_followup_question(
+                    event_summary=content,
+                    missing_required_slots=missing_required,
+                    followup_count=session.followup_count,
+                )
                 new_followup_count = session.followup_count + 1
+            elif (
+                _total_user_content_length(session, content) < prompts.MIN_RICH_ANSWER_LENGTH
+                and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
+            ):
+                # 필수 슬롯은 다 찼지만 이 사건에 대해 실제로 쓴 글자 수가 너무 적다 —
+                # 채팅 말풍선 UI가 카카오톡처럼 짧은 대답을 유도한다는 피드백(2026-07-14)
+                # 대응. 남은 꼬리 질문 예산 안에서(MAX_FOLLOWUP_PER_EVENT 공유) 한 번 더
+                # 자연스러운 구체화 질문을 던진다.
+                assistant_content = await _generate_elaboration_question(content)
+                new_followup_count = session.followup_count + 1
+            elif (
+                not updated_slots.get(_CONTEXTUAL_FOLLOWUP_OFFERED_KEY)
+                and session.followup_count < prompts.MAX_FOLLOWUP_PER_EVENT
+                and is_single_event_session
+            ):
+                # 슬롯(필수 정보)과 풍부함(길이)은 기계적 기준이었다 — 여기서는 그와
+                # 별개로, 진짜 전기 작가라면 자연스럽게 캐물었을 만한 지점이 대화 속에
+                # 있는지 LLM이 직접 판단한다(2026-07-15 피드백, INTERVIEW_PERSONA_
+                # SYSTEM_PROMPT가 원래 표방했지만 실제로는 연결된 적 없던 역할). 세션당
+                # 한 번만 시도하고(플래그로 기록), 꼬리 질문 예산을 공유해 무한정
+                # 캐묻지 않는다. "캐물을 게 없다"는 결과가 나오면 같은 턴 안에서 바로
+                # 마무리 확인으로 넘어간다 — 빈 라운드트립으로 한 턴을 낭비하지 않는다.
+                updated_slots[_CONTEXTUAL_FOLLOWUP_OFFERED_KEY] = True
+                contextual_question = await _generate_contextual_followup(session=session, latest_content=content)
+                if contextual_question is not None:
+                    assistant_content = contextual_question
+                    new_followup_count = session.followup_count + 1
+                else:
+                    assistant_content = _finalize_wrap_up_or_complete()
             else:
                 assistant_content = _finalize_wrap_up_or_complete()
-        else:
-            assistant_content = _finalize_wrap_up_or_complete()
 
     # --- 2단계: 판단 결과를 몰아서 쓰는 DB 쓰기(빠름, Solar 호출 없음) ---------
     user_turn = await gateways.sessions.add_chat_log(
@@ -504,32 +522,23 @@ async def add_user_turn(
     return user_turn, assistant_turn, updated_session
 
 
-async def _detect_strong_negative_emotion(content: str) -> bool:
-    messages = prompts.build_tier1_detection_prompt(latest_answer=content)
-    result = await solar.structured_completion(
+async def _run_turn_gating(*, content: str, slots_filled: dict[str, bool]) -> dict:
+    """1층 감정 판정(strong_negative_emotion)과 슬롯 게이팅(newly_filled_slots)을
+    단일 structured 호출로 함께 수행한다 — 예전의 별도 호출 2회(tier1_detection +
+    slot_gating)를 통합해 턴당 지연·비용을 절반으로 줄였다(2026-07-18)."""
+    messages = prompts.build_turn_gating_prompt(latest_answer=content, slots_filled=slots_filled)
+    return await solar.structured_completion(
         messages,
-        schema_name="tier1_detection",
-        json_schema=prompts.TIER1_DETECTION_SCHEMA,
+        schema_name="turn_gating",
+        json_schema=prompts.TURN_GATING_SCHEMA,
         reasoning_effort="low",
     )
-    return bool(result.get("strong_negative_emotion", False))
 
 
 async def _generate_tier1_buffer(content: str) -> str:
     messages = prompts.build_tier1_buffer_prompt(latest_answer=content)
     response = await solar.chat_completion(messages, reasoning_effort="low", max_tokens=150)
     return response.choices[0].message.content or ""
-
-
-async def _run_slot_gating(*, content: str, slots_filled: dict[str, bool]) -> list[str]:
-    messages = prompts.build_slot_gating_prompt(latest_answer=content, slots_filled=slots_filled)
-    result = await solar.structured_completion(
-        messages,
-        schema_name="slot_gating",
-        json_schema=prompts.SLOT_GATING_SCHEMA,
-        reasoning_effort="low",
-    )
-    return result.get("newly_filled_slots", [])
 
 
 async def _generate_followup_question(

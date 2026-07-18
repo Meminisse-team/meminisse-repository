@@ -40,7 +40,9 @@ async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
 
 
 def _structured_responses(**overrides) -> dict:
-    base = {"tier1_detection": {"strong_negative_emotion": False}, "slot_gating": {"newly_filled_slots": []}}
+    # 감정 판정과 슬롯 게이팅은 단일 turn_gating 호출로 통합됐다(2026-07-18,
+    # interview_service._run_turn_gating).
+    base = {"turn_gating": {"strong_negative_emotion": False, "newly_filled_slots": []}}
     base.update(overrides)
     return base
 
@@ -69,7 +71,9 @@ async def _new_session(gateways):
 
 @pytest.mark.asyncio
 async def test_tier1_buffer_skips_slot_gating_and_keeps_session_open() -> None:
-    structured = _structured_responses(tier1_detection={"strong_negative_emotion": True})
+    structured = _structured_responses(
+        turn_gating={"strong_negative_emotion": True, "newly_filled_slots": []}
+    )
     p1, p2, p3 = _patches(structured)
     with p1, p2, p3:
         gateways = _build_mock_gateways()

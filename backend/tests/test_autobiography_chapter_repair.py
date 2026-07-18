@@ -11,6 +11,12 @@ Phase 4 챕터 집필의 외과적 수리 루프(autobiography_service.write_cha
 챕터 시놉시스는 이제 select_toc_candidate가 목차 확정 시점에 미리 생성·저장하므로
 write_chapter 안에서는 시놉시스 생성 호출이 없다 — 각 테스트의 chat_completion 호출
 순서는 [1차 집필 → (플래그 시) 수리]다.
+
+write_chapter에 분량 확장·검수(교열) 패스가 추가되면서(2026-07-18) 이 테스트들의
+짧은 본문은 두 패스를 항상 트리거하게 됐다 — 이 파일의 관심사는 수리 루프
+배선뿐이므로, 가짜 chat_completion이 두 보조 패스 호출을 식별해(_is_auxiliary_pass)
+빈 응답으로 무력화하고(빈 응답 = 원본 유지가 두 패스의 계약) 호출 수에서도 뺀다.
+확장·검수 패스 자체는 test_literary_quality_improvements.py가 검증한다.
 """
 
 from __future__ import annotations
@@ -52,6 +58,13 @@ class _FakeChoice:
 class _FakeCompletion:
     def __init__(self, content: str) -> None:
         self.choices = [_FakeChoice(content)]
+
+
+def _is_auxiliary_pass(messages: list[dict]) -> bool:
+    """분량 확장/검수(교열) 패스 호출인지 — 이 파일의 테스트들은 수리 루프만
+    검증하므로 두 보조 패스는 빈 응답으로 무력화한다(파일 docstring 참조)."""
+    system = messages[0]["content"]
+    return "목표 분량(4,000~6,000자)에 크게 못 미칩니다" in system or "교열하세요" in system
 
 
 _STRUCTURED_RESPONSES = {
@@ -128,6 +141,8 @@ async def test_write_chapter_repairs_flagged_content_with_repair_prompt() -> Non
     captured_messages: list[list[dict]] = []
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
+        if _is_auxiliary_pass(messages):
+            return _FakeCompletion("")
         call_count["n"] += 1
         captured_messages.append(messages)
         if call_count["n"] == 1:
@@ -167,6 +182,8 @@ async def test_write_chapter_does_not_repair_when_no_flags() -> None:
     call_count = {"n": 0}
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
+        if _is_auxiliary_pass(messages):
+            return _FakeCompletion("")
         call_count["n"] += 1
         return _FakeCompletion(_GOOD_CONTENT)
 
@@ -195,6 +212,8 @@ async def test_write_chapter_keeps_original_when_repair_is_not_better() -> None:
     call_count = {"n": 0}
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
+        if _is_auxiliary_pass(messages):
+            return _FakeCompletion("")
         call_count["n"] += 1
         return _FakeCompletion(_BAD_CONTENT)  # 1차 집필도, 수리 결과도 근거 없는 문장
 
@@ -223,6 +242,8 @@ async def test_write_chapter_strips_citation_tags_and_saves_clean_content() -> N
     tagged_content = "나는 부산에서 태어나 자랐다. [E1]\n\n그 시절이 그립다."
 
     async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
+        if _is_auxiliary_pass(messages):
+            return _FakeCompletion("")
         return _FakeCompletion(tagged_content)
 
     with (

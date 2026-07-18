@@ -53,24 +53,44 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
 
     chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
     reassembly_turns = _exclude_wrap_up_exchange(chat_turns)
-    prose_response = await solar.chat_completion(
-        prompts.build_prose_reassembly_prompt(chat_turns=reassembly_turns),
-        # "low"에서는 세션 안에 사건이 2개 이상이고 각각 후속 질문 병합이 필요할 때
-        # 원본 문장과 병합 문장을 중복으로 남기는 오류가 실사용 검증(4회 중 약 2~3회)
-        # 재현됐다. "medium"으로 올리면 같은 검증에서 대부분 정상 병합되고(4회 중
-        # 3회 완전 정상), "high"는 오히려 21세·집에서 같은 구체적 사실을 뭉뚱그려
-        # 누락시키는 별도 실패 유형이 나타나 채택하지 않았다.
-        reasoning_effort="medium",
+    # "low"에서는 세션 안에 사건이 2개 이상이고 각각 후속 질문 병합이 필요할 때
+    # 원본 문장과 병합 문장을 중복으로 남기는 오류가 실사용 검증(4회 중 약 2~3회)
+    # 재현됐다. "medium"으로 올리면 같은 검증에서 대부분 정상 병합되고(4회 중
+    # 3회 완전 정상), "high"는 오히려 21세·집에서 같은 구체적 사실을 뭉뚱그려
+    # 누락시키는 별도 실패 유형이 나타나 1차 시도로는 채택하지 않았다(아래 재시도
+    # 참조 — 왜곡 판정에 걸린 경우에 한해서만 high로 한 번 더 시도한다).
+    session_prose = await _reassemble_prose(
+        chat_turns=chat_turns, reassembly_turns=reassembly_turns, reasoning_effort="medium"
     )
-    session_prose = _strip_leaked_assistant_sentences(
-        prose=prose_response.choices[0].message.content or "", chat_turns=chat_turns
-    )
-    await gateways.sessions.set_session_prose(session_id, session_prose)
 
-    if not await _passes_distortion_check(original_turns=chat_turns, reassembled_prose=session_prose):
-        # 왜곡 임계값 초과: 자동 재처리 대신 최소 동작으로 세션만 저장하고 이벤트 추출은
-        # 보류한다. TODO(향후 작업): 지금은 조용히 스킵만 하는데, 실제로는 재조립을
-        # 재시도하거나 최종 검토 화면에 "이 세션은 검증 보류" 플래그를 노출해야 한다.
+    passed = await _passes_distortion_check(
+        original_turns=chat_turns, reassembled_prose=session_prose
+    )
+    if not passed:
+        # 왜곡 임계값 초과: 같은 재료로 1회 재시도한다(reasoning_effort="high" —
+        # 1차 시도의 medium과 다른 설정이라 같은 실패를 반복할 확률이 낮다).
+        # 재시도본이 검증을 통과하면 그걸 채택하고, 그래도 실패하면 산문은
+        # 저장하되 이벤트 추출을 보류하고 세션에 distortion_flagged를 남긴다 —
+        # '나의 이야기' 카드가 "원문과 다를 수 있어요" 배지로 노출하고, 사용자가
+        # 산문을 직접 확인·수정해 저장하면(사람이 확정한 텍스트) 플래그가 해제되며
+        # 이벤트가 정상 추출된다(story_service.update_session_prose 경로,
+        # 2026-07-18 — 오랜 TODO "조용한 스킵"의 해소).
+        retry_prose = await _reassemble_prose(
+            chat_turns=chat_turns, reassembly_turns=reassembly_turns, reasoning_effort="high"
+        )
+        if await _passes_distortion_check(original_turns=chat_turns, reassembled_prose=retry_prose):
+            session_prose = retry_prose
+            passed = True
+        else:
+            logging.getLogger(__name__).warning(
+                "세션 %s 산문 재조립이 왜곡 탐지를 재시도 후에도 통과하지 못해 "
+                "이벤트 추출을 보류하고 플래그를 남긴다.",
+                session_id,
+            )
+
+    await gateways.sessions.set_session_prose(session_id, session_prose)
+    if not passed:
+        await gateways.sessions.set_distortion_flagged(session_id, True)
         await gateways.commit()
         return []
 
@@ -127,6 +147,23 @@ def _question_context(chat_turns: list[dict[str, str]]) -> str | None:
     return chat_turns[0]["content"] if chat_turns and chat_turns[0]["role"] == "assistant" else None
 
 
+async def _reassemble_prose(
+    *,
+    chat_turns: list[dict[str, str]],
+    reassembly_turns: list[dict[str, str]],
+    reasoning_effort: str,
+) -> str:
+    """산문 재조립 1회 실행(Solar 호출 + 인터뷰어 발화 유출 제거). 왜곡 탐지
+    실패 시 다른 reasoning_effort로 재시도할 수 있게 헬퍼로 분리했다."""
+    prose_response = await solar.chat_completion(
+        prompts.build_prose_reassembly_prompt(chat_turns=reassembly_turns),
+        reasoning_effort=reasoning_effort,
+    )
+    return _strip_leaked_assistant_sentences(
+        prose=prose_response.choices[0].message.content or "", chat_turns=chat_turns
+    )
+
+
 async def _extract_events_from_prose(
     gateways: Gateways,
     *,
@@ -148,7 +185,13 @@ async def _extract_events_from_prose(
         extracted=extraction.get("events", []), chat_turns=chat_turns
     )
     events = await _persist_events(
-        gateways, user_id=session.user_id, session_id=session.id, extracted=extracted
+        gateways,
+        user_id=session.user_id,
+        session_id=session.id,
+        extracted=extracted,
+        # 세션 단위 '꼭 넣기' 표시를 이벤트로 상속 — 토글이 추출보다 먼저 일어난
+        # 세션(재추출 포함)에서 플래그가 유실되지 않게 한다(2026-07-18).
+        is_must_include=session.is_must_include,
     )
     await _persist_relations(
         gateways, events=events, relations=extraction.get("relations", []), index_map=index_map
@@ -274,7 +317,12 @@ async def _passes_distortion_check(
 
 
 async def _persist_events(
-    gateways: Gateways, *, user_id: uuid.UUID, session_id: uuid.UUID, extracted: list[dict]
+    gateways: Gateways,
+    *,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    extracted: list[dict],
+    is_must_include: bool = False,
 ) -> list[EventRecord]:
     if not extracted:
         return []
@@ -308,6 +356,11 @@ async def _persist_events(
                 "belief": item.get("belief"),
                 "message": item.get("message"),
                 "event_subject": item.get("event_subject"),
+                # 추정 서기 연도(자유 문자열 occurred_at_label의 정규화 보완,
+                # 2026-07-18) — 챕터 배정의 시기 정합 보정과 시간 범위 강제가
+                # 읽는다. DB 컬럼을 새로 파지 않고 labels(자유 JSON)에 싣는다.
+                "estimated_year_start": item.get("estimated_year_start"),
+                "estimated_year_end": item.get("estimated_year_end"),
             },
             confidence={
                 "place": item.get("place_confidence"),
@@ -315,6 +368,7 @@ async def _persist_events(
             },
             source_span={"quoted_text": item.get("source_quote")},
             verified=True,  # SESSION_CHAT: 왜곡 탐지 통과 시 즉시 승격 (모듈 docstring 참조)
+            is_must_include=is_must_include,
         )
         for item in extracted
     ]

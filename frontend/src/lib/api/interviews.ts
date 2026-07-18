@@ -36,4 +36,10 @@ export const interviewsApi = {
    * SKIPPED로 종료되고, 같은 질문은 다시 배정되지 않는다. */
   skip: (sessionId: string) =>
     apiClient.post<InterviewSession>(`/api/v1/interview-sessions/${sessionId}/skip`),
+  /** '꼭 넣기' 토글('나의 이야기' 카드) — 자서전 중요도 스코어링에 가산점 반영. */
+  setMustInclude: (sessionId: string, value: boolean) =>
+    apiClient.patch<InterviewSession>(
+      `/api/v1/interview-sessions/${sessionId}/must-include`,
+      { value },
+    ),
 };

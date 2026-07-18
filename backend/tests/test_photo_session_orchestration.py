@@ -54,10 +54,8 @@ async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
 
 
 async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
-    if schema_name == "tier1_detection":
-        return {"strong_negative_emotion": False}
-    if schema_name == "slot_gating":
-        return {"newly_filled_slots": []}
+    if schema_name == "turn_gating":
+        return {"strong_negative_emotion": False, "newly_filled_slots": []}
     if schema_name == "contextual_followup":
         # 이 테스트 스위트의 관심사는 질문 큐/사진 오케스트레이션이지 맥락 기반
         # 꼬리질문 자체가 아니므로, 항상 "캐물을 것 없음"으로 응답해 곧장 마무리

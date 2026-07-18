@@ -7,6 +7,7 @@ from app.gateways.dto import InterviewSessionRecord, UserRecord
 from app.schemas.interview import (
     ChatMessageCreate,
     ChatMessageRead,
+    MustIncludeUpdate,
     NextItemPreviewRead,
     SessionCreate,
     SessionDetailRead,
@@ -114,6 +115,20 @@ async def complete_session(
 ) -> SessionRead:
     session = await _get_own_session_or_404(gateways, session_id, current_user)
     session = await interview_service.complete_session(gateways, session)
+    return SessionRead.model_validate(session)
+
+
+@router.patch("/{session_id}/must-include", response_model=SessionRead)
+async def set_must_include(
+    session_id: uuid.UUID,
+    payload: MustIncludeUpdate,
+    gateways: GatewaysDep,
+    current_user: CurrentUserDep,
+) -> SessionRead:
+    """'꼭 넣기' 토글('나의 이야기' 카드) — 이 세션의 이야기를 자서전에 꼭 수록하고
+    싶다는 표시. Phase 3 중요도 스코어링에 가산점(MUST_INCLUDE_BONUS)으로 반영된다."""
+    session = await _get_own_session_or_404(gateways, session_id, current_user)
+    session = await interview_service.set_must_include(gateways, session, payload.value)
     return SessionRead.model_validate(session)
 
 

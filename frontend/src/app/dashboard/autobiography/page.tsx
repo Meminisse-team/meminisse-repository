@@ -60,6 +60,10 @@ export default function AutobiographyPage() {
   // 화면에서만 감추는 것이라 새로고침하면 다시 나타난다 — 영구적으로 지우려면
   // 별도 백엔드 필드가 필요해 이번 범위에서는 프론트 상태로만 구현했다.
   const [acknowledgedChapterIds, setAcknowledgedChapterIds] = useState<Set<string>>(new Set());
+  // "이 챕터 다시 쓰기"를 누른 챕터들. 다시 쓰는 챕터는 본문이 이미 있어서
+  // (content !== null) 완료를 content로 감지할 수 없다 — 트리거 시점의
+  // updated_at을 기억해 두고, 폴링으로 받은 updated_at이 달라지면 완료로 본다.
+  const [rewritingChapters, setRewritingChapters] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [selecting, setSelecting] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -93,6 +97,18 @@ export default function AutobiographyPage() {
       if (list.length > 0 && list.every((c) => c.content !== null)) {
         setChaptersWriteTriggered(false);
       }
+      // 다시 쓰기가 끝난 챕터(updated_at이 트리거 시점과 달라짐)는 목록에서 뺀다.
+      setRewritingChapters((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Map(prev);
+        for (const chapter of list) {
+          const triggeredAt = next.get(chapter.id);
+          if (triggeredAt !== undefined && chapter.updated_at !== triggeredAt) {
+            next.delete(chapter.id);
+          }
+        }
+        return next.size === prev.size ? prev : next;
+      });
     } else {
       setChapters([]);
     }
@@ -104,7 +120,8 @@ export default function AutobiographyPage() {
 
   useEffect(() => {
     if (!user) return;
-    setLoading(true);
+    // loading 초기값이 true라 여기서 다시 setLoading(true)를 부를 필요가 없다 —
+    // effect 안의 직접 setState는 불필요한 리렌더를 만든다(react-hooks/set-state-in-effect).
     load()
       .catch(() => setError("자서전 정보를 불러오지 못했어요."))
       .finally(() => setLoading(false));
@@ -119,8 +136,9 @@ export default function AutobiographyPage() {
     const waitingOnFinalize = chaptersAllWritten && finalizeTriggered && !autobiography?.final_content;
     const waitingOnConsolidate = consolidateTriggered && autobiography?.status === "in_progress";
     const waitingOnPdf = pdfTriggered && !autobiography?.pdf_url;
+    const waitingOnRewrite = rewritingChapters.size > 0;
 
-    if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate || waitingOnPdf) {
+    if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate || waitingOnPdf || waitingOnRewrite) {
       startPolling(() => void load());
     } else {
       stopPolling();
@@ -131,6 +149,7 @@ export default function AutobiographyPage() {
     finalizeTriggered,
     consolidateTriggered,
     pdfTriggered,
+    rewritingChapters,
     load,
     startPolling,
     stopPolling,
@@ -199,6 +218,25 @@ export default function AutobiographyPage() {
       setError("챕터 집필을 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleRewriteChapter(chapter: ChapterDraft) {
+    if (!autobiography) return;
+    if (
+      !window.confirm(
+        `${chapter.chapter_index}장을 처음부터 다시 쓸까요? 현재 본문은 새로 쓴 내용으로 대체돼요.`
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    try {
+      await autobiographiesApi.writeChapter(autobiography.id, chapter.id);
+      setRewritingChapters((prev) => new Map(prev).set(chapter.id, chapter.updated_at));
+      startPolling(() => void load());
+    } catch {
+      setError("챕터 다시 쓰기를 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
     }
   }
 
@@ -288,9 +326,11 @@ export default function AutobiographyPage() {
           finalizeTriggered={finalizeTriggered}
           writeTriggered={chaptersWriteTriggered}
           acknowledgedChapterIds={acknowledgedChapterIds}
+          rewritingChapterIds={new Set(rewritingChapters.keys())}
           onAcknowledge={(chapterId) =>
             setAcknowledgedChapterIds((current) => new Set(current).add(chapterId))
           }
+          onRewrite={handleRewriteChapter}
           onWriteAll={handleWriteAll}
           onFinalize={handleFinalize}
         />
@@ -496,7 +536,9 @@ function ChapterProgress({
   finalizeTriggered,
   writeTriggered,
   acknowledgedChapterIds,
+  rewritingChapterIds,
   onAcknowledge,
+  onRewrite,
   onWriteAll,
   onFinalize,
 }: {
@@ -507,7 +549,9 @@ function ChapterProgress({
   finalizeTriggered: boolean;
   writeTriggered: boolean;
   acknowledgedChapterIds: Set<string>;
+  rewritingChapterIds: Set<string>;
   onAcknowledge: (chapterId: string) => void;
+  onRewrite: (chapter: ChapterDraft) => void;
   onWriteAll: () => void;
   onFinalize: () => void;
 }) {
@@ -534,8 +578,10 @@ function ChapterProgress({
                       key={chapter.id}
                       chapter={chapter}
                       writing={writeTriggered && chapter.content === null}
+                      rewriting={rewritingChapterIds.has(chapter.id)}
                       acknowledged={acknowledgedChapterIds.has(chapter.id)}
                       onAcknowledge={() => onAcknowledge(chapter.id)}
+                      onRewrite={() => onRewrite(chapter)}
                     />
                   ))}
               </ol>
@@ -549,8 +595,10 @@ function ChapterProgress({
               key={chapter.id}
               chapter={chapter}
               writing={writeTriggered && chapter.content === null}
+              rewriting={rewritingChapterIds.has(chapter.id)}
               acknowledged={acknowledgedChapterIds.has(chapter.id)}
               onAcknowledge={() => onAcknowledge(chapter.id)}
+              onRewrite={() => onRewrite(chapter)}
             />
           ))}
         </ol>
@@ -567,7 +615,8 @@ function ChapterProgress({
         </>
       )}
       {allWritten && !finalizeTriggered && (
-        <Button onClick={onFinalize} disabled={busy}>
+        // 다시 쓰는 챕터가 남아 있는 동안 최종본을 만들면 옛 본문이 섞여 들어가므로 막는다.
+        <Button onClick={onFinalize} disabled={busy || rewritingChapterIds.size > 0}>
           {busy ? "최종본을 만드는 중..." : "최종본 만들기"}
         </Button>
       )}
@@ -593,17 +642,24 @@ const STATUS_LABEL: Record<ChapterDraft["status"], string> = {
  * "생성 중" 신호를 따로 주지 않아(is_generating 필드 없음) 프론트가 트리거 여부로
  * 유추한다(page.tsx의 chaptersWriteTriggered 참조).
  * acknowledged/onAcknowledge: "확인 필요 N곳" 배지를 사용자가 직접 읽어보고 지울 수
- * 있게 하는 프론트 전용 토글 — 백엔드 데이터는 바뀌지 않고 화면에서만 감춘다. */
+ * 있게 하는 프론트 전용 토글 — 백엔드 데이터는 바뀌지 않고 화면에서만 감춘다.
+ * rewriting/onRewrite: 이미 집필된 챕터를 처음부터 다시 쓰는 액션(write_chapter가
+ * 챕터 단위 멱등이라 같은 API를 재호출하면 된다) — 플래그가 많은 챕터를 사용자가
+ * 실제로 "해소"할 수 있는 첫 수단(2026-07-18). */
 function ChapterReviewItem({
   chapter,
   writing,
+  rewriting,
   acknowledged,
   onAcknowledge,
+  onRewrite,
 }: {
   chapter: ChapterDraft;
   writing: boolean;
+  rewriting: boolean;
   acknowledged: boolean;
   onAcknowledge: () => void;
+  onRewrite: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const flagCount = chapterFlagCount(chapter);
@@ -627,10 +683,12 @@ function ChapterReviewItem({
               확인 필요 {flagCount}곳
             </span>
           )}
-          {writing ? (
+          {writing || rewriting ? (
             <span className="flex items-center gap-1.5 text-black/40">
               <Spinner />
-              <span className="animate-pulse">집필하고 있어요...</span>
+              <span className="animate-pulse">
+                {rewriting ? "다시 쓰고 있어요..." : "집필하고 있어요..."}
+              </span>
             </span>
           ) : (
             <span className="text-black/40">{STATUS_LABEL[chapter.status]}</span>
@@ -670,6 +728,14 @@ function ChapterReviewItem({
               </button>
             </div>
           )}
+          <button
+            type="button"
+            onClick={onRewrite}
+            disabled={rewriting}
+            className="self-start text-sm text-black/50 underline underline-offset-4 hover:text-black/70 disabled:no-underline disabled:opacity-40"
+          >
+            {rewriting ? "다시 쓰고 있어요..." : "이 챕터 다시 쓰기"}
+          </button>
         </div>
       )}
     </li>

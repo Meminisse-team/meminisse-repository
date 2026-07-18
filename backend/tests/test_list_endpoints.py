@@ -23,11 +23,11 @@ from fastapi.testclient import TestClient
 
 from app.clients import supabase_auth
 from app.config import settings
-from app.gateways.dto import EventCreateData, MediaAssetCreateData
-from app.gateways.mock.gateways import MockEventGateway, MockMediaAssetGateway
+from app.gateways.dto import MediaAssetCreateData
+from app.gateways.mock.gateways import MockMediaAssetGateway
 from app.gateways.mock.store import default_store
 from app.main import app
-from app.models.enums import AssetType, EventSourceType
+from app.models.enums import AssetType
 
 _TEST_JWT_SECRET = "test-only-secret-do-not-use-elsewhere"
 
@@ -240,59 +240,5 @@ def test_get_media_asset_by_id_scopes_by_current_user(client: TestClient) -> Non
     assert missing_resp.status_code == 404
 
 
-# --------------------------------------------------------------------------- #
-# GET /events                                                                 #
-# --------------------------------------------------------------------------- #
-
-
-def test_events_router_excludes_unverified_and_other_users(client: TestClient) -> None:
-    a_id, a_token = _signup_and_login(client, "events-a@example.com")
-    b_id, _ = _signup_and_login(client, "events-b@example.com")
-
-    gw = MockEventGateway(default_store)
-    import asyncio
-
-    async def seed():
-        # A의 검증된 사건 (목록에 나와야 함)
-        await gw.bulk_create(
-            [
-                EventCreateData(
-                    user_id=uuid.UUID(a_id),
-                    source_type=EventSourceType.SESSION_CHAT,
-                    one_line_summary="부산 출생",
-                    prose_paragraph="나는 부산에서 태어났다.",
-                    verified=True,
-                )
-            ]
-        )
-        # A의 미검증 사건 (OCR 의심 격리 — 목록에서 빠져야 함)
-        await gw.create(
-            EventCreateData(
-                user_id=uuid.UUID(a_id),
-                source_type=EventSourceType.DOCUMENT,
-                one_line_summary="의심 구간",
-                prose_paragraph="OCR 의심 원문",
-                verified=False,
-            )
-        )
-        # B의 검증된 사건 (A 목록에 나오면 안 됨)
-        await gw.bulk_create(
-            [
-                EventCreateData(
-                    user_id=uuid.UUID(b_id),
-                    source_type=EventSourceType.SESSION_CHAT,
-                    one_line_summary="B의 사건",
-                    prose_paragraph="B의 산문",
-                    verified=True,
-                )
-            ]
-        )
-
-    asyncio.run(seed())
-
-    resp = client.get("/api/v1/events", headers=_auth_headers(a_token))
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 1
-    assert body[0]["one_line_summary"] == "부산 출생"
-    assert "verified" not in body[0]  # 내부 필드는 응답 스키마에서 제외됨
+# GET /events 라우트와 그 테스트는 제거됐다(2026-07-18) — '나의 이야기'가 세션
+# 단위 카드(GET /stories)로 대체한 뒤 프론트 어디서도 쓰지 않던 죽은 경로였다.
