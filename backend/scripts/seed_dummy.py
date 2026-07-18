@@ -4,14 +4,14 @@ Meminisse 범용 더미 데이터 시드 스크립트
 
 실행 방법 (backend/ 디렉토리에서):
 
-  # 필수 인자만 사용
+  # 필수 인자만으로 실행 (프로필 정보는 파일에서 자동 추출)
   python -m scripts.seed_dummy \\
       --email "napoleon@gmail.com" \\
       --password "napoleon!!" \\
       --name "나폴레옹 보나파르트" \\
       --file "C:\\경로\\나폴레옹_더미데이터.txt"
 
-  # 선택 인자까지 포함
+  # 자동 추출을 덮어쓰고 싶을 때만 CLI 선택 인자 사용 (생략 시 파일 헤더에서 자동 추출)
   python -m scripts.seed_dummy \\
       --email "napoleon@gmail.com" \\
       --password "napoleon!!" \\
@@ -32,17 +32,19 @@ Meminisse 범용 더미 데이터 시드 스크립트
   --name        인물 한글 이름 (예: 나폴레옹 보나파르트)
   --file        더미 데이터 .txt 파일의 절대 경로
 
-선택 인자:
-  --birth-year  출생 연도 (정수, 생략 시 DB에 NULL로 저장)
-  --hometown    고향 (생략 시 DB에 NULL로 저장)
+선택 인자 (생략 시 파일 헤더에서 자동 추출):
+  --birth-year       출생 연도 (자동 추출 덮어쓰기)
+  --hometown         고향 (자동 추출 덮어쓰기)
+  --education-level  최종 학력 (자동 추출 덮어쓰기)
+  --marital-status   혼인 여부 (자동 추출 덮어쓰기)
+  --has-children     자녀 여부 (자동 추출 덮어쓰기)
 
-더미 데이터 파일 형식 요구사항:
-  [질문 N] ... [답변 N] ... 패턴이 반복되어야 합니다.
-  (100문 100답 기준이나 그 외 개수도 처리 가능)
-
-멱등성:
-  동일 이메일로 재실행하면 기존 public.users + 하위 데이터(세션/채팅 로그 등)를
-  모두 삭제 후 재삽입합니다. Unique Constraint 오류가 발생하지 않습니다.
+파일 헤더 형식 (자동 추출 대상):
+  출생 연도: 1769년 ...
+  고향(출생지): ...
+  최종 학력: ...
+  혼인 여부: 기혼 | 미혼 | 이혼 | 사별
+  자녀 여부: N명 | 없음
 """
 
 from __future__ import annotations
@@ -201,6 +203,106 @@ def parse_dummy_data(file_path: Path) -> list[dict]:
     ]
     results.sort(key=lambda x: x["number"])
     return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. 파일 헤더에서 프로필 정보 자동 추출
+# ──────────────────────────────────────────────────────────────────────────────
+def _map_education(raw: str) -> EducationLevel | None:
+    """한글 학력 서술 → EducationLevel enum 변환."""
+    if any(k in raw for k in ["박사", "석사", "대학원"]):
+        return EducationLevel.GRADUATE_SCHOOL
+    if any(k in raw for k in ["대학교", "대졸", "학사", "사관학교", "대학"]):
+        return EducationLevel.UNIVERSITY
+    if any(k in raw for k in ["고등학교", "고졸", "고교"]):
+        return EducationLevel.HIGH_SCHOOL
+    if any(k in raw for k in ["중학교", "중졸"]):
+        return EducationLevel.MIDDLE_SCHOOL
+    if any(k in raw for k in ["초등학교", "초졸", "국민학교"]):
+        return EducationLevel.ELEMENTARY
+    return None
+
+
+def _map_marital_status(raw: str) -> MaritalStatus | None:
+    """한글 혼인 서술 → MaritalStatus enum 변환."""
+    if any(k in raw for k in ["기혼", "결혼", "유배우"]):
+        return MaritalStatus.MARRIED
+    if any(k in raw for k in ["미혼", "독신", "비혼"]):
+        return MaritalStatus.SINGLE
+    if "이혼" in raw:
+        return MaritalStatus.DIVORCED
+    if any(k in raw for k in ["사별", "과부", "홀아비"]):
+        return MaritalStatus.WIDOWED
+    return None
+
+
+def _map_has_children(raw: str) -> bool | None:
+    """한글 자녀 서술 → bool 변환."""
+    if any(k in raw for k in ["없음", "무자녀", "0명"]):
+        return False
+    if re.search(r"[1-9]\d*\s*명", raw):  # '4명', '2명' 등 숫자 있으면 True
+        return True
+    if "있" in raw:
+        return True
+    if "없" in raw:
+        return False
+    return None
+
+
+def parse_profile_header(file_path: Path) -> dict:
+    """
+    더미 데이터 파일 상단 헤더([질문 1] 이전)에서 프로필 정보를 자동 추출합니다.
+
+    지원 필드:
+      출생 연도: NNNN년 ...   → birth_year (int)
+      고향(출생지): ...        → hometown (str, 괄호 이전 부분)
+      최종 학력: ...           → education_level (EducationLevel)
+      혼인 여부: 기혼|미혼|이혼|사별  → marital_status (MaritalStatus)
+      자녀 여부: N명 | 없음    → has_children (bool)
+
+    Returns:
+        dict with keys: birth_year, hometown, education_level,
+                        marital_status, has_children
+        (파싱 실패한 필드는 None)
+    """
+    text = file_path.read_text(encoding="utf-8")
+    # [질문 1] 이전만 헤더로 사용
+    header = text.split("[질문")[0] if "[질문" in text else text[:800]
+
+    result: dict = {
+        "birth_year": None,
+        "hometown": None,
+        "education_level": None,
+        "marital_status": None,
+        "has_children": None,
+    }
+
+    # 출생 연도: 4자리 숫자
+    m = re.search(r"출생\s*연도\s*[:：]\s*(\d{4})", header)
+    if m:
+        result["birth_year"] = int(m.group(1))
+
+    # 고향: 괄호 앞까지만 취득 (예: '오하이오주 포인트플레전트 (유년기...)' → '오하이오주 포인트플레전트')
+    m = re.search(r"고향[^:：\n]*[:：]\s*([^\n(]+)", header)
+    if m:
+        result["hometown"] = m.group(1).strip()
+
+    # 최종 학력
+    m = re.search(r"최종\s*학력\s*[:：]\s*([^\n]+)", header)
+    if m:
+        result["education_level"] = _map_education(m.group(1).strip())
+
+    # 혼인 여부
+    m = re.search(r"혼인\s*여부\s*[:：]\s*([^\n]+)", header)
+    if m:
+        result["marital_status"] = _map_marital_status(m.group(1).strip())
+
+    # 자녀 여부
+    m = re.search(r"자녀\s*여부\s*[:：]\s*([^\n]+)", header)
+    if m:
+        result["has_children"] = _map_has_children(m.group(1).strip())
+
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -434,6 +536,42 @@ async def main(args: argparse.Namespace) -> None:
     if len(qa_pairs) != 100:
         print(f"  ⚠️  경고: 100개가 아닌 {len(qa_pairs)}개 파싱됨 — 계속 진행합니다.")
 
+    # 파일 헤더에서 프로필 정보 자동 추출
+    print("\n[1-1단계] 파일 헤더에서 프로필 정보 자동 추출 중...")
+    auto = parse_profile_header(dummy_path)
+
+    # CLI 인자가 명시적으로 주어진 경우 자동 추출값을 오버라이드
+    merged = {
+        "birth_year": args.birth_year if args.birth_year is not None else auto["birth_year"],
+        "hometown":   args.hometown   if args.hometown   is not None else auto["hometown"],
+        "education_level": (
+            EducationLevel(args.education_level) if args.education_level
+            else auto["education_level"]
+        ),
+        "marital_status": (
+            MaritalStatus(args.marital_status) if args.marital_status
+            else auto["marital_status"]
+        ),
+        "has_children": (
+            (args.has_children.lower() == "true") if args.has_children is not None
+            else auto["has_children"]
+        ),
+    }
+
+    src = lambda key: "(CLI)" if (
+        key == "birth_year" and args.birth_year is not None
+        or key == "hometown" and args.hometown is not None
+        or key == "education_level" and args.education_level is not None
+        or key == "marital_status" and args.marital_status is not None
+        or key == "has_children" and args.has_children is not None
+    ) else "(파일 자동추출)"
+
+    print(f"  출생 연도  : {merged['birth_year']} {src('birth_year')}")
+    print(f"  고향       : {merged['hometown']} {src('hometown')}")
+    print(f"  최종 학력  : {merged['education_level'].value if merged['education_level'] else 'NULL'} {src('education_level')}")
+    print(f"  혼인 여부  : {merged['marital_status'].value if merged['marital_status'] else 'NULL'} {src('marital_status')}")
+    print(f"  자녀 여부  : {merged['has_children']} {src('has_children')}")
+
     # ── Step 2: Supabase Auth ────────────────────────────────────────────────
     print("\n[2단계] Supabase Auth 계정 처리 중...")
     auth_user_id, is_new = await get_or_create_auth_user(
@@ -452,20 +590,11 @@ async def main(args: argparse.Namespace) -> None:
                 user_id=auth_user_id,
                 email=args.email,
                 name=args.name,
-                birth_year=args.birth_year,
-                hometown=args.hometown,
-                education_level=(
-                    EducationLevel(args.education_level)
-                    if args.education_level else None
-                ),
-                marital_status=(
-                    MaritalStatus(args.marital_status)
-                    if args.marital_status else None
-                ),
-                has_children=(
-                    args.has_children.lower() == "true"
-                    if args.has_children is not None else None
-                ),
+                birth_year=merged["birth_year"],
+                hometown=merged["hometown"],
+                education_level=merged["education_level"],
+                marital_status=merged["marital_status"],
+                has_children=merged["has_children"],
             )
 
             question_map = await fetch_questions(db)
