@@ -20,7 +20,14 @@ from app.agents import prompts
 from app.api.deps import require_admin
 from app.gateways.dto import EventCreateData, SessionCreateData, UserCreateData
 from app.gateways.factory import _build_mock_gateways
-from app.models.enums import EventSourceType, MessageRole, SessionStatus, SessionType, UserRole
+from app.models.enums import (
+    AutobiographyStatus,
+    EventSourceType,
+    MessageRole,
+    SessionStatus,
+    SessionType,
+    UserRole,
+)
 from app.services import admin_service
 
 
@@ -157,7 +164,12 @@ async def test_reconcile_stale_sessions_requeues_only_stale_ones() -> None:
     list_stale_completed는 관리자 전체 조회용이라 user_id로 스코프하지 않는다
     (의도된 설계) — 그래서 이 테스트는 default_store를 공유하는 다른 테스트가
     남긴 stale 세션이 섞여 있어도 안전하도록 정확한 총 개수 대신 "내가 만든
-    세션이 포함/제외됐는가"만 확인한다."""
+    세션이 포함/제외됐는가"만 확인한다.
+
+    세션 단위 중복 재큐잉 방지 락(app/workers/enqueue.py, 2026-07-19)은
+    conftest.py의 자동 패치 덕분에 실제 Redis 없이도 항상 락 획득에 성공한다 —
+    이 테스트의 관심사는 "stale 판정이 정확한가"이지 락 동작이 아니다(락 자체는
+    test_enqueue.py가 검증)."""
     gateways = _build_mock_gateways()
     user = await _make_user(gateways)
     now = datetime.now(timezone.utc)
@@ -410,6 +422,95 @@ async def test_list_audit_logs_returns_recent_entries() -> None:
     logs = await admin_service.list_audit_logs(gateways, admin_id=admin.id, limit=50, offset=0)
 
     assert any(log.action == "view_stale_sessions" and log.admin_id == admin.id for log in logs)
+
+
+async def _make_finished_autobiography(gateways, user_id, *, final_content: str = "완성된 원고"):
+    autobiography = await gateways.autobiographies.create(user_id)
+    await gateways.autobiographies.update(
+        autobiography.id, final_content=final_content, status=AutobiographyStatus.PUBLISHED
+    )
+    await gateways.commit()
+    return await gateways.autobiographies.get_by_id(autobiography.id)
+
+
+@pytest.mark.asyncio
+async def test_list_user_autobiographies_only_returns_finished_ones() -> None:
+    gateways = _build_mock_gateways()
+    admin = await _make_user(gateways, role=UserRole.ADMIN)
+    target = await _make_user(gateways)
+    finished = await _make_finished_autobiography(gateways, target.id)
+    unfinished = await gateways.autobiographies.create(target.id)
+    await gateways.commit()
+
+    result = await admin_service.list_user_autobiographies(gateways, admin_id=admin.id, user_id=target.id)
+
+    ids = {a.id for a in result}
+    assert finished.id in ids
+    assert unfinished.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_list_user_autobiographies_records_audit_log() -> None:
+    gateways = _build_mock_gateways()
+    admin = await _make_user(gateways, role=UserRole.ADMIN)
+    target = await _make_user(gateways)
+
+    await admin_service.list_user_autobiographies(gateways, admin_id=admin.id, user_id=target.id)
+
+    from app.gateways.mock.store import default_store
+
+    matching = [log for log in default_store.audit_logs if log.admin_id == admin.id]
+    assert any(
+        log.action == "view_user_autobiographies" and log.target_user_id == target.id
+        for log in matching
+    )
+
+
+@pytest.mark.asyncio
+async def test_trigger_autobiography_pdf_queues_task_for_owned_finished_autobiography() -> None:
+    gateways = _build_mock_gateways()
+    admin = await _make_user(gateways, role=UserRole.ADMIN)
+    target = await _make_user(gateways)
+    autobiography = await _make_finished_autobiography(gateways, target.id)
+
+    queued_ids: list[str] = []
+    with patch(
+        "app.workers.tasks.generate_manuscript_pdf.delay",
+        new=lambda autobiography_id: queued_ids.append(autobiography_id),
+    ):
+        await admin_service.trigger_autobiography_pdf(
+            gateways, admin_id=admin.id, user_id=target.id, autobiography_id=autobiography.id
+        )
+
+    assert queued_ids == [str(autobiography.id)]
+
+
+@pytest.mark.asyncio
+async def test_trigger_autobiography_pdf_rejects_wrong_owner() -> None:
+    gateways = _build_mock_gateways()
+    admin = await _make_user(gateways, role=UserRole.ADMIN)
+    owner = await _make_user(gateways)
+    other = await _make_user(gateways)
+    autobiography = await _make_finished_autobiography(gateways, owner.id)
+
+    with pytest.raises(admin_service.AdminAutobiographyNotFoundError):
+        await admin_service.trigger_autobiography_pdf(
+            gateways, admin_id=admin.id, user_id=other.id, autobiography_id=autobiography.id
+        )
+
+
+@pytest.mark.asyncio
+async def test_trigger_autobiography_pdf_rejects_when_not_finalized() -> None:
+    gateways = _build_mock_gateways()
+    admin = await _make_user(gateways, role=UserRole.ADMIN)
+    target = await _make_user(gateways)
+    autobiography = await gateways.autobiographies.create(target.id)
+    await gateways.commit()
+
+    with pytest.raises(admin_service.AdminPdfNotReadyError):
+        await admin_service.trigger_autobiography_pdf(
+            gateways, admin_id=admin.id, user_id=target.id, autobiography_id=autobiography.id
+        )
 
 
 def test_get_app_log_lines_missing_file_returns_empty(tmp_path, monkeypatch) -> None:

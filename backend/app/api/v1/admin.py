@@ -20,6 +20,7 @@ from app.schemas.admin import (
     AdminSessionRead,
     AdminUserDetail,
 )
+from app.schemas.autobiography import AutobiographyRead
 from app.services import admin_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -151,6 +152,42 @@ async def reset_user_password(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "유저를 찾을 수 없습니다.")
     except SupabaseAuthError as exc:
         raise HTTPException(exc.status_code, str(exc))
+
+
+@router.get("/users/{user_id}/autobiographies", response_model=list[AutobiographyRead])
+async def list_user_autobiographies(
+    user_id: uuid.UUID, gateways: GatewaysDep, current_user: AdminUserDep
+) -> list[AutobiographyRead]:
+    """고객이 완성한 자서전 목록 — 관리자가 실물 인쇄용 PDF를 내려받거나 아직
+    조판 전이면 대신 생성을 트리거하는 화면 전용."""
+    autobiographies = await admin_service.list_user_autobiographies(
+        gateways, admin_id=current_user.id, user_id=user_id
+    )
+    return [AutobiographyRead.model_validate(a) for a in autobiographies]
+
+
+@router.post(
+    "/users/{user_id}/autobiographies/{autobiography_id}/pdf/generate",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def admin_generate_autobiography_pdf(
+    user_id: uuid.UUID,
+    autobiography_id: uuid.UUID,
+    gateways: GatewaysDep,
+    current_user: AdminUserDep,
+) -> dict:
+    """실물 출판 준비를 위해 관리자가 고객 대신 PDF 조판을 큐잉한다."""
+    try:
+        await admin_service.trigger_autobiography_pdf(
+            gateways, admin_id=current_user.id, user_id=user_id, autobiography_id=autobiography_id
+        )
+    except admin_service.AdminAutobiographyNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "자서전을 찾을 수 없습니다.")
+    except admin_service.AdminPdfNotReadyError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "최종본(윤문)이 완성된 뒤에 PDF를 만들 수 있습니다."
+        )
+    return {"detail": "Manuscript PDF generation queued"}
 
 
 @router.get("/db/{table}")

@@ -33,7 +33,14 @@ async def chat_completion(
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
     response_format: dict[str, Any] | None = None,
+    timeout: float | None = None,
 ) -> ChatCompletion:
+    """timeout: 이 호출 하나에만 적용할 타임아웃(초). 생략하면 클라이언트
+    기본값(90초, get_upstage_client 참조)을 그대로 쓴다. 대부분의 호출은
+    기본값으로 충분하지만, 입출력이 유독 큰 소수의 호출(예:
+    autobiography_service.finalize_manuscript의 배치별 통일성 윤문)은 이
+    파라미터로 개별적으로 늘려준다 — 다른 모든 호출을 보호하는 90초 기본값
+    (실패를 빨리 드러내기 위한 의도적 설계)은 그대로 둔 채로."""
     client = get_upstage_client()
     kwargs: dict[str, Any] = {"model": model, "messages": messages}
     if temperature is not None:
@@ -42,6 +49,8 @@ async def chat_completion(
         kwargs["max_tokens"] = max_tokens
     if response_format is not None:
         kwargs["response_format"] = response_format
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     # reasoning_effort는 Upstage(Solar) API가 지원하는 필드지만, 이 프로젝트에 고정된
     # openai SDK 버전(1.54.0)의 create()는 아직 이 파라미터를 정식 인자로 알지 못해
     # 그대로 넘기면 TypeError로 죽는다(실제 Solar 채팅 호출에서 재현, 2026-07-11).

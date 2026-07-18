@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { adminApi } from "@/lib/api/admin";
-import type { AdminSessionDetail, AdminUserDetail } from "@/types/api";
+import type { AdminSessionDetail, AdminUserDetail, Autobiography } from "@/types/api";
+
+const PDF_POLL_INTERVAL_MS = 4000;
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
   photo: "사진",
@@ -81,6 +83,8 @@ function UserDetailPanel({ user, onChanged }: { user: AdminUserDetail; onChanged
       <EmailUpdateForm userId={user.id} currentEmail={user.email} onChanged={onChanged} />
       <PasswordResetForm userId={user.id} />
 
+      <UserAutobiographiesSection userId={user.id} />
+
       <div>
         <p className="mb-2 text-sm font-medium text-black">세션 ({user.sessions.length}개)</p>
         <ul className="flex flex-col gap-3">
@@ -94,6 +98,118 @@ function UserDetailPanel({ user, onChanged }: { user: AdminUserDetail; onChanged
           ))}
         </ul>
       </div>
+    </div>
+  );
+}
+
+/** 고객이 완성한 자서전 목록 + 실물 인쇄용 PDF 다운로드/생성. 고객 본인이 보는
+ * "나의 책장"과 달리, 관리자는 이 유저의 소유가 아니므로 조판 트리거도 전용
+ * 엔드포인트(admin/users/{id}/autobiographies/{id}/pdf/generate)를 쓴다. */
+function UserAutobiographiesSection({ userId }: { userId: string }) {
+  const [books, setBooks] = useState<Autobiography[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pdfTriggeredIds, setPdfTriggeredIds] = useState<Set<string>>(new Set());
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      const list = await adminApi.listUserAutobiographies(userId);
+      setBooks(list);
+      setPdfTriggeredIds((prev) => {
+        if (prev.size === 0) return prev;
+        const stillPending = new Set(
+          list.filter((b) => prev.has(b.id) && !b.pdf_url).map((b) => b.id),
+        );
+        return stillPending.size === prev.size ? prev : stillPending;
+      });
+    } catch {
+      setError("자서전 목록을 불러오지 못했어요.");
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    // loading 초기값이 이미 true라 여기서 다시 setLoading(true)를 부를 필요가 없다
+    // (react-hooks/set-state-in-effect).
+    void refresh().finally(() => setLoading(false));
+  }, [refresh]);
+
+  useEffect(() => {
+    if (pdfTriggeredIds.size === 0) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+    if (!pollRef.current) {
+      pollRef.current = setInterval(() => void refresh(), PDF_POLL_INTERVAL_MS);
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [pdfTriggeredIds, refresh]);
+
+  async function handleGeneratePdf(bookId: string) {
+    setPdfTriggeredIds((prev) => new Set(prev).add(bookId));
+    try {
+      await adminApi.generateUserAutobiographyPdf(userId, bookId);
+    } catch {
+      setError("PDF를 만들지 못했어요.");
+      setPdfTriggeredIds((prev) => {
+        const next = new Set(prev);
+        next.delete(bookId);
+        return next;
+      });
+    }
+  }
+
+  return (
+    <div>
+      <p className="mb-2 text-sm font-medium text-black">완성한 자서전(PDF)</p>
+      {loading && <p className="text-sm text-black/40">불러오는 중...</p>}
+      {error && <p className="text-sm text-black/40">{error}</p>}
+      {!loading && !error && books.length === 0 && (
+        <p className="text-sm text-black/40">아직 완성한 자서전이 없어요.</p>
+      )}
+      <ul className="flex flex-col gap-3">
+        {books.map((book) => {
+          const pdfTriggered = pdfTriggeredIds.has(book.id);
+          return (
+            <li key={book.id} className="rounded-xl border border-black/10 p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-black/70">
+                  {book.title ?? "제목 없음"} ·{" "}
+                  {new Date(book.updated_at).toLocaleDateString("ko-KR")} 완성
+                </span>
+                {book.pdf_url ? (
+                  <a
+                    href={book.pdf_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 rounded-full border border-black/10 px-3 py-1.5 text-black/60 underline"
+                  >
+                    다운로드
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleGeneratePdf(book.id)}
+                    disabled={pdfTriggered}
+                    className="shrink-0 rounded-full border border-black/10 px-3 py-1.5 text-black/60 disabled:opacity-40"
+                  >
+                    {pdfTriggered ? "만드는 중..." : "PDF 생성"}
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

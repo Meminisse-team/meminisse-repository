@@ -180,16 +180,13 @@ class _FakeCompletion:
         self.choices = [SimpleNamespace(message=SimpleNamespace(content=content))]
 
 
-def _routing_chat_completion(*, writing: str, expansion: str = "", proofread: str = "", calls: dict | None = None):
-    """system 프롬프트 내용으로 집필/확장/교열 호출을 구분해 각기 다른 응답을 주는
-    가짜 chat_completion. calls에 단계별 호출 횟수를 기록한다."""
+def _routing_chat_completion(*, writing: str, proofread: str = "", calls: dict | None = None):
+    """system 프롬프트 내용으로 집필/교열 호출을 구분해 각기 다른 응답을 주는
+    가짜 chat_completion. calls에 단계별 호출 횟수를 기록한다. 분량 확장 패스는
+    2026-07-19 폐기됐다(prompts.py 참조)."""
 
     async def _fake(messages, **kwargs) -> _FakeCompletion:
         system = messages[0]["content"]
-        if "목표 분량(4,000~6,000자)에 크게 못 미칩니다" in system:
-            if calls is not None:
-                calls["expansion"] = calls.get("expansion", 0) + 1
-            return _FakeCompletion(expansion)
         if "교열하세요" in system:
             if calls is not None:
                 calls["proofread"] = calls.get("proofread", 0) + 1
@@ -272,35 +269,6 @@ async def test_select_persists_assignment_and_write_skips_retrieval() -> None:
 
         assert chapter.content
         assert sorted(chapter.source_event_ids) == sorted(assigned_ids)
-
-
-@pytest.mark.asyncio
-async def test_short_chapter_triggers_expansion_pass_once() -> None:
-    """초안이 3,000자 미만이면 확장 패스가 정확히 1회 돌고, 더 길어진 결과가
-    채택돼야 한다."""
-    short_body = "짧은 초안이다. [E1]"
-    expanded_body = "확장된 본문 문장이다. " * 300 + "[E1]"
-    calls: dict = {}
-    with (
-        patch(
-            "app.clients.solar.chat_completion",
-            new=_routing_chat_completion(
-                writing=short_body, expansion=expanded_body, proofread="", calls=calls
-            ),
-        ),
-        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
-        patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
-        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-    ):
-        gateways = _build_mock_gateways()
-        autobiography = await _seed_pipeline_until_select(gateways)
-        chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
-
-        chapter = await autobiography_service.write_chapter(gateways, chapters[0].id)
-
-    assert calls.get("expansion") == 1
-    assert "확장된 본문" in (chapter.content or "")
-    assert "[E1]" not in (chapter.content or "")  # 태그는 저장 전에 회수돼야 한다
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import type {
   AdminSession,
   AdminSessionDetail,
   AdminUserDetail,
+  Autobiography,
 } from "@/types/api";
 
 export const adminApi = {
@@ -33,4 +34,13 @@ export const adminApi = {
     apiClient.get<AdminAuditLog[]>(`/api/v1/admin/audit-logs?limit=${limit}&offset=${offset}`),
   getAppLogs: (service: AdminLogService, lines: number) =>
     apiClient.get<AdminLogLines>(`/api/v1/admin/logs?service=${service}&lines=${lines}`),
+  /** 이 유저가 완성한 자서전 전체 — 실물 인쇄용 PDF 다운로드/생성 화면 전용. */
+  listUserAutobiographies: (userId: string) =>
+    apiClient.get<Autobiography[]>(`/api/v1/admin/users/${userId}/autobiographies`),
+  /** 202 — 관리자가 고객 대신 PDF 조판을 큐잉한다. 완료되면 listUserAutobiographies의
+   * pdf_url이 채워진다. */
+  generateUserAutobiographyPdf: (userId: string, autobiographyId: string) =>
+    apiClient.post<{ detail: string }>(
+      `/api/v1/admin/users/${userId}/autobiographies/${autobiographyId}/pdf/generate`,
+    ),
 };

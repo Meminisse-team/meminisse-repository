@@ -75,10 +75,41 @@ async def _generate_sample_previews_async(autobiography_id: uuid.UUID) -> None:
         await autobiography_service.generate_sample_previews(gateways, autobiography_id)
 
 
-@celery_app.task(name="write_chapter")
-def write_chapter(chapter_draft_id: str) -> None:
-    """Phase 4 챕터 단위 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔)."""
-    _run(_write_chapter_async(uuid.UUID(chapter_draft_id)))
+_WRITE_CHAPTER_MAX_RETRIES = 2
+_WRITE_CHAPTER_RETRY_BACKOFF_SECONDS = 60
+_WRITE_CHAPTER_RETRY_BACKOFF_MAX_SECONDS = 600
+
+
+@celery_app.task(
+    name="write_chapter",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=_WRITE_CHAPTER_RETRY_BACKOFF_SECONDS,
+    retry_backoff_max=_WRITE_CHAPTER_RETRY_BACKOFF_MAX_SECONDS,
+    retry_jitter=True,
+    max_retries=_WRITE_CHAPTER_MAX_RETRIES,
+)
+def write_chapter(self, chapter_draft_id: str) -> None:
+    """Phase 4 챕터 단위 집필(시놉시스·본문·팩트체크·근거검증·등장인물 스캔).
+
+    Solar API 타임아웃 등 일시적 실패에 최대 _WRITE_CHAPTER_MAX_RETRIES회
+    지수 백오프로 자동 재시도한다 — 이전에는 재시도가 전혀 없고 Celery도
+    기본값(task_acks_late=False, 받는 즉시 확인 처리)이라 한 번 실패하면 그
+    챕터는 사람이 수동으로 다시 트리거하지 않는 한 영원히 집필되지 않았다
+    (2026-07-19, Solar 90초 타임아웃으로 실사용 중 재현). 재시도가 전부
+    끝나면(성공하든, 소진돼 최종 실패하든) 중복 큐잉 방지 락
+    (app/workers/enqueue.py:enqueue_write_chapter)을 풀어 "다시 쓰기"로 바로
+    재트리거할 수 있게 한다 — 재시도가 아직 남아있는 동안은 락을 유지해야
+    그 사이 사용자가 눌러도 중복 큐잉되지 않는다."""
+    from app.workers.enqueue import release_chapter_write_lock
+
+    succeeded = False
+    try:
+        _run(_write_chapter_async(uuid.UUID(chapter_draft_id)))
+        succeeded = True
+    finally:
+        if succeeded or self.request.retries >= self.max_retries:
+            asyncio.run(release_chapter_write_lock(chapter_draft_id))
 
 
 async def _write_chapter_async(chapter_draft_id: uuid.UUID) -> None:
@@ -88,8 +119,18 @@ async def _write_chapter_async(chapter_draft_id: uuid.UUID) -> None:
 
 @celery_app.task(name="finalize_manuscript")
 def finalize_manuscript(autobiography_id: str) -> None:
-    """Phase 4 통일성 윤문 패스. 모든 챕터 집필 완료 후 트리거."""
-    _run(_finalize_manuscript_async(uuid.UUID(autobiography_id)))
+    """Phase 4 통일성 윤문 패스. 모든 챕터 집필 완료 후 트리거.
+
+    종료되면(성공/실패 무관) 중복 큐잉 방지 락(app/workers/enqueue.py:
+    enqueue_finalize_manuscript)을 해제한다 — 실패했을 때 사람이 바로 다시
+    트리거할 수 있어야 하기 때문(2026-07-19, 이미 PUBLISHED된 자서전에 대해
+    이 태스크가 중복 실행되고 있던 것을 큐 점검 중 발견해 도입)."""
+    from app.workers.enqueue import release_finalize_lock
+
+    try:
+        _run(_finalize_manuscript_async(uuid.UUID(autobiography_id)))
+    finally:
+        asyncio.run(release_finalize_lock(autobiography_id))
 
 
 async def _finalize_manuscript_async(autobiography_id: uuid.UUID) -> None:
@@ -102,8 +143,16 @@ def generate_manuscript_pdf(autobiography_id: str) -> None:
     """Phase 5 실물 출판: 최종 윤문(final_content) 완료 후 Jinja2+WeasyPrint로 국판
     PDF를 조판해 S3에 올린다. WeasyPrint 렌더링 자체는 CPU 바운드 동기 작업이라
     Solar 호출과 달리 네트워크 대기는 짧지만, 이벤트/미디어 조회는 여전히 실제
-    DB·S3 I/O이므로 다른 태스크와 동일하게 워커에 위임한다."""
-    _run(_generate_manuscript_pdf_async(uuid.UUID(autobiography_id)))
+    DB·S3 I/O이므로 다른 태스크와 동일하게 워커에 위임한다.
+
+    종료되면(성공/실패 무관) 중복 큐잉 방지 락(app/workers/enqueue.py:
+    enqueue_generate_manuscript_pdf)을 해제한다(2026-07-19)."""
+    from app.workers.enqueue import release_pdf_generate_lock
+
+    try:
+        _run(_generate_manuscript_pdf_async(uuid.UUID(autobiography_id)))
+    finally:
+        asyncio.run(release_pdf_generate_lock(autobiography_id))
 
 
 async def _generate_manuscript_pdf_async(autobiography_id: uuid.UUID) -> None:

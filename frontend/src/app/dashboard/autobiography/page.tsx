@@ -118,6 +118,17 @@ export default function AutobiographyPage() {
     return bio;
   }, [user]);
 
+  // 폴링 틱에서 load()가 실패하면(예: 로컬 백엔드 auto-reload로 인한 순간적인
+  // "Failed to fetch") 그냥 void로 던지면 처리되지 않은 프라미스 거부가 되어
+  // Next.js 개발 모드가 전체 화면 오류 오버레이를 띄운다 — 실제로는 다음 폴링
+  // (POLL_INTERVAL_MS 뒤)에 저절로 복구되는 일시적 실패인데도 마치 접속이
+  // 끊긴 것처럼 보였다(2026-07-19). 최초 로딩과 동일한 에러 문구로 조용히
+  // 표시만 하고, 다음 폴링이 성공하면 그 문구도 다음 setError(null) 호출
+  // (각 handle* 함수 시작부)로 자연히 사라진다.
+  const pollLoad = useCallback(() => {
+    void load().catch(() => setError("자서전 정보를 불러오지 못했어요."));
+  }, [load]);
+
   useEffect(() => {
     if (!user) return;
     // loading 초기값이 true라 여기서 다시 setLoading(true)를 부를 필요가 없다 —
@@ -139,7 +150,7 @@ export default function AutobiographyPage() {
     const waitingOnRewrite = rewritingChapters.size > 0;
 
     if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate || waitingOnPdf || waitingOnRewrite) {
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } else {
       stopPolling();
     }
@@ -150,7 +161,7 @@ export default function AutobiographyPage() {
     consolidateTriggered,
     pdfTriggered,
     rewritingChapters,
-    load,
+    pollLoad,
     startPolling,
     stopPolling,
   ]);
@@ -162,7 +173,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.consolidate(user.id);
       setConsolidateTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("이야기를 정리하지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -213,7 +224,7 @@ export default function AutobiographyPage() {
     try {
       await Promise.all(unwritten.map((c) => autobiographiesApi.writeChapter(autobiography.id, c.id)));
       setChaptersWriteTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("챕터 집필을 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -234,7 +245,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.writeChapter(autobiography.id, chapter.id);
       setRewritingChapters((prev) => new Map(prev).set(chapter.id, chapter.updated_at));
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("챕터 다시 쓰기를 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
     }
@@ -259,7 +270,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.finalize(autobiography.id);
       setFinalizeTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("최종본을 만들지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -274,7 +285,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.generatePdf(autobiography.id);
       setPdfTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("PDF를 만들지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {

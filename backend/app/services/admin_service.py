@@ -57,6 +57,14 @@ class AdminEmailAlreadyRegisteredError(Exception):
     """다른 계정이 이미 쓰고 있는 이메일이다."""
 
 
+class AdminAutobiographyNotFoundError(Exception):
+    """자서전이 없거나 지정한 유저의 소유가 아니다."""
+
+
+class AdminPdfNotReadyError(Exception):
+    """최종본(윤문)이 아직 없어 PDF를 조판할 수 없다."""
+
+
 async def list_stale_sessions(
     gateways: Gateways, *, admin_id: uuid.UUID
 ) -> list[InterviewSessionRecord]:
@@ -98,16 +106,24 @@ async def reconcile_stale_sessions(gateways: Gateways) -> int:
     if not stale:
         return 0
 
-    from app.workers.enqueue import enqueue_with_retry
-    from app.workers.tasks import process_session_completion  # 순환 임포트 방지용 지연 임포트
+    from app.workers.enqueue import enqueue_session_phase2_processing
 
+    # 세션 단위 락(app/workers/enqueue.py 모듈 참조)이 이미 걸려 있는 세션은
+    # 건너뛴다 — "완료됐는데 session_prose가 아직 없다"는 이 함수의 판정 기준
+    # 하나만으로는 "메시지가 진짜 유실됨"과 "이미 큐에서 순서를 기다리는 중"을
+    # 구분할 수 없어, 워커가 바쁠 때(챕터 집필 백로그 등) 같은 세션을 5분마다
+    # 무한정 재큐잉하던 문제의 수정(2026-07-19, 378개까지 중복 누적됐던 사고
+    # 참조). 반환값(재큐잉을 "시도"한 세션 수)은 실제로 큐잉된 것만 센다 —
+    # 락에 걸려 건너뛴 세션은 이미 처리 중이므로 세지 않는 게 이 지표의 원래
+    # 목적("이번에 실제로 개입한 세션 수")에 더 맞는다.
+    requeued = 0
     for session in stale:
-        await enqueue_with_retry(
-            process_session_completion,
-            str(session.id),
-            log_context=f"session_id={session.id} (reconcile)",
+        enqueued = await enqueue_session_phase2_processing(
+            session.id, log_context=f"session_id={session.id} (reconcile)"
         )
-    return len(stale)
+        if enqueued:
+            requeued += 1
+    return requeued
 
 
 async def lookup_user(
@@ -211,6 +227,52 @@ async def reset_user_password(
     await gateways.audit.record(
         AdminAuditLogCreateData(
             admin_id=admin_id, action="admin_reset_user_password", target_user_id=user_id
+        )
+    )
+    await gateways.commit()
+
+
+async def list_user_autobiographies(
+    gateways: Gateways, *, admin_id: uuid.UUID, user_id: uuid.UUID
+) -> list[AutobiographyRecord]:
+    """이 유저가 완성한(final_content 존재) 자서전 전체 — 실물 출판용 PDF를
+    관리자가 대신 내려받는 화면 전용(고객 자신은 "나의 책장"에서 본다)."""
+    autobiographies = await gateways.autobiographies.list_finished_by_user(user_id)
+    await gateways.audit.record(
+        AdminAuditLogCreateData(
+            admin_id=admin_id, action="view_user_autobiographies", target_user_id=user_id
+        )
+    )
+    await gateways.commit()
+    return autobiographies
+
+
+async def trigger_autobiography_pdf(
+    gateways: Gateways, *, admin_id: uuid.UUID, user_id: uuid.UUID, autobiography_id: uuid.UUID
+) -> None:
+    """관리자가 고객 소유의 자서전 PDF 조판을 대신 트리거한다(실물 인쇄 준비용).
+    일반 유저용 엔드포인트(app/api/v1/autobiographies.py:generate_pdf)는 소유권을
+    current_user와 비교해 검증하는데, 관리자는 그 자서전의 소유자가 아니므로
+    별도 경로가 필요하다 — 대신 여기서 autobiography.user_id == user_id로
+    검증해 다른 유저의 자서전을 경로 파라미터 조작만으로 조판하지 못하게 막는다."""
+    autobiography = await gateways.autobiographies.get_by_id(autobiography_id)
+    if autobiography is None or autobiography.user_id != user_id:
+        raise AdminAutobiographyNotFoundError()
+    if not autobiography.final_content:
+        raise AdminPdfNotReadyError()
+
+    from app.workers.enqueue import enqueue_generate_manuscript_pdf
+
+    # 유저용 엔드포인트와 동일한 중복 재큐잉 방지 락을 거친다(2026-07-19) —
+    # 안 그러면 고객이 방금 누른 요청과 관리자가 대신 누른 요청이 동시에 큐에
+    # 쌓일 수 있다.
+    await enqueue_generate_manuscript_pdf(autobiography_id, log_context=f"admin_id={admin_id}")
+
+    await gateways.audit.record(
+        AdminAuditLogCreateData(
+            admin_id=admin_id,
+            action="admin_trigger_pdf_generate",
+            target_user_id=user_id,
         )
     )
     await gateways.commit()

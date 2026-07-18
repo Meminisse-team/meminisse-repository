@@ -510,11 +510,10 @@ async def add_user_turn(
         # 그대로 쓰지 않는 이유: 그 함수는 자체적으로 상태 전이+커밋을 다시 하는데,
         # 이 함수는 위기 대응 문구(assistant_turn)까지 한 트랜잭션에 담아야 해서
         # 커밋 순서가 다르다.
-        from app.workers.enqueue import enqueue_in_background
-        from app.workers.tasks import process_session_completion  # 순환 임포트 방지용 지연 임포트
+        from app.workers.enqueue import enqueue_session_phase2_processing_in_background
 
-        enqueue_in_background(
-            process_session_completion, str(session.id), log_context=f"session_id={session.id}"
+        enqueue_session_phase2_processing_in_background(
+            session.id, log_context=f"session_id={session.id}"
         )
 
     updated_session = await gateways.sessions.get_by_id(session.id)
@@ -603,11 +602,10 @@ async def complete_session(
     await gateways.sessions.complete(session.id)
     await gateways.commit()
 
-    from app.workers.enqueue import enqueue_in_background
-    from app.workers.tasks import process_session_completion  # 순환 임포트 방지용 지연 임포트
+    from app.workers.enqueue import enqueue_session_phase2_processing_in_background
 
-    enqueue_in_background(
-        process_session_completion, str(session.id), log_context=f"session_id={session.id}"
+    enqueue_session_phase2_processing_in_background(
+        session.id, log_context=f"session_id={session.id}"
     )
 
     updated_session = await gateways.sessions.get_by_id(session.id)
