@@ -58,7 +58,7 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
 
     _session_t0 = time.monotonic()
     chat_turns = [{"role": log.role.value, "content": log.content} for log in session.chat_logs]
-    reassembly_turns = _exclude_wrap_up_exchange(chat_turns)
+    reassembly_turns = await _exclude_wrap_up_exchange(chat_turns)
     # "low"에서는 세션 안에 사건이 2개 이상이고 각각 후속 질문 병합이 필요할 때
     # 원본 문장과 병합 문장을 중복으로 남기는 오류가 실사용 검증(4회 중 약 2~3회)
     # 재현됐다. "medium"으로 올리면 같은 검증에서 대부분 정상 병합되고(4회 중
@@ -233,21 +233,33 @@ async def _extract_events_from_prose(
     return events
 
 
-def _exclude_wrap_up_exchange(chat_turns: list[dict[str, str]]) -> list[dict[str, str]]:
-    """마무리 확인 질문(WRAP_UP_CHECK_IN_MESSAGE)과 그에 대한 사용자 응답("넘어가자",
-    "없어요" 등)은 이 사건에 대한 서술이 아니라 순수한 대화 진행 신호이므로, 산문
-    재조립에 넘기기 전에 코드 레벨에서 통째로 제외한다 — PROSE_REASSEMBLY_SYSTEM_
-    PROMPT의 "진행 신호는 옮기지 말라"는 지시만으로는 실제로 "다음으로 넘어가자"가
-    산문 문장에 그대로 새어 들어가는 사고가 실사용 대화에서 재현됐다(2026-07-16).
-    WRAP_UP_CHECK_IN_MESSAGE는 세션당 한 번, 고정 문구로만 등장하므로(interview_
-    service.py:_finalize_wrap_up_or_complete) 문자열 완전 일치로 안전하게 찾아낼 수
-    있다 — _strip_leaked_assistant_sentences와 같은 "프롬프트만으론 못 미더우니
-    코드로 한 번 더 막는다"는 이 파일의 기존 패턴을 따른다."""
+async def _exclude_wrap_up_exchange(chat_turns: list[dict[str, str]]) -> list[dict[str, str]]:
+    """마무리 확인 질문(WRAP_UP_CHECK_IN_MESSAGE) 자체는 인터뷰 진행자의 발화이므로
+    무조건 제외한다. 그에 대한 사용자 응답은 "넘어가자", "없어요"처럼 순수한 대화
+    진행 신호일 때만 함께 제외하고, "아 맞다 삼촌도 같이 계셨어요"처럼 실질적인
+    내용을 담고 있으면 살려서 재조립에 넘긴다 — PROSE_REASSEMBLY_SYSTEM_PROMPT의
+    "진행 신호는 옮기지 말라"는 지시만으로는 실제로 "다음으로 넘어가자"가 산문
+    문장에 그대로 새어 들어가는 사고가 실사용 대화에서 재현됐지만(2026-07-16),
+    위치(마무리 질문 바로 다음 턴)만으로 무조건 제외하면 사용자가 이 자리에서
+    실제로 덧붙인 이야기까지 함께 사라진다(2026-07-19). WRAP_UP_CHECK_IN_MESSAGE는
+    세션당 한 번, 고정 문구로만 등장하므로(interview_service.py:_finalize_wrap_up_
+    or_complete) 문자열 완전 일치로 안전하게 찾아낼 수 있다 — _strip_leaked_
+    assistant_sentences와 같은 "프롬프트만으론 못 미더우니 코드로 한 번 더 막는다"는
+    이 파일의 기존 패턴을 따르되, 그 응답의 내용 판별만 저비용 LLM 분류로 넘긴다
+    (prompts.build_wrap_up_reply_classification_prompt)."""
     filtered: list[dict[str, str]] = []
     skip_next_user_turn = False
     for turn in chat_turns:
         if skip_next_user_turn and turn.get("role") == "user":
             skip_next_user_turn = False
+            classification = await solar.structured_completion(
+                prompts.build_wrap_up_reply_classification_prompt(reply=turn.get("content", "")),
+                schema_name="wrap_up_reply_classification",
+                json_schema=prompts.WRAP_UP_REPLY_CLASSIFICATION_SCHEMA,
+                reasoning_effort="low",
+            )
+            if classification.get("has_additional_content"):
+                filtered.append(turn)
             continue
         if turn.get("role") == "assistant" and turn.get("content") == prompts.WRAP_UP_CHECK_IN_MESSAGE:
             skip_next_user_turn = True

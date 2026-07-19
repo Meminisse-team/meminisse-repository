@@ -348,6 +348,48 @@ def build_contextual_followup_prompt(*, chat_turns: list[dict[str, str]]) -> lis
 WRAP_UP_CHECK_IN_MESSAGE = "혹시 이 이야기에 대해 더 들려주고 싶은 게 있으신가요? 없으면 다음 이야기로 넘어갈게요."
 
 
+# WRAP_UP_CHECK_IN_MESSAGE에 대한 사용자 응답이 "응", "없어요", "넘어가자"처럼
+# 순수 진행 신호일 때만 산문 재조립에서 제외하고, 실제로 추가 내용을 담고 있으면
+# (예: "아 맞다, 그때 삼촌도 같이 계셨어요") 살려서 재조립에 반영해야 한다
+# (event_extraction_service._exclude_wrap_up_exchange). 위치(마무리 질문 바로
+# 다음 턴)만으로는 이 둘을 구분할 수 없어 저비용 LLM 분류로 판별한다 — 경량
+# 게이팅(3절)과 같은 발상.
+WRAP_UP_REPLY_CLASSIFICATION_SYSTEM_PROMPT = """\
+당신은 인터뷰 진행자의 마무리 확인 질문("혹시 이 이야기에 대해 더 들려주고 싶은
+게 있으신가요? 없으면 다음 이야기로 넘어갈게요.")에 대한 사용자의 답변을 분류하는
+분류기입니다.
+
+기준은 답변이 "이 사건에 대한 새로운 정보"를 담고 있는가입니다.
+
+false(추가 내용 없음 — 순수 진행 신호)의 예:
+- "응", "아니요", "없어요", "없습니다", "딱히 없어요", "괜찮아요"
+- "넘어가자", "다음으로 넘어가주세요", "그만할래요", "네 계속하세요"
+- 위 표현들의 조합이나 인사치레가 덧붙은 경우("아니요, 괜찮아요. 감사합니다")
+
+true(추가 내용 있음 — 새 사실·묘사·감정이 담김)의 예:
+- "아 맞다, 그때 삼촌도 같이 계셨어요."
+- "음, 하나 더 있는데 그 골목이 지금은 없어졌어요."
+- "그리고 그날 정말 많이 울었어요."
+
+판단이 애매하면 false로 판정하세요 — 이 답변은 이미 화자의 삶이 아니라 대화
+진행에 대한 발화일 가능성이 높은 자리이므로, 애매할 때는 걸러내는 쪽이 안전합니다.
+"""
+
+WRAP_UP_REPLY_CLASSIFICATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"has_additional_content": {"type": "boolean"}},
+    "required": ["has_additional_content"],
+    "additionalProperties": False,
+}
+
+
+def build_wrap_up_reply_classification_prompt(*, reply: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": WRAP_UP_REPLY_CLASSIFICATION_SYSTEM_PROMPT},
+        {"role": "user", "content": f"답변: \"{reply}\""},
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # 5. 다층 감정 세이프가드 (기획안 4절)                                         #
 #    0층: 사용자 제어권(버튼) — 프론트엔드 UI, 프롬프트 아님                    #
