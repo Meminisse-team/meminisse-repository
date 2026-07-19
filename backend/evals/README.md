@@ -331,12 +331,22 @@ ablations.py`, `evals/baseline_ablation_comparison.py`, `evals/real_data_compari
   - 실제 데이터 경로: 100문항 데이터는 이미 완결된 답변이라(꼬리질문 없이
     수집됨) 기존 `full` 조건 자체가 사실상 "꼬리질문 없음" 상태다. 반대로
     "꼬리질문까지 답했다면"을 근사하기 위해 `evals/real_followup_simulation.py`
-    가 다섯 번째 조건 `with_followup`을 만든다 — Test B(아래)가 판정한 꼬리질문
-    발동 답변마다, 인물의 프로필·기존 답변을 근거로 LLM이 그 인물이 답했을 법한
-    답변을 시뮬레이션해 붙인 뒤 Phase 2부터 다시 처리한다. **실존 인물이 실제로
-    하지 않은 발언을 벤치마크용으로만 생성한다는 점을 반드시 인지할 것** —
-    evals/real_data_comparison.py에 `--file` 인자를 줄 때만 활성화된다(2026-07-18
-    사용자 확인 후 구현).
+    가 다섯 번째 조건 `with_followup`을 만든다. 두 가지 방식을 지원한다
+    (evals/real_data_comparison.py의 `--file` vs `--followup-audit-file`,
+    후자가 우선):
+    1. **자동 시뮬레이션**(`--file`): Test B가 판정한 꼬리질문 발동 답변마다,
+       인물의 프로필·기존 답변을 근거로 LLM이 그 인물이 답했을 법한 답변을
+       즉석에서 시뮬레이션한다. 빠르지만 근사치.
+    2. **사람이 직접 편집한 답변**(`--followup-audit-file`, 2026-07-18 추가):
+       Test B 출력(`followup_audit_*.json`)을 사람이 직접 열어 각 항목에
+       `followup_answer`를 채운 파일을 그대로 쓴다 — 재판정·재시뮬레이션을
+       하지 않는다(LLM 비결정성으로 원래 판정과 어긋나는 것을 방지 + 이미
+       사람이 들인 수고 보존). `followup_question`은 있는데 `followup_answer`가
+       비어 있는 항목이 하나라도 있으면 조용히 넘어가지 않고 즉시 에러로
+       중단한다.
+
+    두 경우 모두 **실존 인물이 실제로 하지 않은 발언을 벤치마크용으로만
+    생성/사용한다는 점을 반드시 인지할 것**(2026-07-18 사용자 확인 후 구현).
 - **Test B(발동 빈도 실측)**: `evals/followup_trigger_audit.py` — DB 시딩 없이
   100문항 .txt 파일을 직접 읽어, 각 답변을 실제 프로덕션 게이팅 함수
   (`interview_service._run_turn_gating` 등)에 통과시켜 "라이브 인터뷰였다면

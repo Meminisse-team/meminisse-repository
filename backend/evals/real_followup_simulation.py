@@ -26,15 +26,36 @@ no_event_split)은 전부 "이미 존재하는 100개 답변"만 재구성한다
 내부 벤치마크 중간 데이터이며, evals/results/ 밖으로 나가거나 사용자에게
 노출되어서는 안 된다. 2026-07-18 사용자 확인 후 진행.
 
+## 사람이 직접 준비한 꼬리질문 답변이 있는 경우 (2026-07-18 추가)
+
+위 2번(LLM 시뮬레이션)은 자동화된 근사치일 뿐이다 — 사람이 Test B 결과
+(evals/results/followup_audit_<파일명>.json)를 직접 열어 각 항목에
+`followup_answer` 필드를 채워 넣는 방식으로 더 신경 쓴 답변을 준비했다면,
+그걸 재판정·재시뮬레이션 없이 그대로 써야 한다. 이유 둘:
+(1) LLM 판정은 비결정적이라 재실행하면 원래 Test B가 냈던 followup_question
+목록과 다시 어긋날 수 있고, (2) 사람이 이미 들인 수고를 버리고 다시 자동
+생성으로 덮어쓰는 건 품질 역행이다. build_augmented_qa_from_audit_file이
+이 경로를 담당하며, run_with_followup_condition에 file_path 대신
+audit_file_path를 넘기면 이쪽을 탄다.
+
+기대 스키마(Test B 원본 출력에 followup_answer만 추가):
+    {"number": 1, "question": "...", "answer": "...",
+     "category": "필수슬롯형_꼬리질문", "followup_question": "...",
+     "followup_answer": "<사람이 채워 넣은 답변>"}
+followup_question이 있는데 followup_answer가 비어 있는 항목이 하나라도 있으면
+즉시 에러를 내고 중단한다(조용히 건너뛰면 "꼬리질문 다 답한 줄 알았는데
+일부만 반영됐다"는 걸 나중에야 알게 되는 사고로 이어지므로).
+
 ## 실행 방법
 
-evals/real_data_comparison.py --file 인자로 자동 포함된다(아래 참조) — 이
-모듈을 단독 실행하지 않는다.
+evals/real_data_comparison.py --file 또는 --followup-audit-file 인자로 자동
+포함된다(아래 참조) — 이 모듈을 단독 실행하지 않는다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -129,6 +150,40 @@ async def build_augmented_qa(file_path: Path, *, name: str) -> list[dict[str, An
     return augmented
 
 
+def build_augmented_qa_from_audit_file(audit_file_path: Path) -> list[dict[str, Any]]:
+    """모듈 docstring "사람이 직접 준비한 꼬리질문 답변이 있는 경우" 참조.
+    build_augmented_qa의 대안 — Test B 출력을 사람이 직접 편집해 followup_answer를
+    채운 파일을 그대로 augmented_qa 형태로 변환한다. LLM 재판정·재시뮬레이션을
+    전혀 하지 않는다(비결정성으로 원본 판정과 어긋나는 것을 방지 + 이미 들인
+    수고 보존)."""
+    data = json.loads(audit_file_path.read_text(encoding="utf-8"))
+    augmented: list[dict[str, Any]] = []
+    missing_answer_numbers: list[int] = []
+
+    for r in data["results"]:
+        followup_question = r.get("followup_question")
+        followup_answer = r.get("followup_answer")
+        if followup_question and not followup_answer:
+            missing_answer_numbers.append(r["number"])
+        augmented.append(
+            {
+                "number": r["number"],
+                "question": r["question"],
+                "answer": r["answer"],
+                "followup_category": r.get("category"),
+                "followup_question": followup_question,
+                "followup_answer": followup_answer,
+            }
+        )
+
+    if missing_answer_numbers:
+        raise ValueError(
+            f"{audit_file_path}: followup_question은 있는데 followup_answer가 비어 있는 "
+            f"문항 번호 {missing_answer_numbers} — 전부 채운 뒤 다시 실행하세요."
+        )
+    return augmented
+
+
 async def seed_augmented_shadow_user(
     gateways: Gateways, *, source_user: UserRecord, augmented_qa: list[dict[str, Any]], shadow_email: str, password: str
 ) -> UserRecord:
@@ -177,12 +232,26 @@ async def run_with_followup_condition(
     gateways: Gateways,
     source_user: UserRecord,
     *,
-    file_path: Path,
+    file_path: Path | None = None,
+    audit_file_path: Path | None = None,
     shadow_email: str,
     password: str,
 ) -> dict[str, Any]:
-    """with_followup 조건의 진입점 — evals/real_data_comparison.py가 호출한다."""
-    augmented_qa = await build_augmented_qa(file_path, name=source_user.name)
+    """with_followup 조건의 진입점 — evals/real_data_comparison.py가 호출한다.
+
+    file_path/audit_file_path 중 정확히 하나만 준다. audit_file_path가 있으면
+    사람이 직접 편집한 꼬리질문 답변(모듈 docstring 참조)을 그대로 쓰고,
+    file_path만 있으면 자동 판정+LLM 시뮬레이션(build_augmented_qa)으로
+    근사한다."""
+    if audit_file_path is not None and file_path is not None:
+        raise ValueError("file_path와 audit_file_path 중 하나만 지정하세요.")
+    if audit_file_path is not None:
+        augmented_qa = build_augmented_qa_from_audit_file(audit_file_path)
+    elif file_path is not None:
+        augmented_qa = await build_augmented_qa(file_path, name=source_user.name)
+    else:
+        raise ValueError("file_path 또는 audit_file_path 중 하나는 필요합니다.")
+
     shadow_user = await seed_augmented_shadow_user(
         gateways, source_user=source_user, augmented_qa=augmented_qa, shadow_email=shadow_email, password=password
     )

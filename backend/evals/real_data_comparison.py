@@ -198,7 +198,13 @@ async def run_no_event_split(gateways: Gateways, source_user: UserRecord, *, pas
     return await _run_phase34(gateways, shadow_user)
 
 
-async def evaluate_one_persona(email: str, *, password: str, file_path: Path | None = None) -> dict:
+async def evaluate_one_persona(
+    email: str,
+    *,
+    password: str,
+    file_path: Path | None = None,
+    followup_audit_file: Path | None = None,
+) -> dict:
     async with gateways_context() as gateways:
         source_user = await gateways.users.get_by_email(email)
         if source_user is None:
@@ -214,7 +220,18 @@ async def evaluate_one_persona(email: str, *, password: str, file_path: Path | N
             "no_event_split": run_no_event_split(gateways, source_user, password=password),
         }
         active_conditions = list(_CONDITIONS)
-        if file_path is not None:
+        if followup_audit_file is not None:
+            # 사람이 직접 편집한 꼬리질문 답변(evals/real_followup_simulation.py 모듈
+            # docstring "사람이 직접 준비한 꼬리질문 답변이 있는 경우" 참조) — 자동
+            # 판정·시뮬레이션을 건너뛰고 그대로 쓴다. --file보다 우선한다.
+            runners["with_followup"] = real_followup_simulation.run_with_followup_condition(
+                gateways,
+                source_user,
+                audit_file_path=followup_audit_file,
+                shadow_email=_shadow_email(source_user.email, suffix="with-followup"),
+                password=password,
+            )
+        elif file_path is not None:
             runners["with_followup"] = real_followup_simulation.run_with_followup_condition(
                 gateways,
                 source_user,
@@ -223,10 +240,13 @@ async def evaluate_one_persona(email: str, *, password: str, file_path: Path | N
                 password=password,
             )
         else:
-            # --file 없이는 with_followup의 원본 질문/답변 텍스트(시뮬레이터 프롬프트에
-            # 필요)를 재구성할 수 없다 — DB의 ChatLog만으로는 헤더(프로필) 블록을
+            # --file도 --followup-audit-file도 없으면 with_followup의 원본 질문/답변
+            # 텍스트를 재구성할 수 없다 — DB의 ChatLog만으로는 헤더(프로필) 블록을
             # 복원 못 하므로, 이 조건만 건너뛴다(나머지 4개 조건은 그대로 진행).
-            print("  [건너뜀] with_followup: --file 인자가 없어 원본 텍스트를 복원할 수 없음", file=sys.stderr)
+            print(
+                "  [건너뜀] with_followup: --file 또는 --followup-audit-file이 없어 원본 텍스트를 복원할 수 없음",
+                file=sys.stderr,
+            )
             active_conditions = [c for c in active_conditions if c != "with_followup"]
 
         per_condition: dict = {}
@@ -268,9 +288,13 @@ async def evaluate_one_persona(email: str, *, password: str, file_path: Path | N
         return per_condition
 
 
-async def main(email: str, *, password: str, file_path: Path | None) -> None:
+async def main(
+    email: str, *, password: str, file_path: Path | None, followup_audit_file: Path | None
+) -> None:
     print(f"[평가 중] {email}", file=sys.stderr)
-    per_condition = await evaluate_one_persona(email, password=password, file_path=file_path)
+    per_condition = await evaluate_one_persona(
+        email, password=password, file_path=file_path, followup_audit_file=followup_audit_file
+    )
 
     run_dir = _RESULTS_DIR / f"real_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -301,7 +325,23 @@ if __name__ == "__main__":
         "--file",
         required=False,
         default=None,
-        help="seed_dummy.py에 넘겼던 것과 동일한 .txt 파일 경로 — with_followup 조건에 필요(생략하면 이 조건만 건너뜀)",
+        help="seed_dummy.py에 넘겼던 것과 동일한 .txt 파일 경로 — with_followup 조건에 필요(생략하면 이 조건만 건너뜀). "
+        "--followup-audit-file이 있으면 이 인자는 무시된다.",
+    )
+    parser.add_argument(
+        "--followup-audit-file",
+        required=False,
+        default=None,
+        help="evals/followup_trigger_audit.py 출력(followup_audit_*.json)에 사람이 직접 "
+        "followup_answer를 채운 파일 — 있으면 --file 대신 이걸 그대로 써서 with_followup을 "
+        "만든다(자동 판정·시뮬레이션 생략).",
     )
     args = parser.parse_args()
-    asyncio.run(main(args.email, password=args.password, file_path=Path(args.file) if args.file else None))
+    asyncio.run(
+        main(
+            args.email,
+            password=args.password,
+            file_path=Path(args.file) if args.file else None,
+            followup_audit_file=Path(args.followup_audit_file) if args.followup_audit_file else None,
+        )
+    )
