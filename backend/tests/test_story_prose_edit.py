@@ -1,8 +1,9 @@
 """'나의 이야기' 산문 사용자 편집(story_service.update_session_prose) 테스트.
 
-핵심 계약: 저장 즉시 사람이 검수·확정한 텍스트로 간주해 왜곡 탐지(NLI) 없이
-session_prose를 덮어쓰고, 이 세션의 이벤트를 새 텍스트 기준으로 재추출한다.
-원본은 최초 편집 시점에만 백업되고, 연타 저장은 쿨다운(429 상당)으로 막힌다.
+핵심 계약: 저장 즉시 사람이 검수·확정한 텍스트로 간주해 왜곡 탐지(Solar LLM 판정,
+event_extraction_service._passes_distortion_check) 없이 session_prose를 덮어쓰고,
+이 세션의 이벤트를 새 텍스트 기준으로 재추출한다. 원본은 최초 편집 시점에만
+백업되고, 연타 저장은 쿨다운(429 상당)으로 막힌다.
 """
 
 from __future__ import annotations
@@ -78,13 +79,13 @@ def _patch_extraction_pipeline(*, summary: str = "새로 추출된 이벤트"):
     async def _fake_embed_passages(texts: list[str]) -> list[list[float]]:
         return [[0.0] for _ in texts]
 
-    async def _fail_if_called_entailment(*, premise: str, hypotheses: list[str]):
-        raise AssertionError("사용자가 직접 편집한 텍스트는 왜곡 탐지(NLI)를 거치면 안 된다")
+    async def _fail_if_called_chat_completion(messages, **kwargs):
+        raise AssertionError("사용자가 직접 편집한 텍스트는 왜곡 탐지(Solar LLM 판정)를 거치면 안 된다")
 
     return (
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_passages", new=_fake_embed_passages),
-        patch("app.clients.nli.classify_entailment_batch", new=_fail_if_called_entailment),
+        patch("app.clients.solar.chat_completion", new=_fail_if_called_chat_completion),
     )
 
 

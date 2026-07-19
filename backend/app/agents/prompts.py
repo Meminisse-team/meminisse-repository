@@ -586,6 +586,52 @@ def build_prose_reassembly_prompt(*, chat_turns: list[dict[str, str]]) -> list[d
     ]
 
 
+# 왜곡 탐지 (event_extraction_service._passes_distortion_check) — 재조립본이 원본
+# 발화에 없는 사실을 지어내지 않았는지 판정한다. GROUNDEDNESS_JUDGE_SYSTEM_PROMPT(챕터
+# 집필 근거검증)와 목적은 같지만 기준은 더 엄격하다 — 챕터 집필은 "문학적 정교화"를
+# 의도적으로 허용하지만, 이 재조립본은 화자의 말만 최소 변형으로 옮긴 축어 자료여야
+# 하므로(PROSE_REASSEMBLY_SYSTEM_PROMPT) 정교화 자체를 봐줄 이유가 없다 — 그래서
+# GROUNDEDNESS_JUDGE_SYSTEM_PROMPT의 "감각 묘사·내적 독백은 통과" 예외를 두지 않는다.
+# 출력 계약을 JSON 스키마가 아니라 단문 프로토콜(PASS / FAIL: 사유)로 둔 이유는
+# clients/groundedness.py와 같다 — solar-mini의 Structured Outputs 지원 여부가
+# solar-pro3처럼 실측 검증된 적이 없어, 검증된 단문 프로토콜만 쓴다.
+DISTORTION_CHECK_SYSTEM_PROMPT = """\
+아래 [원본 발화]는 인터뷰에서 화자가 실제로 한 말이고, [재조립본]은 그 발화를
+자연스러운 1인칭 산문으로 정리한 것입니다. 재조립본이 원본에 실제로 없는
+내용을 지어내지 않았는지 판정하세요.
+
+지어낸 것으로 보지 않는 것 (통과):
+- 문장을 자연스럽게 잇거나 순서를 다듬은 것
+- 구어체를 문어체로 다듬은 것 (예: "그랬어요" → "그랬다")
+- 원본에 있는 사실을 그대로 풀어 쓴 것
+
+지어낸 것으로 판정해야 할 것 (실패):
+- 원본에 없는 새로운 인물, 대사(따옴표 발언), 날짜, 장소, 사건, 결과의 추가
+- 화자가 하지 않은 말을 한 것처럼 인용
+- 원본과 모순되는 진술
+
+애매하면 지어낸 것 쪽으로 판정하세요 — 이 재조립본은 화자의 말만 담아야 하는
+축어 자료이므로, 감각적 묘사나 내적 성찰 같은 문학적 정교화라도 원본에 없는
+새 내용이면 봐주지 마세요(챕터 집필 단계와는 판정 기준이 다릅니다).
+
+재조립본에 원본에 없는 내용이 전혀 없으면 정확히 PASS 한 단어만 출력하세요.
+하나라도 있으면 FAIL: 뒤에 어떤 부분이 어떤 이유로 문제인지 한국어로 한 문장
+안에 쓰세요. 그 외의 형식은 출력하지 마세요.
+"""
+
+
+def build_distortion_check_prompt(
+    *, original_text: str, reassembled_prose: str
+) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": DISTORTION_CHECK_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"[원본 발화]\n{original_text}\n\n[재조립본]\n{reassembled_prose}",
+        },
+    ]
+
+
 # 이벤트 분할·라벨 추출 — Structured Outputs 스키마 (array of events).
 # Solar Structured Outputs 제약(공식 문서): 중첩 깊이 최대 3, additionalProperties=false,
 # 모든 필드 required 포함 필수. null 허용 슬롯은 type에 "null"을 포함시켜 표현한다.
