@@ -75,15 +75,15 @@ async def test_process_completed_session_never_sends_wrap_up_reply_to_reassembly
     아무리 잘 지켜져도 애초에 입력에 없으면 새어 들어갈 수가 없다."""
     captured_messages: list = []
 
-    async def _fake_chat_completion(messages, *, model=None, **kwargs) -> _FakeCompletion:
-        if model == "solar-mini":
-            # 왜곡 탐지(event_extraction_service._DISTORTION_JUDGE_MODEL) 호출 —
-            # 이 테스트의 관심사가 아니므로 항상 통과시킨다.
-            return _FakeCompletion("PASS")
+    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
         captured_messages.extend(messages)
         return _FakeCompletion("본 답변 내용.")
 
     async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        if schema_name == "distortion_check":
+            # 왜곡 탐지(event_extraction_service._DISTORTION_JUDGE_MODEL) 호출 —
+            # 이 테스트의 관심사가 아니므로 항상 통과시킨다.
+            return {"flags": []}
         if schema_name == "event_extraction":
             return {"events": [], "relations": []}
         raise AssertionError(f"unexpected schema_name: {schema_name}")

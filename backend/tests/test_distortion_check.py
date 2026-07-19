@@ -6,7 +6,19 @@ _repair_distorted_prose) 회귀 테스트.
 걸려 처리 파이프라인의 스테이지 타임아웃을 반복적으로 넘기는 문제가 있었다
 (2026-07-19) — autobiography_service._run_groundedness_check가 겪었던 것과 같은
 문제를 같은 방식(Solar LLM 판정으로 교체)으로 해소했으므로, 여기서는 실제 로컬
-모델을 돌리지 않고 solar.chat_completion을 모킹해 판정/수리 로직만 검증한다.
+모델을 돌리지 않고 solar.structured_completion/chat_completion을 모킹해
+판정/수리 로직만 검증한다.
+
+판정은 단문 PASS/FAIL 프로토콜에서 GROUNDEDNESS_JUDGE_SCHEMA와 동일한 문장 단위
+flags 배열(Structured Outputs)로 바뀌었다(2026-07-19) — 산문 전체를 한 번에 보고
+하나의 판정만 내리다 보니 오탐·미탐이 둘 다 실사용 중 확인됐고, solar-mini가 이
+스키마를 실제로 지원함을 실측으로 확인했기 때문이다.
+
+문장 단위로 바꾼 뒤에도 solar-mini가 원본에 그대로 있는 문장을 "지어냈다"고
+확신에 차서 오판하는 사례가 재현돼(2026-07-19, 세션 911fbf5d), solar-pro3로
+1차 판정을 재확인하는 2차 게이트(_confirm_distortion_flags)를 추가했다 —
+autobiography_service._run_groundedness_check와 같은 패턴, clients/groundedness.py
+재사용. 여기서는 groundedness.check도 함께 모킹해 2차 게이트 로직을 검증한다.
 """
 
 from __future__ import annotations
@@ -15,6 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.clients import groundedness
 from app.services.event_extraction_service import (
     _DISTORTION_JUDGE_MODEL,
     _passes_distortion_check,
@@ -38,48 +51,123 @@ class _FakeCompletion:
 
 
 @pytest.mark.asyncio
-async def test_distortion_check_passes_when_judge_returns_pass() -> None:
-    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
-        return _FakeCompletion("PASS")
+async def test_distortion_check_passes_when_judge_returns_no_flags() -> None:
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        assert schema_name == "distortion_check"
+        return {"flags": []}
 
-    with patch("app.clients.solar.chat_completion", new=_fake_chat_completion):
-        passed, reason = await _passes_distortion_check(
+    with patch("app.clients.solar.structured_completion", new=_fake_structured_completion):
+        passed, flags = await _passes_distortion_check(
             original_turns=[{"role": "user", "content": "스무 살 때 혼자 부산으로 내려갔어요."}],
             reassembled_prose="스무 살 때 혼자 부산으로 내려갔다.",
         )
     assert passed
-    assert reason is None
+    assert flags == []
 
 
 @pytest.mark.asyncio
-async def test_distortion_check_fails_when_judge_returns_fail() -> None:
-    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
-        return _FakeCompletion("FAIL: 원본에 없는 결혼 이야기가 새로 추가됨")
+async def test_distortion_check_fails_when_both_gates_agree() -> None:
+    """1차(mini)가 플래그하고 2차(pro3, clients/groundedness.py)도 notGrounded로
+    확인하면 최종 실패로 남아야 한다."""
 
-    with patch("app.clients.solar.chat_completion", new=_fake_chat_completion):
-        passed, reason = await _passes_distortion_check(
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        return {
+            "flags": [
+                {"sentence": "나는 서른 살에 결혼했다.", "reason": "원본에 없는 결혼 이야기가 새로 추가됨"}
+            ]
+        }
+
+    async def _fake_groundedness_check(*, context, answer, model=None):
+        return groundedness.NOT_GROUNDED
+
+    with (
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_check),
+    ):
+        passed, flags = await _passes_distortion_check(
             original_turns=[{"role": "user", "content": "스무 살 때 혼자 부산으로 내려갔어요."}],
-            reassembled_prose="나는 서른 살에 결혼해서 서울에서 신혼집을 차렸다.",
+            reassembled_prose="나는 서른 살에 결혼했다.",
         )
     assert not passed
-    assert reason == "FAIL: 원본에 없는 결혼 이야기가 새로 추가됨"
+    assert flags == [
+        {"sentence": "나는 서른 살에 결혼했다.", "reason": "원본에 없는 결혼 이야기가 새로 추가됨"}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_distortion_check_fails_closed_on_off_protocol_response() -> None:
-    """빈 응답이나 PASS/FAIL 어느 쪽도 아닌 응답은 검증 실패로 안전하게 처리한다
-    (clients/groundedness.py와 동일한 "검증 실패가 검증 통과로 둔갑하면 안 된다"
-    원칙)."""
+async def test_distortion_check_dismisses_false_positive_confirmed_grounded() -> None:
+    """1차(mini)가 오탐으로 플래그해도, 2차(pro3)가 실제로 원본에 있다(grounded)고
+    확인하면 최종 통과로 철회돼야 한다 — solar-mini가 원본에 그대로 있는 문장을
+    "지어냈다"고 오판한 실사용 재현(세션 911fbf5d, 2026-07-19)에 대한 회귀 테스트."""
 
-    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
-        return _FakeCompletion("")
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        return {
+            "flags": [
+                {"sentence": "그때는 폴 앨런이랑 자주 부딪혔어요.", "reason": "원본에 없는 인물 언급"}
+            ]
+        }
 
-    with patch("app.clients.solar.chat_completion", new=_fake_chat_completion):
-        passed, _reason = await _passes_distortion_check(
-            original_turns=[{"role": "user", "content": "원본 발화."}],
-            reassembled_prose="재조립본.",
+    async def _fake_groundedness_check(*, context, answer, model=None):
+        return groundedness.GROUNDED
+
+    with (
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_check),
+    ):
+        passed, flags = await _passes_distortion_check(
+            original_turns=[{"role": "user", "content": "그때는 폴 앨런이랑 자주 부딪혔어요."}],
+            reassembled_prose="그때는 폴 앨런이랑 자주 부딪혔어요.",
+        )
+    assert passed
+    assert flags == []
+
+
+@pytest.mark.asyncio
+async def test_distortion_check_second_gate_fails_closed_on_error() -> None:
+    """2차 게이트 호출이 실패해도(예외) 플래그를 유지해야 한다 — "검증 실패가
+    검증 통과로 둔갑하면 안 된다"는 원칙은 clients/groundedness.py와 동일."""
+
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        return {"flags": [{"sentence": "지어낸 문장.", "reason": "사유"}]}
+
+    async def _fake_groundedness_check_raises(*, context, answer, model=None):
+        raise RuntimeError("네트워크 오류")
+
+    with (
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_check_raises),
+    ):
+        passed, flags = await _passes_distortion_check(
+            original_turns=[{"role": "user", "content": "원본."}],
+            reassembled_prose="지어낸 문장.",
         )
     assert not passed
+    assert flags == [{"sentence": "지어낸 문장.", "reason": "사유"}]
+
+
+@pytest.mark.asyncio
+async def test_distortion_check_second_gate_uses_pro3_not_mini() -> None:
+    """2차 게이트는 1차와 다른 모델(solar-pro3)을 써야 한다 — 1차 판정 모델(mini)이
+    자기 오판을 또 확인하면 2차 게이트를 두는 의미가 없다."""
+    captured: dict = {}
+
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        return {"flags": [{"sentence": "지어낸 문장.", "reason": "사유"}]}
+
+    async def _fake_groundedness_check(*, context, answer, model=None):
+        captured["model"] = model
+        return groundedness.NOT_GROUNDED
+
+    with (
+        patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
+        patch("app.clients.groundedness.check", new=_fake_groundedness_check),
+    ):
+        await _passes_distortion_check(
+            original_turns=[{"role": "user", "content": "원본."}],
+            reassembled_prose="지어낸 문장.",
+        )
+
+    assert captured["model"] == "solar-pro3"
 
 
 @pytest.mark.asyncio
@@ -89,11 +177,11 @@ async def test_distortion_check_uses_mini_not_the_reassembly_model() -> None:
     설계 결정이므로, 실수로 되돌아가지 않도록 회귀 테스트로 고정한다."""
     captured: dict = {}
 
-    async def _fake_chat_completion(messages, *, model=None, **kwargs) -> _FakeCompletion:
+    async def _fake_structured_completion(messages, *, schema_name, json_schema, model=None, **kwargs):
         captured["model"] = model
-        return _FakeCompletion("PASS")
+        return {"flags": []}
 
-    with patch("app.clients.solar.chat_completion", new=_fake_chat_completion):
+    with patch("app.clients.solar.structured_completion", new=_fake_structured_completion):
         await _passes_distortion_check(
             original_turns=[{"role": "user", "content": "원본 발화."}],
             reassembled_prose="재조립본.",
@@ -107,16 +195,16 @@ async def test_distortion_check_skips_call_when_nothing_to_compare() -> None:
     """원문(사용자 발화)이나 재조립본이 비어 있으면 판정 자체가 불가능하므로
     Solar를 호출하지 않고 통과 처리한다."""
 
-    async def _fail_if_called(messages, **kwargs) -> _FakeCompletion:
+    async def _fail_if_called(messages, **kwargs):
         raise AssertionError("비교할 원문/재조립본이 없으면 Solar를 호출하면 안 된다")
 
-    with patch("app.clients.solar.chat_completion", new=_fail_if_called):
-        passed, reason = await _passes_distortion_check(
+    with patch("app.clients.solar.structured_completion", new=_fail_if_called):
+        passed, flags = await _passes_distortion_check(
             original_turns=[{"role": "assistant", "content": "질문만 있고 답변이 없음"}],
             reassembled_prose="",
         )
     assert passed
-    assert reason is None
+    assert flags == []
 
 
 @pytest.mark.asyncio
@@ -136,11 +224,40 @@ async def test_repair_distorted_prose_uses_reassembly_model_not_mini() -> None:
             reassembled_prose="원래 산문.",
             chat_turns=turns,
             reassembly_turns=turns,
-            fail_reason="FAIL: 지어낸 내용이 있음.",
+            flags=[{"sentence": "원래 산문.", "reason": "지어낸 내용이 있음."}],
         )
 
     assert "model" not in captured or captured["model"] is None
     assert result == "수리된 산문."
+
+
+@pytest.mark.asyncio
+async def test_repair_distorted_prose_sends_flags_as_correction_targets() -> None:
+    """flags 목록이 [수정 대상]으로 프롬프트에 그대로 실려야 한다 — 문장별로
+    사유를 담아 정확히 어디를 고쳐야 하는지 수리 모델에 전달한다."""
+    captured: dict = {}
+
+    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
+        captured["user_message"] = messages[1]["content"]
+        return _FakeCompletion("수리된 산문.")
+
+    turns = [{"role": "user", "content": "원본 발화."}]
+    flags = [
+        {"sentence": "지어낸 문장 A.", "reason": "사유 A"},
+        {"sentence": "지어낸 문장 B.", "reason": "사유 B"},
+    ]
+    with patch("app.clients.solar.chat_completion", new=_fake_chat_completion):
+        await _repair_distorted_prose(
+            reassembled_prose="원래 산문.",
+            chat_turns=turns,
+            reassembly_turns=turns,
+            flags=flags,
+        )
+
+    assert "지어낸 문장 A." in captured["user_message"]
+    assert "사유 A" in captured["user_message"]
+    assert "지어낸 문장 B." in captured["user_message"]
+    assert "사유 B" in captured["user_message"]
 
 
 @pytest.mark.asyncio
@@ -160,7 +277,7 @@ async def test_repair_distorted_prose_strips_leaked_assistant_sentences() -> Non
             reassembled_prose="원래 산문.",
             chat_turns=full_turns,
             reassembly_turns=full_turns,
-            fail_reason="FAIL: 사유.",
+            flags=[{"sentence": "사유.", "reason": "사유."}],
         )
 
     assert leaked_line not in result
@@ -194,7 +311,7 @@ async def test_repair_distorted_prose_uses_reassembly_turns_for_ground_truth() -
             reassembled_prose="원래 산문.",
             chat_turns=chat_turns,
             reassembly_turns=reassembly_turns,
-            fail_reason="FAIL: 사유.",
+            flags=[{"sentence": "사유.", "reason": "사유."}],
         )
 
     assert wrap_up_reply not in captured["user_message"]

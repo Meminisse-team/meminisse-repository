@@ -174,13 +174,13 @@ async def test_process_completed_session_drops_interviewer_leaked_event_end_to_e
     위해 일부러 그런 산문을 fake_chat_completion으로 반환), event_extraction_service가
     최종적으로 그 인터뷰어 발화를 사건으로 저장하지 않아야 한다."""
 
-    async def _fake_chat_completion(messages, *, model=None, **kwargs) -> _FakeCompletion:
-        if model == "solar-mini":
-            # 왜곡 탐지 — 이 테스트는 인터뷰어 발화 유출 필터링만 검증하므로 항상 통과시킨다.
-            return _FakeCompletion("PASS")
+    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
         return _FakeCompletion(_LEAKED_PROSE)
 
     async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        if schema_name == "distortion_check":
+            # 이 테스트는 인터뷰어 발화 유출 필터링만 검증하므로 항상 통과시킨다.
+            return {"flags": []}
         if schema_name == "event_extraction":
             return {"events": _EXTRACTED_EVENTS_WITH_LEAK, "relations": []}
         raise AssertionError(f"unexpected schema_name: {schema_name}")
@@ -238,13 +238,13 @@ async def test_process_completed_session_threads_opening_question_into_extractio
     content가 생성 시점에 저장)가 이벤트 추출 단계에 질문 맥락으로 전달돼야 한다."""
     captured_messages: list = []
 
-    async def _fake_chat_completion(messages, *, model=None, **kwargs) -> _FakeCompletion:
-        if model == "solar-mini":
-            # 왜곡 탐지 — 이 테스트는 질문 맥락 전달만 검증하므로 항상 통과시킨다.
-            return _FakeCompletion("PASS")
+    async def _fake_chat_completion(messages, **kwargs) -> _FakeCompletion:
         return _FakeCompletion("서울대학교에 다녔다.")
 
     async def _fake_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        if schema_name == "distortion_check":
+            # 이 테스트는 질문 맥락 전달만 검증하므로 항상 통과시킨다.
+            return {"flags": []}
         if schema_name == "event_extraction":
             captured_messages.extend(messages)
             return {

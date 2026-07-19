@@ -234,7 +234,7 @@ async def test_distortion_failure_retries_then_flags_and_user_edit_clears() -> N
         return _R()
 
     async def _always_distorted(*, original_turns, reassembled_prose):
-        return False, "지어낸 내용이 있다는 가짜 사유."
+        return False, [{"sentence": reassembled_prose, "reason": "지어낸 내용이 있다는 가짜 사유."}]
 
     async def _fake_structured(messages, *, schema_name, json_schema, **kwargs):
         return {"events": [], "relations": []}
