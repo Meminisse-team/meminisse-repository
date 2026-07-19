@@ -20,7 +20,7 @@
     @bottom-center {
       content: counter(page);
       font-family: "Manuscript Serif", serif;
-      font-size: 9pt;
+      font-size: 10pt;
       color: #555;
     }
   }
@@ -33,7 +33,7 @@
 
   body {
     font-family: "Manuscript Serif", serif;
-    font-size: 11pt;
+    font-size: 12pt;
     line-height: 1.9;
     color: #1a1a1a;
     /* 한글 금칙(줄바꿈이 단어 중간에서 일어나지 않도록) */
@@ -53,11 +53,26 @@
     break-after: page;
   }
   .cover h1 {
-    font-size: 26pt;
-    margin-bottom: 12mm;
+    font-size: 27pt;
+    margin-bottom: 6mm;
   }
-  .cover .subtitle {
-    font-size: 11pt;
+  .cover .author {
+    font-size: 12pt;
+    color: #555;
+  }
+
+  /* 표지(제목·저자만)와 목차 사이 — 책 소개 문구는 여기 한 페이지에만 싣는다. */
+  .intro {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    break-after: page;
+  }
+  .intro p {
+    font-size: 12pt;
     color: #555;
     max-width: 100mm;
     line-height: 1.8;
@@ -67,7 +82,7 @@
     break-after: page;
   }
   .toc h2 {
-    font-size: 16pt;
+    font-size: 17pt;
     margin-bottom: 10mm;
   }
   .toc ol {
@@ -78,12 +93,12 @@
     display: flex;
     justify-content: space-between;
     gap: 4mm;
-    font-size: 11pt;
+    font-size: 12pt;
     margin-bottom: 4mm;
     border-bottom: 1px dotted #999;
   }
   .toc-part h3 {
-    font-size: 12pt;
+    font-size: 13pt;
     margin: 6mm 0 3mm 0;
   }
 
@@ -98,20 +113,20 @@
     break-after: page;
   }
   .part-divider .part-label {
-    font-size: 10pt;
+    font-size: 11pt;
     letter-spacing: 0.2em;
     color: #777;
     margin-bottom: 4mm;
   }
   .part-divider h2 {
-    font-size: 20pt;
+    font-size: 21pt;
   }
 
   .chapter {
     break-before: page;
   }
   .chapter h2 {
-    font-size: 15pt;
+    font-size: 16pt;
     margin-bottom: 8mm;
     text-align: center;
   }
@@ -129,13 +144,17 @@
   .chapter figcaption {
     margin-top: 2mm;
     text-align: center;
-    font-size: 9pt;
+    font-size: 10pt;
     color: #555;
   }
   .chapter p {
+    /* break-inside: avoid를 의도적으로 두지 않는다 — 문단이 페이지 하단에 걸치면
+       그 문단 전체가 다음 페이지로 밀려나 앞 페이지에 큰 여백이 남고 사실상
+       "문단마다 새 페이지"처럼 보이는 문제가 있었다. 문단 사이 여백(margin-bottom)
+       한 줄 정도는 유지하되, 문단 자체는 필요하면 페이지 경계에서 자연스럽게
+       이어지도록 한다(body의 orphans/widows가 최소 3줄은 같은 페이지에 남긴다).*/
     margin: 0 0 4mm 0;
     text-indent: 1em;
-    break-inside: avoid;
   }
 
   /* 전면 사진 페이지형 슬롯(기획안 5절) — 사진 한 장이 한 페이지를 차지한다. */
@@ -155,7 +174,7 @@
   }
   .photo-page .photo-caption {
     margin-top: 4mm;
-    font-size: 9pt;
+    font-size: 10pt;
     color: #555;
     text-align: center;
   }
@@ -165,10 +184,16 @@
 
 <section class="cover">
   <h1>{{ title or "나의 이야기" }}</h1>
-  {% if book_synopsis %}
-  <p class="subtitle">{{ book_synopsis }}</p>
+  {% if author_name %}
+  <p class="author">{{ author_name }}</p>
   {% endif %}
 </section>
+
+{% if book_synopsis %}
+<section class="intro">
+  <p>{{ book_synopsis }}</p>
+</section>
+{% endif %}
 
 <section class="toc">
   <h2>목차</h2>

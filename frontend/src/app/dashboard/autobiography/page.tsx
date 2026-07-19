@@ -17,7 +17,9 @@ import type {
   TocCandidate,
 } from "@/types/api";
 
-const POLL_INTERVAL_MS = 4000;
+// 6초로(기존 4초) — 폴링 틱 자체가 이제 경량 상태 조회라 부담이 크진 않지만,
+// 요청 횟수 자체를 줄이는 것도 Supabase Egress 절감에 보탬이 된다(2026-07-19).
+const POLL_INTERVAL_MS = 6000;
 
 // 자서전 집필 진행률 게이트 — 백엔드 상수(app/services/autobiography_service.py:
 // MIN_COMPLETED_SESSIONS_FOR_AUTOBIOGRAPHY 등)와 반드시 같은 값으로 유지할 것.
@@ -118,6 +120,65 @@ export default function AutobiographyPage() {
     return bio;
   }, [user]);
 
+  // 폴링 틱마다 자서전 전체(final_content 수만 자)와 챕터 본문 전체를 통째로
+  // 다시 받아오면, 몇 시간씩 이어지는 대기 시간 동안 Supabase egress가
+  // 쌓인다(2026-07-19, 무료 등급 Egress 한도 초과 사고 원인 중 하나로 확인).
+  // 그래서 폴링 틱은 경량 상태 조회(getPollingStatus)만 먼저 확인하고, 실제로
+  // 뭔가 완료된 게 감지될 때만(챕터 본문 완성, 최종본 완성, PDF 생성, 상태
+  // 전환) 기존 전체 조회(load)를 딱 한 번 호출한다. 최신 autobiography/
+  // chapters/rewritingChapters는 ref로 읽는다 — pollLoad를 [load]에만
+  // 의존하게 해 identity를 안정적으로 유지해야 하기 때문이다(startPolling이
+  // 이미 실행 중인 인터벌은 교체하지 않고 최초 클로저를 그대로 쓰므로, 이
+  // 함수가 상태가 바뀔 때마다 새로 만들어지면 그 인터벌은 영원히 오래된
+  // 클로저만 보게 된다).
+  const autobiographyRef = useRef(autobiography);
+  const chaptersRef = useRef(chapters);
+  const rewritingChaptersRef = useRef(rewritingChapters);
+  useEffect(() => {
+    autobiographyRef.current = autobiography;
+  }, [autobiography]);
+  useEffect(() => {
+    chaptersRef.current = chapters;
+  }, [chapters]);
+  useEffect(() => {
+    rewritingChaptersRef.current = rewritingChapters;
+  }, [rewritingChapters]);
+
+  const pollLoad = useCallback(() => {
+    const currentAutobiography = autobiographyRef.current;
+    if (!currentAutobiography) return;
+    void autobiographiesApi
+      .getPollingStatus(currentAutobiography.id)
+      .then((statusResult) => {
+        const currentChapters = chaptersRef.current;
+        const currentRewriting = rewritingChaptersRef.current;
+        const chapterById = new Map(currentChapters.map((c) => [c.id, c]));
+        const hasNewCompletion = statusResult.chapters.some((s) => {
+          const current = chapterById.get(s.id);
+          if (!current) return true; // 새로 생긴 챕터(이론상 없음) — 안전하게 새로고침.
+          if (s.has_content && current.content === null) return true;
+          const rewriteTriggeredAt = currentRewriting.get(s.id);
+          return rewriteTriggeredAt !== undefined && s.updated_at !== rewriteTriggeredAt;
+        });
+        const finalContentJustReady =
+          statusResult.final_content_ready && !currentAutobiography.final_content;
+        const pdfJustReady = Boolean(statusResult.pdf_url) && !currentAutobiography.pdf_url;
+        const statusJustChanged = statusResult.status !== currentAutobiography.status;
+
+        if (hasNewCompletion || finalContentJustReady || pdfJustReady || statusJustChanged) {
+          void load().catch(() => setError("자서전 정보를 불러오지 못했어요."));
+        }
+      })
+      // 폴링 틱에서 실패하면(예: 로컬 백엔드 auto-reload로 인한 순간적인 "Failed
+      // to fetch") 그냥 void로 던지면 처리되지 않은 프라미스 거부가 되어 Next.js
+      // 개발 모드가 전체 화면 오류 오버레이를 띄운다 — 실제로는 다음 폴링
+      // (POLL_INTERVAL_MS 뒤)에 저절로 복구되는 일시적 실패인데도 마치 접속이
+      // 끊긴 것처럼 보였다(2026-07-19). 최초 로딩과 동일한 에러 문구로 조용히
+      // 표시만 하고, 다음 폴링이 성공하면 그 문구도 다음 setError(null) 호출
+      // (각 handle* 함수 시작부)로 자연히 사라진다.
+      .catch(() => setError("자서전 정보를 불러오지 못했어요."));
+  }, [load]);
+
   useEffect(() => {
     if (!user) return;
     // loading 초기값이 true라 여기서 다시 setLoading(true)를 부를 필요가 없다 —
@@ -139,7 +200,7 @@ export default function AutobiographyPage() {
     const waitingOnRewrite = rewritingChapters.size > 0;
 
     if (waitingOnChapters || waitingOnFinalize || waitingOnConsolidate || waitingOnPdf || waitingOnRewrite) {
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } else {
       stopPolling();
     }
@@ -150,7 +211,7 @@ export default function AutobiographyPage() {
     consolidateTriggered,
     pdfTriggered,
     rewritingChapters,
-    load,
+    pollLoad,
     startPolling,
     stopPolling,
   ]);
@@ -162,7 +223,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.consolidate(user.id);
       setConsolidateTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("이야기를 정리하지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -213,7 +274,7 @@ export default function AutobiographyPage() {
     try {
       await Promise.all(unwritten.map((c) => autobiographiesApi.writeChapter(autobiography.id, c.id)));
       setChaptersWriteTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("챕터 집필을 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -234,7 +295,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.writeChapter(autobiography.id, chapter.id);
       setRewritingChapters((prev) => new Map(prev).set(chapter.id, chapter.updated_at));
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("챕터 다시 쓰기를 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
     }
@@ -259,7 +320,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.finalize(autobiography.id);
       setFinalizeTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("최종본을 만들지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {
@@ -274,7 +335,7 @@ export default function AutobiographyPage() {
     try {
       await autobiographiesApi.generatePdf(autobiography.id);
       setPdfTriggered(true);
-      startPolling(() => void load());
+      startPolling(pollLoad);
     } catch {
       setError("PDF를 만들지 못했어요. 잠시 후 다시 시도해주세요.");
     } finally {

@@ -10,6 +10,7 @@ few-shot 예시 주입, 미리보기 순차 스트리밍) 회귀 테스트.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -805,10 +806,11 @@ async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_repair(
 
     async def _fake_chat_completion(messages, **kwargs):
         # 분량 확장/검수(교열) 패스(2026-07-18 추가)는 이 테스트의 관심사(Part 컨텍스트
-        # 주입 + 수리 시 시놉시스 재사용)가 아니므로 빈 응답으로 무력화한다(빈 응답 =
-        # 원본 유지가 두 패스의 계약) — 호출 순번(시놉시스→집필→수리)도 그대로 유지된다.
+        # 주입 + 수리 시 시놉시스 재사용)가 아니므로 검수(교열) 패스는 빈 응답으로
+        # 무력화한다(빈 응답 = 원본 유지가 그 패스의 계약) — 호출 순번(시놉시스→
+        # 집필→수리)도 그대로 유지된다. 분량 확장 패스는 2026-07-19 폐기됐다.
         system = messages[0]["content"]
-        if "목표 분량(4,000~6,000자)에 크게 못 미칩니다" in system or "교열하세요" in system:
+        if "교열하세요" in system:
             return _FakeCompletion("")
         call_count["n"] += 1
         if call_count["n"] == 1:
@@ -892,7 +894,12 @@ async def test_write_chapter_injects_part_context_and_reuses_synopsis_on_repair(
 
 
 @pytest.mark.asyncio
-async def test_finalize_manuscript_inserts_part_markers_and_strips_leftover_marker() -> None:
+async def test_finalize_manuscript_batches_by_part_and_strips_leftover_marker() -> None:
+    """2026-07-19: finalize_manuscript은 더 이상 책 전체를 한 번에 보내지 않고
+    Part 단위로 배치를 나눠 호출한다(_group_chapters_for_finalize) — 큰 책을
+    한 번에 보내다 API 타임아웃으로 실패하던 사고의 수정. 이 TOC(Part 1=1~2장,
+    Part 2=3~4장, 배치 상한 5장 미만)는 정확히 배치 2개가 되어야 하고, 각
+    배치는 자기 Part의 챕터만 담아야 한다(다른 Part 챕터와 섞이지 않음)."""
     from app.gateways.dto import ChapterDraftCreateData, ChapterDraftWriteResult
     from app.gateways.factory import _build_mock_gateways
     from app.models.enums import DraftStatus
@@ -902,12 +909,15 @@ async def test_finalize_manuscript_inserts_part_markers_and_strips_leftover_mark
     async def _fake_admin_create_user(*, email, password, user_metadata):
         return uuid.uuid4()
 
-    captured: dict = {}
+    captured_manuscripts: list[str] = []
 
     async def _fake_chat_completion(messages, **kwargs):
-        captured["full_manuscript"] = messages[1]["content"]
-        # 지시를 어기고 마커를 하나 남긴 응답을 흉내낸다 — 방어적 제거가 실제로 동작하는지 확인.
-        return _FakeCompletion("=== PART 1: 결핍의 시절 ===\n\n윤문된 원고 본문.")
+        captured_manuscripts.append(messages[1]["content"])
+        # 지시를 어기고 마커를 하나 남긴 응답을 흉내낸다 — 방어적 제거가 실제로
+        # 동작하는지 확인. 배치 안의 챕터 마커는 그대로 유지해야 파싱이 된다.
+        chapter_indexes = re.findall(r"<<<CHAPTER (\d+)>>>", messages[1]["content"])
+        blocks = "\n\n".join(f"<<<CHAPTER {idx}>>>\n윤문된 {idx}장 본문." for idx in chapter_indexes)
+        return _FakeCompletion(f"=== PART 1: 결핍의 시절 ===\n\n{blocks}")
 
     with (
         patch("app.clients.solar.chat_completion", new=_fake_chat_completion),
@@ -947,11 +957,19 @@ async def test_finalize_manuscript_inserts_part_markers_and_strips_leftover_mark
 
         result = await autobiography_service.finalize_manuscript(gateways, autobiography.id)
 
-    full_manuscript = captured["full_manuscript"]
-    assert full_manuscript.count("=== PART") == 2
-    assert full_manuscript.index("=== PART 1: 결핍의 시절 ===") < full_manuscript.index("[1장.")
-    assert full_manuscript.index("[2장.") < full_manuscript.index("=== PART 2: 도약의 시절 ===")
-    assert full_manuscript.index("=== PART 2: 도약의 시절 ===") < full_manuscript.index("[3장.")
+    # Part 1(1~2장)과 Part 2(3~4장)가 각각 별도 배치(호출)로 나뉘어야 한다.
+    assert len(captured_manuscripts) == 2
+    batch1, batch2 = captured_manuscripts
+    assert "[1장." in batch1 and "[2장." in batch1
+    assert "[3장." not in batch1 and "[4장." not in batch1
+    assert "=== PART 1: 결핍의 시절 ===" in batch1
+    assert batch1.index("=== PART 1: 결핍의 시절 ===") < batch1.index("[1장.")
+
+    assert "[3장." in batch2 and "[4장." in batch2
+    assert "[1장." not in batch2 and "[2장." not in batch2
+    assert "=== PART 2: 도약의 시절 ===" in batch2
+    assert batch2.index("=== PART 2: 도약의 시절 ===") < batch2.index("[3장.")
 
     assert "=== PART" not in result.final_content
-    assert "윤문된 원고 본문." in result.final_content
+    assert "윤문된 1장 본문." in result.final_content
+    assert "윤문된 3장 본문." in result.final_content

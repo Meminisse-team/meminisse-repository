@@ -10,9 +10,11 @@ from app.gateways.dto import (
     AdminAuditLogCreateData,
     AdminAuditLogRecord,
     AutobiographyRecord,
+    AutobiographyStatusRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
     ChapterDraftWriteResult,
+    ChapterStatusRecord,
     CharacterCreateData,
     CharacterRecord,
     ChatLogRecord,
@@ -666,6 +668,19 @@ class MockAutobiographyGateway(AutobiographyGateway):
         items.reverse()
         return items[offset : offset + limit]
 
+    async def get_status_by_id(self, autobiography_id: uuid.UUID) -> AutobiographyStatusRecord | None:
+        autobiography = self._store.autobiographies.get(autobiography_id)
+        if autobiography is None:
+            return None
+        return AutobiographyStatusRecord(
+            id=autobiography.id,
+            user_id=autobiography.user_id,
+            status=autobiography.status,
+            final_content_ready=autobiography.final_content is not None,
+            pdf_url=autobiography.pdf_url,
+            updated_at=autobiography.updated_at,
+        )
+
 
 class MockChapterDraftGateway(ChapterDraftGateway):
     def __init__(self, store: MockStore) -> None:
@@ -677,6 +692,25 @@ class MockChapterDraftGateway(ChapterDraftGateway):
         ]
         chapters.sort(key=lambda c: c.chapter_index)
         return chapters
+
+    async def list_status_by_autobiography(
+        self, autobiography_id: uuid.UUID
+    ) -> list[ChapterStatusRecord]:
+        chapters = [
+            c for c in self._store.chapter_drafts.values() if c.autobiography_id == autobiography_id
+        ]
+        chapters.sort(key=lambda c: c.chapter_index)
+        return [
+            ChapterStatusRecord(
+                id=c.id,
+                chapter_index=c.chapter_index,
+                has_content=c.content is not None,
+                updated_at=c.updated_at,
+                factcheck_report=c.factcheck_report,
+                groundedness_report=c.groundedness_report,
+            )
+            for c in chapters
+        ]
 
     async def list_all(self, *, limit: int, offset: int) -> list[ChapterDraftRecord]:
         items = sorted(self._store.chapter_drafts.values(), key=lambda c: c.created_at)

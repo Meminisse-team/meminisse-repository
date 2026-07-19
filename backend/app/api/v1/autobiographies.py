@@ -5,9 +5,11 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps import CurrentUserDep, GatewaysDep, require_self
 from app.gateways.dto import AutobiographyRecord, UserRecord
 from app.schemas.autobiography import (
+    AutobiographyPollingStatus,
     AutobiographyRead,
     ChapterContentUpdate,
     ChapterDraftRead,
+    ChapterStatusItem,
     CustomizationConfirmRequest,
     CustomizationOptionItem,
     CustomizationOptionsResponse,
@@ -56,6 +58,45 @@ async def list_finished_autobiographies(
     require_self(current_user, user_id)
     autobiographies = await autobiography_service.list_finished_autobiographies(gateways, user_id)
     return [AutobiographyRead.model_validate(a) for a in autobiographies]
+
+
+@router.get("/{autobiography_id}/polling-status", response_model=AutobiographyPollingStatus)
+async def get_polling_status(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> AutobiographyPollingStatus:
+    """자서전 집필 화면의 4초 폴링 전용 — final_content/챕터 본문 같은 무거운
+    필드를 빼고 진행 상태만 반환한다(2026-07-19, Supabase 무료 등급 Egress
+    한도 초과 대응). 프론트는 이 응답에서 의미 있는 변화(챕터 완료, 최종본
+    완성, PDF 생성 등)를 감지했을 때만 기존 전체 조회 API를 호출한다.
+
+    소유권 확인도 이 경량 조회 하나로 끝낸다 — _require_own_autobiography는
+    final_content까지 포함한 전체 레코드를 가져오므로, 이 엔드포인트의 취지
+    (무거운 필드를 절대 안 실어 보내는 것)와 맞지 않는다."""
+    result = await autobiography_service.get_polling_status(gateways, autobiography_id)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "자서전을 찾을 수 없습니다.")
+    autobiography_status, chapters_status = result
+    if autobiography_status.user_id != current_user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "자서전을 찾을 수 없습니다.")
+    return AutobiographyPollingStatus(
+        id=autobiography_status.id,
+        status=autobiography_status.status,
+        final_content_ready=autobiography_status.final_content_ready,
+        pdf_url=autobiography_status.pdf_url,
+        chapters=[
+            ChapterStatusItem(
+                id=c.id,
+                chapter_index=c.chapter_index,
+                has_content=c.has_content,
+                updated_at=c.updated_at,
+                flag_count=(
+                    len((c.factcheck_report or {}).get("flags", []))
+                    + len((c.groundedness_report or {}).get("flags", []))
+                ),
+            )
+            for c in chapters_status
+        ],
+    )
 
 
 @router.post("/{user_id}/consolidate", status_code=status.HTTP_202_ACCEPTED)
@@ -252,9 +293,9 @@ async def write_chapter(
             status.HTTP_409_CONFLICT, "먼저 목차를 선택해야 챕터를 집필할 수 있습니다."
         )
 
-    from app.workers.tasks import write_chapter as write_chapter_task
+    from app.workers.enqueue import enqueue_write_chapter
 
-    write_chapter_task.delay(str(chapter_draft_id))
+    await enqueue_write_chapter(chapter_draft_id, log_context=f"chapter_draft_id={chapter_draft_id}")
     return {"detail": "Chapter writing queued"}
 
 
@@ -298,8 +339,16 @@ async def finalize(
     인증 작업 이전에는 이 엔드포인트가 autobiography_id 존재 여부조차 확인하지
     않고 곧바로 Celery에 큐잉했다(존재하지 않는 ID를 넣어도 202가 나가고, 실제
     실패는 워커 내부에서만 조용히 발생) — 소유권 검증을 추가하는 김에 사전 조회로
-    이 문제도 함께 바로잡았다."""
-    await _require_own_autobiography(gateways, autobiography_id, current_user)
+    이 문제도 함께 바로잡았다.
+
+    이미 완성된(final_content 존재) 자서전에 다시 요청이 오면 409로 막는다 —
+    이 체크가 없어서 이미 PUBLISHED된 자서전에 finalize_manuscript가 중복
+    실행되던 것을 큐 점검 중 발견했다(2026-07-19). 큐잉 자체도
+    enqueue_finalize_manuscript의 락을 거쳐 거의 동시에 두 번 눌린 경우까지
+    막는다."""
+    autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
+    if autobiography.final_content:
+        raise HTTPException(status.HTTP_409_CONFLICT, "이미 최종본이 완성되었습니다.")
     chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography_id)
     if not chapters or any(chapter.content is None for chapter in chapters):
         # 선행 조건(전 챕터 집필 완료) 미충족을 202 뒤 워커 내부 실패로 숨기지 않고
@@ -307,9 +356,9 @@ async def finalize(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "모든 챕터의 집필이 끝난 뒤에 최종본을 만들 수 있습니다."
         )
-    from app.workers.tasks import finalize_manuscript as finalize_task
+    from app.workers.enqueue import enqueue_finalize_manuscript
 
-    finalize_task.delay(str(autobiography_id))
+    await enqueue_finalize_manuscript(autobiography_id, log_context=f"autobiography_id={autobiography_id}")
     return {"detail": "Manuscript finalization queued"}
 
 
@@ -343,15 +392,22 @@ async def generate_pdf(
     완료)은 여기서 즉시 409로 알려준다(2026-07-16 해소 — 이전엔 워커 안에서만
     ValueError로 실패해 클라이언트가 202를 받고도 폴링으로 간접 확인해야 했다).
     워커 쪽 검증(pdf_service.generate_manuscript_pdf)은 큐잉 이후 상태 변화에
-    대비한 이중 방어로 그대로 둔다."""
+    대비한 이중 방어로 그대로 둔다.
+
+    이미 pdf_url이 있어도 막지 않는다 — 챕터를 고친 뒤 PDF를 다시 만드는 것은
+    정상적인 재사용 시나리오다. 대신 enqueue_generate_manuscript_pdf의 락으로
+    "지금 동시에 중복 요청됐는지"만 막는다(2026-07-19, 큐에 같은 자서전 PDF
+    조판 요청이 2개 쌓여 있던 것을 발견해 도입)."""
     autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
     if not autobiography.final_content:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "최종본(윤문)이 완성된 뒤에 PDF를 만들 수 있습니다."
         )
-    from app.workers.tasks import generate_manuscript_pdf as generate_pdf_task
+    from app.workers.enqueue import enqueue_generate_manuscript_pdf
 
-    generate_pdf_task.delay(str(autobiography_id))
+    await enqueue_generate_manuscript_pdf(
+        autobiography_id, log_context=f"autobiography_id={autobiography_id}"
+    )
     return {"detail": "Manuscript PDF generation queued"}
 
 

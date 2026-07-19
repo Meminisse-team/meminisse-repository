@@ -108,6 +108,7 @@ def _placements_by_chapter(
 
 async def render_manuscript_html(gateways: Gateways, autobiography: AutobiographyRecord) -> str:
     chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+    author = await gateways.users.get_by_id(autobiography.user_id)
     media_assets = await gateways.media_assets.list_by_user(autobiography.user_id)
     media_url_by_id = {m.id: m.s3_url for m in media_assets if m.asset_type == AssetType.IMAGE}
 
@@ -142,6 +143,7 @@ async def render_manuscript_html(gateways: Gateways, autobiography: Autobiograph
     template = _jinja_env.get_template("manuscript.html.jinja")
     return template.render(
         title=autobiography.title,
+        author_name=author.name if author else None,
         book_synopsis=autobiography.book_synopsis,
         chapters=chapter_views,
         parts=parts,

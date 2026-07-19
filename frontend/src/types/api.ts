@@ -258,6 +258,29 @@ export interface Autobiography {
   completed_session_count: number;
 }
 
+/** GET /{autobiography_id}/polling-status 응답의 챕터 하나 — content/
+ * chapter_synopsis(챕터당 수천 자)는 의도적으로 빠져 있다(2026-07-19, Supabase
+ * 무료 등급 Egress 한도 초과 대응 — 폴링 전용 경량 스키마). */
+export interface ChapterStatusItem {
+  id: string;
+  chapter_index: number;
+  has_content: boolean;
+  updated_at: string;
+  flag_count: number;
+}
+
+/** GET /{autobiography_id}/polling-status 응답 — final_content/챕터 본문 같은
+ * 무거운 필드 없이 진행 상태만 담는다. 자서전 집필 화면의 폴링 틱이 매번
+ * 이걸 호출하고, 의미 있는 변화를 감지했을 때만 Autobiography 전체 조회로
+ * 넘어간다. */
+export interface AutobiographyPollingStatus {
+  id: string;
+  status: AutobiographyStatus;
+  final_content_ready: boolean;
+  pdf_url: string | null;
+  chapters: ChapterStatusItem[];
+}
+
 /** GET /customization/options 응답 항목 하나 — 말투/구성/컨셉 선택지 공통 형태
  * (backend/app/schemas/autobiography.py:CustomizationOptionItem). 현재 모든 옵션에
  * example(서술 예문)이 채워져 있지만 스키마상으로는 null일 수 있다. */

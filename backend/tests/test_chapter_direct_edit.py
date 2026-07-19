@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.clients import supabase_auth
 from app.config import settings
-from app.gateways.dto import ChapterDraftCreateData
+from app.gateways.dto import ChapterDraftCreateData, UserCreateData
 from app.gateways.factory import Gateways, _build_mock_gateways
 from app.gateways.mock.store import default_store
 from app.main import app
@@ -137,10 +137,8 @@ async def test_edit_chapter_content_updates_chapter_and_rejoins_final_content() 
     """서비스 레이어: 챕터 본문을 바꾸면 final_content도 그 챕터만 새 내용으로
     교체된 형태로 재조립돼야 한다(다른 챕터는 그대로)."""
     gateways: Gateways = _build_mock_gateways()
-    user = await gateways.users.create.__self__.create(  # type: ignore[attr-defined]
-        __import__("app.gateways.dto", fromlist=["UserCreateData"]).UserCreateData(
-            id=uuid.uuid4(), email="edit-svc@example.com", name="테스터"
-        )
+    user = await gateways.users.create(
+        UserCreateData(id=uuid.uuid4(), email="edit-svc@example.com", name="테스터")
     )
     await gateways.commit()
 
@@ -180,17 +178,13 @@ async def test_edit_chapter_content_updates_chapter_and_rejoins_final_content() 
 async def test_edit_chapter_content_rejects_chapter_from_other_autobiography() -> None:
     gateways: Gateways = _build_mock_gateways()
     user = await gateways.users.create(
-        __import__("app.gateways.dto", fromlist=["UserCreateData"]).UserCreateData(
-            id=uuid.uuid4(), email="edit-mismatch@example.com", name="테스터"
-        )
+        UserCreateData(id=uuid.uuid4(), email="edit-mismatch@example.com", name="테스터")
     )
     await gateways.commit()
 
     auto_a = await gateways.autobiographies.create(user.id)
     auto_b_user = await gateways.users.create(
-        __import__("app.gateways.dto", fromlist=["UserCreateData"]).UserCreateData(
-            id=uuid.uuid4(), email="edit-mismatch-b@example.com", name="테스터B"
-        )
+        UserCreateData(id=uuid.uuid4(), email="edit-mismatch-b@example.com", name="테스터B")
     )
     await gateways.commit()
     auto_b = await gateways.autobiographies.create(auto_b_user.id)

@@ -61,10 +61,12 @@ class _FakeCompletion:
 
 
 def _is_auxiliary_pass(messages: list[dict]) -> bool:
-    """분량 확장/검수(교열) 패스 호출인지 — 이 파일의 테스트들은 수리 루프만
-    검증하므로 두 보조 패스는 빈 응답으로 무력화한다(파일 docstring 참조)."""
+    """검수(교열) 패스 호출인지 — 이 파일의 테스트들은 수리 루프만 검증하므로
+    이 보조 패스는 빈 응답으로 무력화한다(파일 docstring 참조). 분량 확장
+    패스는 2026-07-19 폐기됐다(prompts.py 참조 — 챕터당 순차 Solar 호출을
+    늘리기만 하고 분량 미달을 보장하지도 못했다)."""
     system = messages[0]["content"]
-    return "목표 분량(4,000~6,000자)에 크게 못 미칩니다" in system or "교열하세요" in system
+    return "교열하세요" in system
 
 
 _STRUCTURED_RESPONSES = {

@@ -26,6 +26,35 @@ class PhotoPlacementsUpdate(BaseModel):
     placements: list[PhotoPlacementItem]
 
 
+class ChapterStatusItem(BaseModel):
+    """폴링 전용 경량 챕터 상태 — content/chapter_synopsis(챕터당 수천 자)는
+    의도적으로 빼고 진행 상태 판단에 필요한 필드만 담는다(2026-07-19, Supabase
+    무료 등급 Egress 한도 초과 대응)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    chapter_index: int
+    has_content: bool
+    updated_at: datetime
+    flag_count: int
+
+
+class AutobiographyPollingStatus(BaseModel):
+    """GET /{autobiography_id}/polling-status 응답 — 자서전 집필 화면이 진행
+    상태를 확인하는 동안(4초 간격 폴링) final_content(수만 자)·챕터 본문 같은
+    무거운 필드를 반복 전송하지 않기 위한 경량 전용 스키마. 실제로 뭔가
+    완료됐다고 판단되면 그때만 프론트가 기존 전체 조회 API를 한 번 호출한다."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    status: AutobiographyStatus
+    final_content_ready: bool
+    pdf_url: str | None
+    chapters: list[ChapterStatusItem]
+
+
 class AutobiographyRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

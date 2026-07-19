@@ -31,9 +31,11 @@ from app.clients import solar
 from app.data.question_bank import QUESTION_BANK_BY_SEQUENCE
 from app.gateways.dto import (
     AutobiographyRecord,
+    AutobiographyStatusRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
     ChapterDraftWriteResult,
+    ChapterStatusRecord,
     EventImportanceUpdate,
     EventRecord,
 )
@@ -68,13 +70,6 @@ CHAPTER_RETRIEVAL_LIMIT = 20
 # 작업이라 1회로 대부분 수렴하지만, 수리 결과가 다시 걸리는 경우를 위해 한 번 더
 # 기회를 준다. 그 이상은 비용 대비 개선이 없어 잔여 플래그를 리포트에 남기고 끝낸다.
 MAX_REPAIR_PASSES = 2
-
-# 챕터 초안이 이 길이(공백 포함 문자 수) 미만이면 "새 사건 추가 금지, 기존 장면
-# 정교화만" 조건의 확장 패스를 1회 실행한다. 프롬프트 목표는 4,000~6,000자인데
-# 실제 출력이 평균 2,421자에 그치는 문제가 실측됐다(2026-07-18 호킹 계정) —
-# 하한 4,000이 아니라 3,000을 기준으로 삼는 이유는, 목표에 살짝 못 미치는
-# 초안까지 전부 재호출하는 비용을 피하고 심각한 미달만 구제하기 위해서다.
-MIN_CHAPTER_CHARS_BEFORE_EXPANSION = 3000
 
 # 검수(교열) 패스 결과가 원본 대비 이 비율을 넘게 길이가 변하면 교열 범위를
 # 벗어나 개고를 한 것으로 보고 원본을 유지한다(폭주 방어).
@@ -178,6 +173,20 @@ async def get_autobiography_by_id(gateways: Gateways, autobiography_id: uuid.UUI
 
 async def list_chapter_drafts(gateways: Gateways, autobiography_id: uuid.UUID) -> list[ChapterDraftRecord]:
     return await gateways.chapters.list_by_autobiography(autobiography_id)
+
+
+async def get_polling_status(
+    gateways: Gateways, autobiography_id: uuid.UUID
+) -> tuple[AutobiographyStatusRecord, list[ChapterStatusRecord]] | None:
+    """자서전 집필 화면의 폴링 전용 경량 조회(2026-07-19) — final_content/챕터
+    본문 같은 무거운 필드를 뺀 상태만 반환한다(app/gateways/dto.py의
+    AutobiographyStatusRecord/ChapterStatusRecord 참조). 존재하지 않으면
+    None(호출부가 404로 변환)."""
+    autobiography_status = await gateways.autobiographies.get_status_by_id(autobiography_id)
+    if autobiography_status is None:
+        return None
+    chapters_status = await gateways.chapters.list_status_by_autobiography(autobiography_id)
+    return autobiography_status, chapters_status
 
 
 async def get_chapter_draft(gateways: Gateways, chapter_draft_id: uuid.UUID) -> ChapterDraftRecord | None:
@@ -1153,6 +1162,16 @@ def _event_estimated_year(event: EventRecord) -> int | None:
     return None
 
 
+def _sort_events_chronologically(events: list[EventRecord]) -> list[EventRecord]:
+    """챕터 집필 프롬프트에 넘기기 직전, 사건을 시간순으로 정렬한다
+    (write_chapter 참조 — 원래 순서는 중요도·검색 순위라 시간과 무관하다).
+    연도를 알 수 없는 사건(_event_estimated_year가 None)은 완전히 배제하기보다
+    안전하게 맨 뒤로 보낸다."""
+    return sorted(
+        events, key=lambda e: (_event_estimated_year(e) is None, _event_estimated_year(e) or 0)
+    )
+
+
 def _rebalance_assignment_by_year(
     assigned: list[list[EventRecord]],
     retrieved: list[list[EventRecord]],
@@ -1367,14 +1386,16 @@ async def _repair_chapter_content(
     source_events_text: str,
 ) -> str:
     """플래그된 문장만 근거에 맞게 고치거나 삭제하는 외과적 수리 호출. 전체
-    재집필(reasoning_effort="high" + 4,000~6,000자 생성)보다 훨씬 싸고, 멀쩡한
-    부분에 새 환각이 생길 위험이 없다."""
+    재집필(reasoning_effort="high" + 5,500~7,000자 생성)보다 훨씬 싸고, 멀쩡한
+    부분에 새 환각이 생길 위험이 없다. max_tokens는 챕터 전체를 되돌려주는
+    호출이라 분량 지시 상향(2026-07-19) 이후의 챕터 길이에 맞춰
+    _generate_chapter_content와 동일하게 둔다(수리 과정에서 잘리지 않도록)."""
     messages = prompts.build_chapter_repair_prompt(
         chapter_content=chapter_content,
         flagged_items=_flagged_items_for_repair(factcheck_report, groundedness_report),
         source_events_text=source_events_text,
     )
-    response = await solar.chat_completion(messages, reasoning_effort="medium", max_tokens=16000)
+    response = await solar.chat_completion(messages, reasoning_effort="medium", max_tokens=24000)
     return response.choices[0].message.content or ""
 
 
@@ -1407,6 +1428,13 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         retrieved_events = await _retrieve_events_for_chapter(
             gateways, autobiography.user_id, chapter.title or ""
         )
+    # list_by_ids/_retrieve_events_for_chapter는 중요도·검색 순위로 정렬돼 있어
+    # (EventGateway.list_by_ids의 ORDER BY importance_score), 그대로 집필
+    # 프롬프트에 넘기면 시간 순서가 뒤죽박죽된 채 그대로 서술된다(2026-07-19
+    # 실사용 중 확인 — 1965년 결혼 다음 문단에 17세 졸업이 나오는 등). LLM에게
+    # "시간순으로 재배열하라"고 지시하는 것보다 코드에서 확정적으로 정렬하는
+    # 편이 훨씬 안정적이다.
+    retrieved_events = _sort_events_chronologically(retrieved_events)
     source_event_ids = [event.id for event in retrieved_events]
     time_scope = _chapter_time_scope(retrieved_events)
     other_titles = _other_chapter_titles(autobiography, chapter.chapter_index)
@@ -1453,25 +1481,11 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
             other_chapter_titles=other_titles,
         )
 
-    # 분량 확장 패스: 프롬프트가 4,000~6,000자를 지시해도 실제 출력이 목표의
-    # 40~60%(평균 2,421자)에 그치는 문제가 실측됐다(2026-07-18 호킹 계정 5개 챕터).
-    # 초안이 하한에 크게 못 미치면 "새 사건 추가 금지, 기존 장면 정교화만"
-    # 조건으로 1회 확장한다. 태그 회수 전에 실행해야 확장 결과에 유지된 태그가
-    # 아래 검증 단계에서 정상 회수된다. 확장 결과가 더 짧아지거나 비면 원본 유지.
-    if content.strip() and len(content) < MIN_CHAPTER_CHARS_BEFORE_EXPANSION:
-        expansion_response = await solar.chat_completion(
-            prompts.build_chapter_expansion_prompt(
-                chapter_content=content,
-                source_events_text=_source_events_text(retrieved_events),
-            ),
-            reasoning_effort="high",
-            max_tokens=16000,
-        )
-        expanded = _strip_prompt_section_echo(
-            expansion_response.choices[0].message.content or "", body_marker="[챕터 초안]"
-        )
-        if len(expanded) > len(content):
-            content = expanded
+    # 분량 확장 패스는 폐기됐다(2026-07-19, prompts.py의 폐기 사유 주석 참조) —
+    # "원본보다 길어지기만 하면 채택"이라는 약한 기준으로는 3,000자 문턱조차
+    # 보장 못 하면서, 챕터당 순차 Solar 호출을 1회 더 얹어 처리 시간만 늘렸다
+    # (집필 5~10분/챕터 실측). 대신 CHAPTER_WRITING_SYSTEM_PROMPT의 분량 지시
+    # 자체를 장면 수·문단 수·문장 수 기준으로 바꿔 첫 호출에서 채우도록 했다.
 
     # 근거 태그([E1]...) 회수 — 태그가 하나도 없는 문단은 근거검증 판정자의 집중
     # 검토 대상으로 지목한다(집필 규약상 사실 서술 문단은 반드시 태그를 달아야 한다).
@@ -1534,7 +1548,9 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
                 overused_terms=_count_overused_terms(content),
             ),
             reasoning_effort="low",
-            max_tokens=16000,
+            # 챕터 전체를 되돌려주는 호출이라 분량 지시 상향(2026-07-19) 이후의
+            # 챕터 길이에 맞춰 _generate_chapter_content와 동일하게 둔다.
+            max_tokens=24000,
         )
         proofread = _strip_prompt_section_echo(
             proofread_response.choices[0].message.content or "", body_marker="[챕터 본문]"
@@ -1636,9 +1652,10 @@ async def _generate_chapter_content(
     # 눈에 보이지 않는 "추론 토큰"을 먼저 소비하고 그것도 max_tokens에
     # 포함되는데, 복잡한 챕터 프롬프트(전체 시놉시스+챕터 시놉시스+직전 챕터
     # 레시피+사건 문단 최대 20개)에서는 추론 토큰만으로 8000을 다 써버려
-    # 실제 본문을 한 글자도 못 받는 경우가 실측됐다. 목표 분량(4,000~6,000자)
-    # 더하기 추론 토큰 여유를 넉넉히 두어야 한다.
-    response = await solar.chat_completion(messages, reasoning_effort="high", max_tokens=16000)
+    # 실제 본문을 한 글자도 못 받는 경우가 실측됐다. 분량 지시 상향(2026-07-19,
+    # 장면 6~7개·장면당 문단 8개 이상·문단당 4문장 이상 — 목표 약 5,500~7,000자)
+    # 이후에는 추론 토큰 여유를 그만큼 더 넉넉히 둬야 같은 사고가 재현되지 않는다.
+    response = await solar.chat_completion(messages, reasoning_effort="high", max_tokens=24000)
     return response.choices[0].message.content or ""
 
 
@@ -1928,26 +1945,68 @@ async def edit_chapter_content(
     return autobiography
 
 
-async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -> AutobiographyRecord:
-    """
-    Phase 4 통일성 윤문 패스: 전 챕터 생성 후 인접 챕터 경계부와 스타일 바이블을
-    함께 검토하는 리비전을 1회 수행한다. 사실 관계·순서는 변경하지 않는다.
+# finalize_manuscript을 여러 번의 작은 호출로 나누는 배치 크기 상한(2026-07-19).
+# 책 전체(챕터 19개, 53,692자 실측)를 한 번에 보냈다가 API 타임아웃(90초)으로
+# 실패하는 사고가 실사용 중 재현됐다 — Part 경계를 우선 배치 경계로 삼되(Part
+# 전환은 원래도 "매끄러운 이음매"가 아니라 "국면 전환"으로 다뤄지는 지점이라
+# CHAPTER_WRITING_SYSTEM_PROMPT 참조 — 배치를 나눠도 실질적 손실이 작다), 한
+# Part가 이 값을 넘으면(실측 계정에서 Part 하나가 챕터 10개였던 사례 참조) 그
+# 안에서 순서대로 한 번 더 쪼갠다. Part 구조가 없는 책(단일 흐름)은 전체를
+# 하나의 그룹으로 보고 동일한 상한을 적용해 같은 방식으로 나뉜다.
+_FINALIZE_BATCH_MAX_CHAPTERS = 5
 
-    윤문 결과는 final_content에만 저장되는 게 아니라 챕터별로 파싱해
-    chapter.content에도 되써넣는다(2026-07-18) — 이전에는 PDF 조판이 챕터의
-    윤문 전 본문을 그대로 인쇄해, 웹에서 읽는 최종본과 실물 책의 텍스트가
-    서로 달랐다. 파싱은 `<<<CHAPTER n>>>` 마커 규약(UNITY_REVISION_SYSTEM_PROMPT)
-    에 의존하고, 마커가 어긋나면 챕터는 원본을 유지한 채 전문만 저장하는
-    보수적 폴백을 탄다(원고가 손상되는 것보다 불일치가 낫다).
-    """
-    autobiography = await get_autobiography_by_id(gateways, autobiography_id)
-    chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
-    if not chapters or any(chapter.content is None for chapter in chapters):
-        raise ValueError("모든 챕터의 집필(write_chapter)이 끝난 뒤에 최종 윤문을 수행할 수 있습니다.")
+# 배치 하나의 최대 출력 토큰 — 원래 전체 호출(최대 19장 x 6,000자)의 48000보다
+# 작지만, 배치 하나(최대 5장 x 6,000자 = 30,000자)에는 여전히 넉넉하다.
+_FINALIZE_BATCH_MAX_TOKENS = 32000
 
-    style_bible_text = (autobiography.style_bible or {}).get("content", "")
-    manuscript_blocks: list[str] = []
+# 배치당 호출 타임아웃(초) — 전역 기본값(90초, app/clients/base.py)은 다른 모든
+# 호출(빠르게 실패해야 하는 것들)을 보호하는 의도적 설계라 그대로 두고, 이
+# 호출에만 개별적으로 늘린다. 배치로 나눠 입출력이 작아져도 Solar 자체의 응답
+# 속도가 실사용 중 들쭉날쭉했던 사례(예: 근거검증 판정 하나에 46초)가 있어
+# 안전 마진을 크게 둔다.
+_FINALIZE_BATCH_TIMEOUT_SECONDS = 180.0
+
+
+def _group_chapters_for_finalize(
+    autobiography: AutobiographyRecord, chapters: list[ChapterDraftRecord]
+) -> list[list[ChapterDraftRecord]]:
+    """finalize_manuscript의 통일성 윤문 호출을 배치로 나누기 위해 챕터를
+    묶는다. Part 경계를 절대 넘지 않고(같은 배치에 서로 다른 Part의 챕터가
+    섞이지 않음), 한 Part가 _FINALIZE_BATCH_MAX_CHAPTERS를 넘으면 그 안에서
+    순서대로 다시 쪼갠다. Part 구조가 아예 없으면(get_chapter_part_context가
+    모든 챕터에 None을 반환) 전체를 하나의 그룹으로 보고 동일하게 나눈다."""
+    groups_by_key: dict[int | None, list[ChapterDraftRecord]] = {}
+    order: list[int | None] = []
     for chapter in chapters:
+        part_context = get_chapter_part_context(autobiography, chapter.chapter_index)
+        key = part_context["part_index"] if part_context else None
+        if key not in groups_by_key:
+            groups_by_key[key] = []
+            order.append(key)
+        groups_by_key[key].append(chapter)
+
+    batches: list[list[ChapterDraftRecord]] = []
+    for key in order:
+        group = groups_by_key[key]
+        for start in range(0, len(group), _FINALIZE_BATCH_MAX_CHAPTERS):
+            batches.append(group[start : start + _FINALIZE_BATCH_MAX_CHAPTERS])
+    return batches
+
+
+async def _finalize_batch(
+    gateways: Gateways,
+    *,
+    autobiography: AutobiographyRecord,
+    batch: list[ChapterDraftRecord],
+    style_bible_text: str,
+    confirmed: dict | None,
+) -> None:
+    """배치 하나(대개 Part 하나, 또는 너무 큰 Part의 일부)를 윤문하고 챕터별로
+    되써넣는다. 호출 실패(타임아웃 포함)나 마커 파싱 실패 시 예외를 전파하지
+    않고 이 배치의 챕터들만 원본을 유지한다 — 배치 하나의 실패가 다른 배치나
+    최종본 생성 전체를 막지 않는다(로그만 남김)."""
+    manuscript_blocks: list[str] = []
+    for chapter in batch:
         part_context = get_chapter_part_context(autobiography, chapter.chapter_index)
         if part_context and part_context["is_part_opening"]:
             manuscript_blocks.append(f"=== PART {part_context['part_index']}: {part_context['part_title']} ===")
@@ -1955,55 +2014,98 @@ async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -
             f"<<<CHAPTER {chapter.chapter_index}>>>\n"
             f"[{chapter.chapter_index}장. {chapter.title}]\n{chapter.content}"
         )
-    full_manuscript = "\n\n".join(manuscript_blocks)
+    batch_manuscript = "\n\n".join(manuscript_blocks)
 
-    # 커스터마이징이 확정돼 있으면 말투·컨셉 일관성을 윤문에도 반영한다.
-    confirmed = _get_confirmed_customization(autobiography)
     if confirmed:
         revision_messages = prompts.build_customized_unity_revision_prompt(
             style_bible=style_bible_text,
-            full_manuscript=full_manuscript,
+            full_manuscript=batch_manuscript,
             tone_key=confirmed["tone"],
             concept_key=confirmed["concept"],
         )
     else:
         revision_messages = prompts.build_unity_revision_prompt(
-            style_bible=style_bible_text, full_manuscript=full_manuscript
+            style_bible=style_bible_text, full_manuscript=batch_manuscript
         )
 
-    # 챕터당 분량이 늘어난 만큼(챕터 4,000~6,000자 x N) full_manuscript 전체를
-    # 한 번에 되돌려 받아야 하는 이 호출도 절단 위험이 커졌다 — 넉넉하게 지정.
-    # reasoning_effort="high"는 눈에 보이지 않는 추론 토큰도 max_tokens에서
-    # 함께 소비하므로(2026-07-17 챕터 집필에서 실측 — 8000으로는 추론만으로
-    # 예산이 바닥나 본문이 통째로 빈 문자열이 된 사고 참조), 본문 분량보다
-    # 훨씬 큰 여유를 둔다. 다만 챕터 수가 매우 많은 책은 이 한 번의 호출로도
-    # 한계에 부딪힐 수 있으니(Solar의 실제 출력 상한 미검증), 실사용 중 잘림이
-    # 관찰되면 챕터 구간별 윤문으로 나누는 재설계가 필요할 수 있다. 아래
-    # `or full_manuscript` 폴백 덕분에 최악의 경우에도 빈 원고로 덮어쓰이지는
-    # 않는다.
-    response = await solar.chat_completion(revision_messages, reasoning_effort="high", max_tokens=48000)
-    revised = response.choices[0].message.content or full_manuscript
-
-    # 챕터별 되써넣기: 마커 파싱이 성공하면 각 챕터의 content를 윤문본으로 교체하고,
-    # final_content도 같은 윤문본들의 조립으로 만들어 웹 열람과 PDF가 항상 같은
-    # 텍스트를 보게 한다. 파싱 실패 시 챕터는 원본 유지 + 전문만 저장(보수적 폴백).
-    chapter_indexes = [chapter.chapter_index for chapter in chapters]
-    revised_by_index = _split_revised_manuscript_by_chapter(revised, chapter_indexes)
-    if revised_by_index is not None:
-        for chapter in chapters:
-            await gateways.chapters.update_content(chapter.id, revised_by_index[chapter.chapter_index])
-        chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
-        final_content = _join_chapters_into_final_content(chapters)
-    else:
+    chapter_indexes = [chapter.chapter_index for chapter in batch]
+    try:
+        response = await solar.chat_completion(
+            revision_messages,
+            reasoning_effort="high",
+            max_tokens=_FINALIZE_BATCH_MAX_TOKENS,
+            timeout=_FINALIZE_BATCH_TIMEOUT_SECONDS,
+        )
+    except Exception:
         logger.warning(
-            "통일성 윤문 응답의 챕터 마커가 어긋나(autobiography_id=%s) 챕터 되써넣기를 건너뛰고 "
-            "전문만 저장한다 — PDF는 윤문 전 챕터 본문으로 조판된다.",
-            autobiography_id,
+            "통일성 윤문 배치 호출 실패(챕터 %s) — 이 배치는 윤문 전 본문을 그대로 유지한다.",
+            chapter_indexes,
+            exc_info=True,
         )
-        final_content = _CHAPTER_MARKER_PATTERN.sub("", _PART_MARKER_PATTERN.sub("", revised)).strip()
+        return
+
+    revised = response.choices[0].message.content or ""
+    if not revised.strip():
+        return
+
+    revised_by_index = _split_revised_manuscript_by_chapter(revised, chapter_indexes)
+    if revised_by_index is None:
+        logger.warning(
+            "통일성 윤문 배치 응답의 챕터 마커가 어긋나(챕터 %s) — 이 배치는 "
+            "윤문 전 본문을 그대로 유지한다.",
+            chapter_indexes,
+        )
+        return
+
+    for chapter in batch:
+        await gateways.chapters.update_content(chapter.id, revised_by_index[chapter.chapter_index])
+
+
+async def finalize_manuscript(gateways: Gateways, autobiography_id: uuid.UUID) -> AutobiographyRecord:
+    """
+    Phase 4 통일성 윤문 패스: 전 챕터 생성 후 인접 챕터 경계부와 스타일 바이블을
+    함께 검토하는 리비전을 수행한다. 사실 관계·순서는 변경하지 않는다.
+
+    책 전체를 한 번의 호출에 넣지 않고 Part 단위(너무 큰 Part는 더 쪼갬 —
+    _group_chapters_for_finalize)로 나눠 여러 번 호출한다(2026-07-19) — 이전에는
+    챕터 19개(53,692자)를 한 번에 보내다 API 타임아웃(90초)으로 실패하는 사고가
+    실사용 중 재현됐다. 배치로 나누면 호출당 입출력이 훨씬 작아지고, 배치별
+    타임아웃도 넉넉히 늘려(_FINALIZE_BATCH_TIMEOUT_SECONDS) 이중으로 방어한다.
+    대가는 서로 다른 배치(대개 Part 경계)에 걸친 문체 다듬기는 하지 못한다는
+    것인데, Part 경계는 원래도 매끄러운 이음매가 아니라 국면 전환으로 다뤄지는
+    지점이라 실질적 손실은 작다. 배치 하나가 실패해도(_finalize_batch 참조)
+    그 배치만 원본을 유지하고 나머지는 정상 반영되는 부분 성공을 허용한다.
+
+    윤문 결과는 final_content에만 저장되는 게 아니라 챕터별로 파싱해
+    chapter.content에도 되써넣는다(2026-07-18) — PDF 조판이 이 값을 직접
+    읽으므로 웹 열람과 실물 책 텍스트가 항상 일치한다.
+    """
+    autobiography = await get_autobiography_by_id(gateways, autobiography_id)
+    chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+    if not chapters or any(chapter.content is None for chapter in chapters):
+        raise ValueError("모든 챕터의 집필(write_chapter)이 끝난 뒤에 최종 윤문을 수행할 수 있습니다.")
+
+    style_bible_text = (autobiography.style_bible or {}).get("content", "")
+    # 커스터마이징이 확정돼 있으면 말투·컨셉 일관성을 윤문에도 반영한다.
+    confirmed = _get_confirmed_customization(autobiography)
+
+    batches = _group_chapters_for_finalize(autobiography, chapters)
+    for batch in batches:
+        await _finalize_batch(
+            gateways,
+            autobiography=autobiography,
+            batch=batch,
+            style_bible_text=style_bible_text,
+            confirmed=confirmed,
+        )
 
     for chapter in chapters:
         await gateways.chapters.mark_finalized(chapter.id)
+
+    # 배치별로 되써넣어진 최신 챕터 내용을 다시 읽어 final_content를 조립한다
+    # (배치 실패로 원본이 유지된 챕터도 그대로 섞여 들어간다 — 부분 성공).
+    refreshed_chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+    final_content = _join_chapters_into_final_content(refreshed_chapters)
 
     # AutobiographyStatus.PUBLISHED는 지금까지 enum 값만 정의돼 있고 실제로는
     # 어디서도 설정되지 않던 죽은 값이었다(2026-07-12 발견) — 최종 윤문(이 함수)이
