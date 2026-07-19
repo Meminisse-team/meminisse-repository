@@ -50,6 +50,33 @@ event_extraction_service.process_completed_session을 그대로 호출한다(테
 다시 실행하라(--repair는 --email에 나열된 인물 전원에 대해 수행된다):
     ..\\venv\\Scripts\\python -m scripts.process_seeded_sessions --email "billgates@example.com" --repair
 
+## 왜곡 플래그된 세션 (2026-07-19 추가)
+
+왜곡 탐지 실패는 버그가 아니라 process_completed_session이 예외 없이 정상
+종료하는 경로다(산문은 저장하되 이벤트는 0건, distortion_flagged=True) —
+그래서 이 스크립트는 그걸 "성공"으로 집계하고, session_prose가 이미 채워져
+있으니 다음 실행에서도 미처리 목록에 다시 걸리지 않는다. 이제는 세션 처리
+자체가(아래 "세션마다 끝까지 해결" 참조) 왜곡 플래그로 끝나는 걸 실패로
+취급해 자동으로 재시도하지만, 이 스크립트를 바꾸기 *전에* 이미 플래그로
+끝난 세션들은 그 대상이 아니므로 한 번 --retry-flagged로 되돌려야 한다:
+    ..\\venv\\Scripts\\python -m scripts.process_seeded_sessions --email "billgates@example.com" --retry-flagged
+
+## 세션마다 끝까지 해결(플래그를 남긴 채 다음으로 넘어가지 않음, 2026-07-19)
+
+왜곡 탐지 실패 시 event_extraction_service.process_completed_session 자체는
+외과적 수리를 최대 _DISTORTION_REPAIR_MAX_PASSES회(현재 2회)만 시도하고 그래도
+안 되면 플래그를 남기고 정상 종료한다 — 이건 프로덕션(Celery)에서 실제 사용자
+세션이 진짜로 애매한 경우 무한정 API 비용을 쓰지 않고 사람의 검토("나의
+이야기"에서 직접 수정)로 넘기기 위한 의도된 안전장치라, 그 쪽은 건드리지
+않았다. 대신 이 스크립트는 그 결과를 받아서(_process_one_session_until_resolved)
+플래그로 끝나면 session_prose를 초기화해 처음부터(재조립부터) 다시 시도한다 —
+매 라운드가 새로 재조립하므로 이전 라운드와 다른 결과가 나올 여지가 있다.
+_SESSION_RETRY_ROUNDS회(기본 5회, 라운드당 최대 3회 시도 = 최악의 경우 세션 하나에
+최대 15회 시도)까지도 계속 플래그면 그제서야 "실패"로 집계한다 — 완전히
+무한정 재시도하지는 않는다(한 세션이 정말로 수렴 안 되는 경우 API 비용이
+무한정 나가는 걸 막는 안전판). 실패로 집계된 세션은 이 스크립트를 다시
+실행하면(--repair나 --retry-flagged 없이) 자동으로 재시도된다.
+
 주의: .env의 GATEWAY_BACKEND=postgres를 그대로 쓴다(evals/run_benchmark.py와
 달리 mock으로 강제 전환하지 않음) — seed_dummy.py가 심어둔 실제 데이터를 대상으로
 해야 하므로 의도적으로 실제 DB에 쓴다.
@@ -92,6 +119,11 @@ _RETRY_JITTER_SECONDS = 3.0
 # 여러 인물을 동시에 처리하려면 --concurrency를 명시적으로 올려야 한다.
 _DEFAULT_CONCURRENCY = 1
 
+# 세션이 왜곡 플래그로 끝나면 산문을 초기화해 처음부터 다시 시도하는 최대 라운드 수
+# (모듈 docstring "세션마다 끝까지 해결" 참조). 완전히 무한 재시도로 두지 않는 이유는
+# 한 세션이 정말로 수렴 안 될 때 API 비용이 무한정 나가는 걸 막기 위해서다.
+_SESSION_RETRY_ROUNDS = 5
+
 
 async def _process_one_session(session_id: uuid.UUID) -> int:
     """세션 하나를 독립된 트랜잭션으로 처리한다 — 모듈 docstring "세션마다
@@ -123,6 +155,42 @@ async def _process_one_session(session_id: uuid.UUID) -> int:
     raise last_exc
 
 
+async def _process_one_session_until_resolved(session_id: uuid.UUID) -> int:
+    """_process_one_session이 예외 없이 반환해도, 그 결과가 왜곡 플래그(산문은
+    저장됐지만 이벤트 0건)로 끝났다면 다음 세션으로 넘어가지 않고 이 세션을
+    끝까지 해결한다(모듈 docstring "세션마다 끝까지 해결" 참조). 산문을 다시
+    None으로 되돌려 처음부터(재조립부터) 재시도한다 — 매 라운드가 새로 재조립
+    하므로 이전 라운드와 다른 결과가 나올 여지가 있다(라운드 안에서는
+    event_extraction_service._DISTORTION_REPAIR_MAX_PASSES회의 국소 수리도
+    거친다). _SESSION_RETRY_ROUNDS회까지도 계속 플래그면 실패로 취급해 예외를
+    던진다 — 완전한 무한 재시도는 아니다. 마지막에도 session_prose를 None으로
+    되돌려두고 실패 처리한다 — --repair/--retry-flagged 없이 이 스크립트를
+    그냥 다시 실행해도(다른 실패 유형과 동일하게) 자동으로 재시도되게 하기
+    위함이다."""
+    last_count = 0
+    for round_num in range(1, _SESSION_RETRY_ROUNDS + 1):
+        last_count = await _process_one_session(session_id)
+        async with gateways_context() as gateways:
+            session = await gateways.sessions.get_by_id(session_id)
+        if not session.distortion_flagged:
+            return last_count
+        verb = "다시 시도합니다" if round_num < _SESSION_RETRY_ROUNDS else "포기하고 실패 처리합니다"
+        print(
+            f"    [세션 재시도 {round_num}/{_SESSION_RETRY_ROUNDS}] session={session_id} "
+            f"왜곡 플래그로 종료 — 산문을 초기화하고 {verb}...",
+            file=sys.stderr,
+        )
+        async with gateways_context() as gateways:
+            await gateways.sessions.set_session_prose(session_id, None)  # type: ignore[arg-type]
+            await gateways.sessions.set_distortion_flagged(session_id, False)
+            await gateways.commit()
+    raise RuntimeError(
+        f"session={session_id}: {_SESSION_RETRY_ROUNDS}회 재시도 후에도 왜곡 플래그로 종료됨 "
+        "(원본 발화 보존이 검증되지 않아 이벤트 추출을 계속 보류함 — session_prose는 "
+        "None으로 되돌려뒀으므로 다시 실행하면 자동으로 재시도됨)"
+    )
+
+
 async def _repair_contaminated_sessions(user_id: uuid.UUID) -> int:
     """구버전(공유 트랜잭션) 실행으로 "산문은 있는데 이벤트 0건, distortion_flagged도
     아님"인 오염된 세션을 찾아 session_prose를 다시 None으로 되돌린다 — 그래야
@@ -145,6 +213,30 @@ async def _repair_contaminated_sessions(user_id: uuid.UUID) -> int:
             print(f"  [복구] session={session.id} — session_prose를 초기화해 재처리 대상으로 되돌림", file=sys.stderr)
         await gateways.commit()
         return repaired
+
+
+async def _retry_flagged_sessions(user_id: uuid.UUID) -> int:
+    """distortion_flagged=True인 세션의 session_prose를 다시 None으로 되돌려
+    미처리 목록에 다시 걸리게 한다 — _repair_contaminated_sessions와 달리 이건
+    "버그로 오염된 상태"가 아니라 "정상적으로 왜곡 플래그된 상태"를 대상으로
+    하므로 의도적으로 분리했다(모듈 docstring "왜곡 플래그된 세션" 참조). 이
+    스크립트를 다시 돌리면 새로 추가된 _process_one_session_until_resolved가
+    처리하므로, 이번에는 플래그로 끝나도 자동으로 재시도된다."""
+    async with gateways_context() as gateways:
+        sessions = await gateways.sessions.list_by_user(user_id)
+        retried = 0
+        for session in sessions:
+            if not session.distortion_flagged:
+                continue
+            await gateways.sessions.set_session_prose(session.id, None)  # type: ignore[arg-type]
+            await gateways.sessions.set_distortion_flagged(session.id, False)
+            retried += 1
+            print(
+                f"  [재시도 대상] session={session.id} — distortion_flagged 해제, 재처리 대상으로 되돌림",
+                file=sys.stderr,
+            )
+        await gateways.commit()
+        return retried
 
 
 async def _resolve_user(email: str) -> tuple[uuid.UUID, str] | None:
@@ -185,9 +277,23 @@ async def _run_repair(emails: list[str]) -> None:
     print("\n복구 완료. --repair 없이 다시 실행하세요.")
 
 
-async def main(emails: list[str], *, repair: bool, concurrency: int) -> None:
+async def _run_retry_flagged(emails: list[str]) -> None:
+    for email in emails:
+        resolved = await _resolve_user(email)
+        if resolved is None:
+            continue
+        user_id, user_name = resolved
+        retried = await _retry_flagged_sessions(user_id)
+        print(f"[{user_name} ({email})] {retried}건을 재처리 대상으로 되돌렸습니다.")
+    print("\n되돌리기 완료. --retry-flagged 없이 다시 실행하세요.")
+
+
+async def main(emails: list[str], *, repair: bool, retry_flagged: bool, concurrency: int) -> None:
     if repair:
         await _run_repair(emails)
+        return
+    if retry_flagged:
+        await _run_retry_flagged(emails)
         return
 
     work = await _collect_pending(emails)
@@ -224,7 +330,7 @@ async def main(emails: list[str], *, repair: bool, concurrency: int) -> None:
         async with semaphore:
             print(f"  [{index}/{len(work)}] {email} session={session_id} 처리 중...", file=sys.stderr)
             try:
-                count = await _process_one_session(session_id)
+                count = await _process_one_session_until_resolved(session_id)
                 print(f"    → {email} 이벤트 {count}건 추출", file=sys.stderr)
                 async with counters_lock:
                     counters["processed"] += 1
@@ -258,6 +364,13 @@ if __name__ == "__main__":
         action="store_true",
         help="구버전 스크립트로 실행해 오염된(산문은 있는데 이벤트 0건) 세션을 재처리 대상으로 되돌립니다(--email에 나열된 인물 전원 대상).",
     )
+    parser.add_argument(
+        "--retry-flagged",
+        action="store_true",
+        help="이 스크립트의 '세션마다 끝까지 해결' 기능이 추가되기 전에 왜곡 플래그로 끝난 세션을 재처리 대상으로 되돌립니다(--email에 나열된 인물 전원 대상).",
+    )
     args = parser.parse_args()
     emails = [e.strip() for e in args.email.split(",") if e.strip()]
-    asyncio.run(main(emails, repair=args.repair, concurrency=args.concurrency))
+    asyncio.run(
+        main(emails, repair=args.repair, retry_flagged=args.retry_flagged, concurrency=args.concurrency)
+    )

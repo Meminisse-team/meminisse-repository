@@ -234,7 +234,7 @@ async def test_distortion_failure_retries_then_flags_and_user_edit_clears() -> N
         return _R()
 
     async def _always_distorted(*, original_turns, reassembled_prose):
-        return False
+        return False, "지어낸 내용이 있다는 가짜 사유."
 
     async def _fake_structured(messages, *, schema_name, json_schema, **kwargs):
         return {"events": [], "relations": []}
@@ -254,7 +254,10 @@ async def test_distortion_failure_retries_then_flags_and_user_edit_clears() -> N
         events = await event_extraction_service.process_completed_session(gateways, session.id)
 
         assert events == []
-        assert reassembly_calls["n"] == 2  # 1차(medium) + 재시도(high)
+        # 1차 재조립(medium) + 외과적 수리 _DISTORTION_REPAIR_MAX_PASSES회(2026-07-19,
+        # "high" 전체 재생성 대신 국소 수리로 교체됨 — 둘 다 _passes_distortion_check가
+        # 통째로 패치돼 있어 매번 실패로 판정되므로 수리 예산을 전부 소진한다).
+        assert reassembly_calls["n"] == 1 + event_extraction_service._DISTORTION_REPAIR_MAX_PASSES
         flagged = await gateways.sessions.get_by_id(session.id)
         assert flagged.distortion_flagged is True
         assert flagged.session_prose  # 산문 자체는 저장된다

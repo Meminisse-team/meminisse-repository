@@ -62,8 +62,10 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     # 원본 문장과 병합 문장을 중복으로 남기는 오류가 실사용 검증(4회 중 약 2~3회)
     # 재현됐다. "medium"으로 올리면 같은 검증에서 대부분 정상 병합되고(4회 중
     # 3회 완전 정상), "high"는 오히려 21세·집에서 같은 구체적 사실을 뭉뚱그려
-    # 누락시키는 별도 실패 유형이 나타나 1차 시도로는 채택하지 않았다(아래 재시도
-    # 참조 — 왜곡 판정에 걸린 경우에 한해서만 high로 한 번 더 시도한다).
+    # 누락시키는 별도 실패 유형이 나타나 채택하지 않았다 — 왜곡 판정에 걸렸을 때도
+    # "high"로 전체를 다시 만드는 대신 아래 외과적 수리(_repair_distorted_prose)로
+    # 대응한다(2026-07-19, "high" 재시도 자체가 화자의 발화를 잃는 방향으로 작동한다는
+    # 게 확인돼 교체됨).
     _t0 = time.monotonic()
     session_prose = await _reassemble_prose(
         chat_turns=chat_turns, reassembly_turns=reassembly_turns, reasoning_effort="medium"
@@ -71,37 +73,45 @@ async def process_completed_session(gateways: Gateways, session_id: uuid.UUID) -
     _log_timing(session_id, "reassemble(medium)", time.monotonic() - _t0)
 
     _t0 = time.monotonic()
-    passed = await _passes_distortion_check(
-        original_turns=chat_turns, reassembled_prose=session_prose
+    passed, fail_reason = await _passes_distortion_check(
+        original_turns=reassembly_turns, reassembled_prose=session_prose
     )
     _log_timing(session_id, "distortion_check", time.monotonic() - _t0)
-    if not passed:
-        # 왜곡 임계값 초과: 같은 재료로 1회 재시도한다(reasoning_effort="high" —
-        # 1차 시도의 medium과 다른 설정이라 같은 실패를 반복할 확률이 낮다).
-        # 재시도본이 검증을 통과하면 그걸 채택하고, 그래도 실패하면 산문은
-        # 저장하되 이벤트 추출을 보류하고 세션에 distortion_flagged를 남긴다 —
-        # '나의 이야기' 카드가 "원문과 다를 수 있어요" 배지로 노출하고, 사용자가
-        # 산문을 직접 확인·수정해 저장하면(사람이 확정한 텍스트) 플래그가 해제되며
-        # 이벤트가 정상 추출된다(story_service.update_session_prose 경로,
-        # 2026-07-18 — 오랜 TODO "조용한 스킵"의 해소).
+
+    # 왜곡 탐지 실패: 전체를 다시 만들지 않고 지적된 부분만 고치는 외과적 수리를
+    # 최대 _DISTORTION_REPAIR_MAX_PASSES회 반복한다(_repair_distorted_prose 참조 —
+    # 예전의 "reasoning_effort=high로 전체 재조립" 방식은 화자의 발화를 오히려
+    # 더 잃는 방향으로 작동한다는 게 확인돼 교체됐다, 2026-07-19). 그래도 끝내
+    # 통과 못 하면 산문은 저장하되 이벤트 추출을 보류하고 세션에 distortion_flagged를
+    # 남긴다 — '나의 이야기' 카드가 "원문과 다를 수 있어요" 배지로 노출하고, 사용자가
+    # 산문을 직접 확인·수정해 저장하면(사람이 확정한 텍스트) 플래그가 해제되며
+    # 이벤트가 정상 추출된다(story_service.update_session_prose 경로, 2026-07-18).
+    repair_pass = 0
+    while not passed and repair_pass < _DISTORTION_REPAIR_MAX_PASSES:
+        repair_pass += 1
         _t0 = time.monotonic()
-        retry_prose = await _reassemble_prose(
-            chat_turns=chat_turns, reassembly_turns=reassembly_turns, reasoning_effort="high"
+        session_prose = await _repair_distorted_prose(
+            reassembled_prose=session_prose,
+            chat_turns=chat_turns,
+            reassembly_turns=reassembly_turns,
+            fail_reason=fail_reason or "",
         )
-        _log_timing(session_id, "reassemble(high, retry)", time.monotonic() - _t0)
+        _log_timing(session_id, f"repair_distorted_prose(pass {repair_pass})", time.monotonic() - _t0)
 
         _t0 = time.monotonic()
-        retry_passed = await _passes_distortion_check(original_turns=chat_turns, reassembled_prose=retry_prose)
-        _log_timing(session_id, "distortion_check(retry)", time.monotonic() - _t0)
-        if retry_passed:
-            session_prose = retry_prose
-            passed = True
-        else:
-            logging.getLogger(__name__).warning(
-                "세션 %s 산문 재조립이 왜곡 탐지를 재시도 후에도 통과하지 못해 "
-                "이벤트 추출을 보류하고 플래그를 남긴다.",
-                session_id,
-            )
+        passed, fail_reason = await _passes_distortion_check(
+            original_turns=reassembly_turns, reassembled_prose=session_prose
+        )
+        _log_timing(session_id, f"distortion_check(after repair {repair_pass})", time.monotonic() - _t0)
+
+    if not passed:
+        logging.getLogger(__name__).warning(
+            "세션 %s 산문 재조립이 외과적 수리 %d회 후에도 왜곡 탐지를 통과하지 못해 "
+            "이벤트 추출을 보류하고 플래그를 남긴다: %s",
+            session_id,
+            _DISTORTION_REPAIR_MAX_PASSES,
+            fail_reason,
+        )
 
     await gateways.sessions.set_session_prose(session_id, session_prose)
     if not passed:
@@ -137,7 +147,7 @@ async def reextract_events_from_edited_prose(
 ) -> list[EventRecord]:
     """사용자가 '나의 이야기'에서 재조립된 산문을 직접 고쳐 저장한 뒤 호출된다
     (story_service.update_session_prose). 이미 사람이 검수·확정한 텍스트이므로
-    process_completed_session과 달리 산문 재조립도, 왜곡 탐지(NLI)도 다시 거치지
+    process_completed_session과 달리 산문 재조립도, 왜곡 탐지(Solar LLM 판정)도 다시 거치지
     않고 session.session_prose를 그대로 이벤트 추출의 입력으로 삼는다 — "왜곡"이라는
     개념 자체가 AI 생성물에만 적용되는 것이지 사용자 본인이 직접 쓴 텍스트에는
     적용될 수 없기 때문이다. 기존에 이 세션에서 추출됐던 이벤트는 전부 폐기하고
@@ -320,15 +330,28 @@ def _filter_interviewer_leakage(
 # 근거로 거절한다.
 _DISTORTION_JUDGE_MODEL = "solar-mini"
 
+# 왜곡 탐지 실패 후 외과적 수리(_repair_distorted_prose)를 반복하는 최대 횟수 —
+# autobiography_service.MAX_REPAIR_PASSES와 같은 값을 쓴다. 국소 수정이라 1회로
+# 대부분 수렴하지만, 수리 결과가 다시 걸리는 경우를 위해 한 번 더 기회를 준다.
+# 그래도 안 되면 산문은 저장하되 이벤트 추출을 보류하고 플래그를 남긴다(아래
+# process_completed_session 참조) — 무한 재시도는 하지 않는다.
+_DISTORTION_REPAIR_MAX_PASSES = 2
+
+
+def _original_user_text(chat_turns: list[dict[str, str]]) -> str:
+    """왜곡 탐지·수리 양쪽이 공유하는 "근거 원문" — assistant 턴을 제외한 사용자
+    발화만 모은다(재조립본이 사용자 발화만 이어 붙인 것이므로, 비교 대상도
+    같은 기준이어야 한다)."""
+    return "\n".join(turn["content"] for turn in chat_turns if turn.get("role") == "user")
+
 
 async def _passes_distortion_check(
     *, original_turns: list[dict[str, str]], reassembled_prose: str
-) -> bool:
+) -> tuple[bool, str | None]:
     """
     왜곡 자동 탐지. 재조립본(reassembled_prose)이 원본 발화에 없는 사실을 지어내지
-    않았는지 Solar LLM 판정으로 확인한다. 재조립본은 사용자 발화만 이어 붙인
-    것이므로(app/agents/prompts.py PROSE_REASSEMBLY_SYSTEM_PROMPT 참조), 원문 쪽
-    비교 대상도 assistant 턴을 제외한 사용자 발화만 모아 사용한다.
+    않았는지 Solar LLM 판정으로 확인한다. 반환값은 (통과 여부, 실패 사유) — 실패
+    사유는 _repair_distorted_prose의 외과적 수리 입력으로 쓰인다.
 
     원래는 로컬 NLI(mDeBERTa) 문장 단위 entailment 배치 판정이었는데, 실사용 중
     세션 하나에 190~210초가 걸려(로컬 CPU 추론 — GPU 없는 개발 환경) process_seeded_
@@ -345,11 +368,9 @@ async def _passes_distortion_check(
     json_schema)를 solar-pro3처럼 신뢰성 있게 지원하는지 실측된 적이 없어, 이미
     검증된 단문 프로토콜만 쓴다.
     """
-    original_text = "\n".join(
-        turn["content"] for turn in original_turns if turn.get("role") == "user"
-    )
+    original_text = _original_user_text(original_turns)
     if not original_text.strip() or not reassembled_prose.strip():
-        return True  # 비교할 원문/재조립본이 없으면 판정 자체가 불가능 — 통과 처리
+        return True, None  # 비교할 원문/재조립본이 없으면 판정 자체가 불가능 — 통과 처리
 
     response = await solar.chat_completion(
         prompts.build_distortion_check_prompt(
@@ -360,11 +381,59 @@ async def _passes_distortion_check(
     )
     verdict = (response.choices[0].message.content or "").strip()
     if verdict.startswith("PASS"):
-        return True
+        return True, None
     # 규약 밖 응답(빈 문자열, 형식 이탈 등)도 안전하게 "실패"로 처리한다 — 검증
     # 실패가 검증 통과로 둔갑하면 안 된다는 원칙은 clients/groundedness.py와 동일.
     logging.getLogger(__name__).warning("산문 재조립 왜곡 탐지 실패(solar-mini): %s", verdict)
-    return False
+    return False, verdict
+
+
+async def _repair_distorted_prose(
+    *,
+    reassembled_prose: str,
+    chat_turns: list[dict[str, str]],
+    reassembly_turns: list[dict[str, str]],
+    fail_reason: str,
+) -> str:
+    """왜곡 탐지 실패 시 지적된 부분만 고치는 외과적 수리 — autobiography_service.
+    _repair_chapter_content와 같은 발상을 산문 재조립에 적용한다(app/agents/prompts.py
+    DISTORTION_REPAIR_SYSTEM_PROMPT 모듈 주석 참조).
+
+    기존에는 왜곡 탐지에 걸리면 reasoning_effort="high"로 산문 전체를 다시 만들었는데,
+    (1) 전체 재생성은 지어낸 부분을 없애면서 멀쩡한 다른 부분을 새로 지어내거나
+    누락시킬 위험이 있고, (2) "high" 자체가 "구체적 사실을 뭉뚱그려 누락시키는"
+    별도 실패 유형을 갖고 있어(PROSE_REASSEMBLY_SYSTEM_PROMPT 채택 논의 참조) 화자의
+    발화를 오히려 더 잃는 방향으로 작동했다(2026-07-19 실사용 확인 — 왜곡 탐지가
+    Solar 판정으로 교체된 뒤에야 이 문제가 눈에 보이게 드러났다). 지목된 부분만
+    고치면 두 문제를 모두 피한다.
+
+    reassembly_turns(마무리 확인 질문+답변이 빠진 것)를 "원본 발화" 근거로 쓴다 —
+    처음엔 실수로 chat_turns(전체)를 썼다가, 마무리 답변("네, 이 이야기는 이
+    정도면...")이 "원본에 실제로 있으니 지우지 말라"는 지시 때문에 수리 과정에서
+    오히려 산문에 다시 끼어드는 사고가 실사용 중 확인됐다(2026-07-19). chat_turns는
+    _strip_leaked_assistant_sentences(assistant 턴 유출 검사, WRAP_UP_CHECK_IN_MESSAGE
+    포함 전체를 봐야 함)에만 별도로 쓴다 — _reassemble_prose가 이미 이 두 목적에
+    다른 turns 인자를 쓰는 것과 같은 이유.
+
+    재조립을 생성하는 것과 같은 모델(solar-pro3, 기본값)을 쓴다 — 이건 판정(judge)이
+    아니라 집필(writer) 작업이라 _DISTORTION_JUDGE_MODEL 주석의 자기선호 편향 우려가
+    적용되지 않는다(수리 결과는 다시 solar-mini가 독립적으로 재검증한다)."""
+    original_text = _original_user_text(reassembly_turns)
+    response = await solar.chat_completion(
+        prompts.build_distortion_repair_prompt(
+            reassembled_prose=reassembled_prose,
+            original_text=original_text,
+            fail_reason=fail_reason,
+        ),
+        reasoning_effort="medium",
+        # 재조립본 전체를 되돌려주는 호출이라 잘려서 뒷부분이 통째로 사라지는
+        # 사고를 피하려면 넉넉하게 잡아야 한다 — _repair_chapter_content(챕터,
+        # max_tokens=24000)와 같은 이유. 세션 산문은 챕터보다 훨씬 짧으므로
+        # 그 정도로 크게 잡을 필요는 없다.
+        max_tokens=4000,
+    )
+    repaired = response.choices[0].message.content or reassembled_prose
+    return _strip_leaked_assistant_sentences(prose=repaired, chat_turns=chat_turns)
 
 
 async def _persist_events(
