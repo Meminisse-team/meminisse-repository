@@ -1,10 +1,18 @@
 import { apiClient } from "@/lib/api/client";
-import type { Autobiography, ChapterDraft, PhotoPlacement } from "@/types/api";
+import type { Autobiography, AutobiographyPollingStatus, ChapterDraft, PhotoPlacement } from "@/types/api";
 
 export const autobiographiesApi = {
   /** get-or-create — 미완성(final_content 없음) 버전이 있으면 이어서, 없으면(전부
    * 완성됐거나 하나도 없으면) 새로 자동 생성된다. */
   get: (userId: string) => apiClient.get<Autobiography>(`/api/v1/autobiographies/${userId}`),
+  /** 폴링 전용 경량 조회 — final_content/챕터 본문 없이 진행 상태만 반환한다
+   * (2026-07-19, Supabase Egress 한도 초과 대응). 자서전 집필 화면의 폴링
+   * 틱은 get()/listChapters() 대신 이걸 부르고, 의미 있는 변화가 감지될
+   * 때만 전체 조회로 넘어가야 한다. */
+  getPollingStatus: (autobiographyId: string) =>
+    apiClient.get<AutobiographyPollingStatus>(
+      `/api/v1/autobiographies/${autobiographyId}/polling-status`,
+    ),
   /** "나의 책장" 전용 — 이 유저가 완성한 자서전 전체(최신순). */
   listFinished: (userId: string) =>
     apiClient.get<Autobiography[]>(`/api/v1/autobiographies/${userId}/finished`),

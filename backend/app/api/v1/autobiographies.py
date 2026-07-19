@@ -5,9 +5,11 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps import CurrentUserDep, GatewaysDep, require_self
 from app.gateways.dto import AutobiographyRecord, UserRecord
 from app.schemas.autobiography import (
+    AutobiographyPollingStatus,
     AutobiographyRead,
     ChapterContentUpdate,
     ChapterDraftRead,
+    ChapterStatusItem,
     CustomizationConfirmRequest,
     CustomizationOptionItem,
     CustomizationOptionsResponse,
@@ -56,6 +58,45 @@ async def list_finished_autobiographies(
     require_self(current_user, user_id)
     autobiographies = await autobiography_service.list_finished_autobiographies(gateways, user_id)
     return [AutobiographyRead.model_validate(a) for a in autobiographies]
+
+
+@router.get("/{autobiography_id}/polling-status", response_model=AutobiographyPollingStatus)
+async def get_polling_status(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> AutobiographyPollingStatus:
+    """자서전 집필 화면의 4초 폴링 전용 — final_content/챕터 본문 같은 무거운
+    필드를 빼고 진행 상태만 반환한다(2026-07-19, Supabase 무료 등급 Egress
+    한도 초과 대응). 프론트는 이 응답에서 의미 있는 변화(챕터 완료, 최종본
+    완성, PDF 생성 등)를 감지했을 때만 기존 전체 조회 API를 호출한다.
+
+    소유권 확인도 이 경량 조회 하나로 끝낸다 — _require_own_autobiography는
+    final_content까지 포함한 전체 레코드를 가져오므로, 이 엔드포인트의 취지
+    (무거운 필드를 절대 안 실어 보내는 것)와 맞지 않는다."""
+    result = await autobiography_service.get_polling_status(gateways, autobiography_id)
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "자서전을 찾을 수 없습니다.")
+    autobiography_status, chapters_status = result
+    if autobiography_status.user_id != current_user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "자서전을 찾을 수 없습니다.")
+    return AutobiographyPollingStatus(
+        id=autobiography_status.id,
+        status=autobiography_status.status,
+        final_content_ready=autobiography_status.final_content_ready,
+        pdf_url=autobiography_status.pdf_url,
+        chapters=[
+            ChapterStatusItem(
+                id=c.id,
+                chapter_index=c.chapter_index,
+                has_content=c.has_content,
+                updated_at=c.updated_at,
+                flag_count=(
+                    len((c.factcheck_report or {}).get("flags", []))
+                    + len((c.groundedness_report or {}).get("flags", []))
+                ),
+            )
+            for c in chapters_status
+        ],
+    )
 
 
 @router.post("/{user_id}/consolidate", status_code=status.HTTP_202_ACCEPTED)

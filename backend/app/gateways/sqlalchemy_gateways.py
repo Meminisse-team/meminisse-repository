@@ -22,9 +22,11 @@ from app.gateways.dto import (
     AdminAuditLogCreateData,
     AdminAuditLogRecord,
     AutobiographyRecord,
+    AutobiographyStatusRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
     ChapterDraftWriteResult,
+    ChapterStatusRecord,
     CharacterCreateData,
     CharacterRecord,
     ChatLogRecord,
@@ -763,6 +765,33 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
         )
         return [_to_autobiography_record(obj) for obj in result.scalars().all()]
 
+    async def get_status_by_id(self, autobiography_id: UUID) -> AutobiographyStatusRecord | None:
+        # 컬럼을 명시적으로 골라 select(Autobiography) 대신 써야 final_content
+        # (수만 자짜리 TEXT)가 실제로 Supabase→백엔드 네트워크 구간을 타지
+        # 않는다 — ORM 엔티티 전체를 로드한 뒤 파이썬에서 필드만 버리는 방식은
+        # 이미 전송된 뒤라 egress 절감 효과가 없다(2026-07-19, Supabase 무료
+        # 등급 Egress 한도 초과 대응).
+        stmt = select(
+            Autobiography.id,
+            Autobiography.user_id,
+            Autobiography.status,
+            Autobiography.final_content.is_not(None).label("final_content_ready"),
+            Autobiography.pdf_url,
+            Autobiography.updated_at,
+        ).where(Autobiography.id == autobiography_id)
+        result = await self._session.execute(stmt)
+        row = result.first()
+        if row is None:
+            return None
+        return AutobiographyStatusRecord(
+            id=row.id,
+            user_id=row.user_id,
+            status=row.status,
+            final_content_ready=row.final_content_ready,
+            pdf_url=row.pdf_url,
+            updated_at=row.updated_at,
+        )
+
 
 class SqlAlchemyChapterDraftGateway(ChapterDraftGateway):
     def __init__(self, session: AsyncSession) -> None:
@@ -775,6 +804,36 @@ class SqlAlchemyChapterDraftGateway(ChapterDraftGateway):
             .order_by(ChapterDraft.chapter_index.asc())
         )
         return [_to_chapter_draft_record(obj) for obj in result.scalars().all()]
+
+    async def list_status_by_autobiography(
+        self, autobiography_id: UUID
+    ) -> list[ChapterStatusRecord]:
+        # content/chapter_synopsis(챕터당 수천 자)를 SELECT에서 제외 — 이유는
+        # get_status_by_id와 동일(모듈 docstring 참조 없음, 위 주석 참조).
+        stmt = (
+            select(
+                ChapterDraft.id,
+                ChapterDraft.chapter_index,
+                ChapterDraft.content.is_not(None).label("has_content"),
+                ChapterDraft.updated_at,
+                ChapterDraft.factcheck_report,
+                ChapterDraft.groundedness_report,
+            )
+            .where(ChapterDraft.autobiography_id == autobiography_id)
+            .order_by(ChapterDraft.chapter_index.asc())
+        )
+        result = await self._session.execute(stmt)
+        return [
+            ChapterStatusRecord(
+                id=row.id,
+                chapter_index=row.chapter_index,
+                has_content=row.has_content,
+                updated_at=row.updated_at,
+                factcheck_report=row.factcheck_report,
+                groundedness_report=row.groundedness_report,
+            )
+            for row in result.all()
+        ]
 
     async def list_all(self, *, limit: int, offset: int) -> list[ChapterDraftRecord]:
         result = await self._session.execute(

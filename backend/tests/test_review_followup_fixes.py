@@ -20,14 +20,21 @@ from unittest.mock import patch
 
 import pytest
 
-from app.gateways.dto import EventCreateData, EventRecord, SessionCreateData
+from app.gateways.dto import ChapterDraftCreateData, EventCreateData, EventRecord, SessionCreateData, UserCreateData
 from app.gateways.factory import Gateways, _build_mock_gateways
 from app.models.enums import EventSourceType, MessageRole, SessionType
 from app.schemas.user import UserCreate
-from app.services import event_extraction_service, interview_service, story_service, user_service
+from app.services import (
+    autobiography_service,
+    event_extraction_service,
+    interview_service,
+    story_service,
+    user_service,
+)
 from app.services.autobiography_service import (
     _rebalance_assignment_by_year,
     _run_factcheck,
+    _sort_events_chronologically,
     _split_revised_manuscript_by_chapter,
     _strip_prompt_section_echo,
 )
@@ -161,6 +168,34 @@ def test_rebalance_never_moves_event_not_retrieved_by_target_chapter() -> None:
         [[a1, a2, outlier], [b1]],  # outlier는 챕터 B 검색 결과에 없음
     )
     assert outlier.id in {e.id for e in rebalanced[0]}
+
+
+# ---------------------------------------------------------------------------
+# 3-1. 집필 직전 사건 시간순 정렬(_sort_events_chronologically)
+# ---------------------------------------------------------------------------
+# EventGateway.list_by_ids가 중요도 순으로 정렬해 넘기는 사건을, 집필 프롬프트가
+# 시간순으로 서술할 수 있도록 write_chapter에서 재정렬한다(2026-07-19 — 1965년
+# 결혼 다음 문단에 17세 졸업이 나오는 등 타임라인이 뒤죽박죽되던 문제 해소).
+
+
+def test_sort_events_chronologically_orders_by_estimated_year() -> None:
+    e1979, e1966, e1968 = _make_event(year=1979), _make_event(year=1966), _make_event(year=1968)
+    sorted_events = _sort_events_chronologically([e1979, e1966, e1968])
+    assert [e.id for e in sorted_events] == [e1966.id, e1968.id, e1979.id]
+
+
+def test_sort_events_chronologically_uses_occurred_at_label_fallback() -> None:
+    labeled_1980 = _make_event(occurred_at_label="1980년 졸업")
+    dated_1966 = _make_event(year=1966)
+    sorted_events = _sort_events_chronologically([labeled_1980, dated_1966])
+    assert [e.id for e in sorted_events] == [dated_1966.id, labeled_1980.id]
+
+
+def test_sort_events_chronologically_pushes_undated_events_to_the_end() -> None:
+    undated = _make_event()
+    dated = _make_event(year=1970)
+    sorted_events = _sort_events_chronologically([undated, dated])
+    assert [e.id for e in sorted_events] == [dated.id, undated.id]
 
 
 # ---------------------------------------------------------------------------
@@ -306,3 +341,53 @@ async def test_get_opening_contents_batches_titles() -> None:
 
         page = await story_service.list_story_cards(gateways, user.id, limit=10, offset=0)
         assert page.items[0].title == "어린 시절 이야기를 들려주세요."
+
+
+# ---------------------------------------------------------------------------
+# 7. 폴링 전용 경량 상태 조회(get_polling_status) — Supabase 무료 등급 Egress
+# 한도 초과 대응(2026-07-19). final_content/챕터 본문 같은 무거운 필드를 빼고
+# 진행 상태만 반환하는지 검증한다.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_polling_status_omits_heavy_fields_but_reports_readiness() -> None:
+    gateways = _build_mock_gateways()
+    user = await gateways.users.create(
+        UserCreateData(id=uuid.uuid4(), email=f"{uuid.uuid4()}@test.local", name="테스터")
+    )
+    autobiography = await gateways.autobiographies.create(user.id)
+    await gateways.autobiographies.update(
+        autobiography.id, final_content="완성된 원고" * 1000, pdf_url="https://example.com/book.pdf"
+    )
+    await gateways.chapters.replace_all(
+        autobiography.id,
+        [
+            ChapterDraftCreateData(chapter_index=1, title="1장"),
+            ChapterDraftCreateData(chapter_index=2, title="2장"),
+        ],
+    )
+    chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+    written, unwritten = chapters[0], chapters[1]
+    written.content = "본문" * 1000
+    written.factcheck_report = {"flags": [{"claim": "x"}]}
+    written.groundedness_report = {"flags": [{"sentence": "y"}, {"sentence": "z"}]}
+    await gateways.commit()
+
+    result = await autobiography_service.get_polling_status(gateways, autobiography.id)
+
+    assert result is not None
+    autobiography_status, chapters_status = result
+    assert autobiography_status.final_content_ready is True
+    assert autobiography_status.pdf_url == "https://example.com/book.pdf"
+    # 경량 DTO는애초에 final_content/content 필드 자체가 없다 — 무거운 필드가
+    # 실려 있지 않다는 것 자체가 계약이다.
+    assert not hasattr(autobiography_status, "final_content")
+    assert {c.chapter_index: c.has_content for c in chapters_status} == {1: True, 2: False}
+    assert not hasattr(chapters_status[0], "content")
+
+
+@pytest.mark.asyncio
+async def test_get_polling_status_returns_none_for_missing_autobiography() -> None:
+    gateways = _build_mock_gateways()
+    assert await autobiography_service.get_polling_status(gateways, uuid.uuid4()) is None

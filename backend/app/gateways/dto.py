@@ -314,6 +314,36 @@ class ChapterDraftRecord:
 
 
 @dataclass
+class AutobiographyStatusRecord:
+    """프론트 폴링 전용 경량 조회 결과(2026-07-19) — Supabase 무료 등급 Egress
+    한도 초과 사고 대응. `final_content`(챕터 수십 개 분량, 수만 자)처럼 무거운
+    TEXT 컬럼을 SELECT 자체에서 빼고, "존재 여부"만 boolean으로 돌려준다 —
+    가벼운 게 핵심이라 API 계약(AutobiographyRecord)과 별도로 둔다."""
+
+    id: UUID
+    user_id: UUID
+    status: AutobiographyStatus
+    final_content_ready: bool
+    pdf_url: str | None
+    updated_at: datetime
+
+
+@dataclass
+class ChapterStatusRecord:
+    """프론트 폴링 전용 경량 조회 결과 — `content`/`chapter_synopsis`(챕터당
+    수천 자)를 SELECT에서 빼고 "본문 존재 여부"만 담는다. factcheck_report/
+    groundedness_report는 chapter.content보다 훨씬 작은 JSON이라 그대로 둔다
+    (프론트의 기존 확인 필요 배지 계산 로직을 그대로 재사용하기 위함)."""
+
+    id: UUID
+    chapter_index: int
+    has_content: bool
+    updated_at: datetime
+    factcheck_report: dict | None
+    groundedness_report: dict | None
+
+
+@dataclass
 class ChapterDraftCreateData:
     chapter_index: int
     title: str | None = None

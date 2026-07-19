@@ -27,9 +27,11 @@ from app.gateways.dto import (
     AdminAuditLogCreateData,
     AdminAuditLogRecord,
     AutobiographyRecord,
+    AutobiographyStatusRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
     ChapterDraftWriteResult,
+    ChapterStatusRecord,
     CharacterCreateData,
     CharacterRecord,
     ChatLogRecord,
@@ -462,6 +464,14 @@ class AutobiographyGateway(ABC):
     async def list_all(self, *, limit: int, offset: int) -> list[AutobiographyRecord]:
         """전체 유저를 통틀어 created_at 내림차순. 관리자 DB 열람 화면 전용."""
 
+    @abstractmethod
+    async def get_status_by_id(self, autobiography_id: UUID) -> AutobiographyStatusRecord | None:
+        """프론트 폴링 전용 경량 조회(2026-07-19) — `final_content` 등 무거운 TEXT/
+        JSONB 컬럼을 SELECT 자체에서 제외해, 진행 상태만 반복 확인하는 동안
+        불필요한 DB egress가 쌓이지 않게 한다(app/gateways/dto.py:
+        AutobiographyStatusRecord 참조). get_by_id와 달리 존재하지 않으면
+        None만 반환한다."""
+
 
 class ChapterDraftGateway(ABC):
     """Autobiography 산하 챕터 초안. Phase 4 하향식 집필의 단위."""
@@ -469,6 +479,13 @@ class ChapterDraftGateway(ABC):
     @abstractmethod
     async def list_by_autobiography(self, autobiography_id: UUID) -> list[ChapterDraftRecord]:
         """chapter_index 오름차순."""
+
+    @abstractmethod
+    async def list_status_by_autobiography(
+        self, autobiography_id: UUID
+    ) -> list[ChapterStatusRecord]:
+        """프론트 폴링 전용 경량 조회(2026-07-19) — `content`/`chapter_synopsis`
+        (챕터당 수천 자)를 SELECT에서 제외한다. chapter_index 오름차순."""
 
     @abstractmethod
     async def list_all(self, *, limit: int, offset: int) -> list[ChapterDraftRecord]:

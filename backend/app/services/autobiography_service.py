@@ -31,9 +31,11 @@ from app.clients import solar
 from app.data.question_bank import QUESTION_BANK_BY_SEQUENCE
 from app.gateways.dto import (
     AutobiographyRecord,
+    AutobiographyStatusRecord,
     ChapterDraftCreateData,
     ChapterDraftRecord,
     ChapterDraftWriteResult,
+    ChapterStatusRecord,
     EventImportanceUpdate,
     EventRecord,
 )
@@ -171,6 +173,20 @@ async def get_autobiography_by_id(gateways: Gateways, autobiography_id: uuid.UUI
 
 async def list_chapter_drafts(gateways: Gateways, autobiography_id: uuid.UUID) -> list[ChapterDraftRecord]:
     return await gateways.chapters.list_by_autobiography(autobiography_id)
+
+
+async def get_polling_status(
+    gateways: Gateways, autobiography_id: uuid.UUID
+) -> tuple[AutobiographyStatusRecord, list[ChapterStatusRecord]] | None:
+    """자서전 집필 화면의 폴링 전용 경량 조회(2026-07-19) — final_content/챕터
+    본문 같은 무거운 필드를 뺀 상태만 반환한다(app/gateways/dto.py의
+    AutobiographyStatusRecord/ChapterStatusRecord 참조). 존재하지 않으면
+    None(호출부가 404로 변환)."""
+    autobiography_status = await gateways.autobiographies.get_status_by_id(autobiography_id)
+    if autobiography_status is None:
+        return None
+    chapters_status = await gateways.chapters.list_status_by_autobiography(autobiography_id)
+    return autobiography_status, chapters_status
 
 
 async def get_chapter_draft(gateways: Gateways, chapter_draft_id: uuid.UUID) -> ChapterDraftRecord | None:
@@ -1146,6 +1162,16 @@ def _event_estimated_year(event: EventRecord) -> int | None:
     return None
 
 
+def _sort_events_chronologically(events: list[EventRecord]) -> list[EventRecord]:
+    """챕터 집필 프롬프트에 넘기기 직전, 사건을 시간순으로 정렬한다
+    (write_chapter 참조 — 원래 순서는 중요도·검색 순위라 시간과 무관하다).
+    연도를 알 수 없는 사건(_event_estimated_year가 None)은 완전히 배제하기보다
+    안전하게 맨 뒤로 보낸다."""
+    return sorted(
+        events, key=lambda e: (_event_estimated_year(e) is None, _event_estimated_year(e) or 0)
+    )
+
+
 def _rebalance_assignment_by_year(
     assigned: list[list[EventRecord]],
     retrieved: list[list[EventRecord]],
@@ -1402,6 +1428,13 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
         retrieved_events = await _retrieve_events_for_chapter(
             gateways, autobiography.user_id, chapter.title or ""
         )
+    # list_by_ids/_retrieve_events_for_chapter는 중요도·검색 순위로 정렬돼 있어
+    # (EventGateway.list_by_ids의 ORDER BY importance_score), 그대로 집필
+    # 프롬프트에 넘기면 시간 순서가 뒤죽박죽된 채 그대로 서술된다(2026-07-19
+    # 실사용 중 확인 — 1965년 결혼 다음 문단에 17세 졸업이 나오는 등). LLM에게
+    # "시간순으로 재배열하라"고 지시하는 것보다 코드에서 확정적으로 정렬하는
+    # 편이 훨씬 안정적이다.
+    retrieved_events = _sort_events_chronologically(retrieved_events)
     source_event_ids = [event.id for event in retrieved_events]
     time_scope = _chapter_time_scope(retrieved_events)
     other_titles = _other_chapter_titles(autobiography, chapter.chapter_index)
