@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 
 from app.agents import prompts
-from app.clients import solar
+from app.clients import llm_router
 from app.gateways.dto import AutobiographyRecord, ChapterDraftRecord, CharacterCreateData, CharacterRecord
 from app.gateways.factory import Gateways
 from app.models.enums import ConsentType, RiskClassification
@@ -32,7 +32,7 @@ async def scan_and_classify_chapter(
     if not chapter.content:
         return []
 
-    extraction = await solar.structured_completion(
+    extraction = await llm_router.structured_completion(
         prompts.build_ner_extraction_prompt(chapter_content=chapter.content),
         schema_name="ner_extraction",
         json_schema=prompts.NER_EXTRACTION_SCHEMA,
@@ -46,7 +46,7 @@ async def scan_and_classify_chapter(
     # 인물마다 별도 호출이라 인물 수만큼 지연·비용이 곱해졌다). 응답에서 누락된
     # 인물은 위해성 판단 없음으로 두는데, 기본값이 이미 가장 안전한 상태(전수
     # 가명화 + risk 없음)라 누락이 위험을 만들지는 않는다.
-    risk_result = await solar.structured_completion(
+    risk_result = await llm_router.structured_completion(
         prompts.build_third_party_risk_batch_prompt(
             person_names=[p["name"].strip() for p in people],
             chapter_content=chapter.content,

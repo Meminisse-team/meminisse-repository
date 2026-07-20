@@ -144,7 +144,13 @@ async def render_manuscript_html(gateways: Gateways, autobiography: Autobiograph
     return template.render(
         title=autobiography.title,
         author_name=author.name if author else None,
-        book_synopsis=autobiography.book_synopsis,
+        # book_synopsis도 챕터 본문과 동일하게 문단 단위로 나눠 렌더링한다 —
+        # <p> 태그 하나에 원문 그대로 넣으면 HTML이 줄바꿈을 공백으로 뭉개버려
+        # 문단 구분이 사라지는 문제가 있었다(2026-07-20 발견, 특히 모델이 프롬프트
+        # 지시를 어기고 앞에 마크다운 제목을 붙인 경우 제목·본문이 한 줄로 붙어
+        # 보이는 사고로 이어짐 — app/services/autobiography_service.py의
+        # _strip_synopsis_markdown_header가 그 앞단을 방어한다).
+        book_synopsis_paragraphs=_split_paragraphs(autobiography.book_synopsis or ""),
         chapters=chapter_views,
         parts=parts,
         font_url=_resolve_manuscript_font_url(),

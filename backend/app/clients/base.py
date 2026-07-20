@@ -7,6 +7,7 @@ AsyncOpenAI 클라이언트 하나를 Solar와 Embeddings가 함께 재사용한
 
 from functools import lru_cache
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.config import settings
@@ -35,9 +36,17 @@ _MAX_RETRIES = 1
 
 @lru_cache(maxsize=1)
 def get_upstage_client() -> AsyncOpenAI:
+    # http_client를 직접 넘긴다 — openai==1.54.0의 내부 기본 생성 경로
+    # (AsyncHttpxClientWrapper)가 httpx>=0.28에서 제거된 `proxies` 인자를 여전히
+    # 넘겨 AsyncOpenAI() 생성 자체가 TypeError로 죽는 문제(2026-07-11)가 있다.
+    # 여기서 직접 만든 httpx.AsyncClient를 넘기면 그 내부 생성 경로 자체를 우회해
+    # 설치된 httpx 버전과 무관하게 동작한다
+    # (timeout/max_retries는 이 인자들과 별개로 openai SDK가 매 요청마다 적용하므로
+    # 그대로 유효하다 — 직접 확인함).
     return AsyncOpenAI(
         api_key=settings.UPSTAGE_API_KEY,
         base_url=UPSTAGE_BASE_URL,
+        http_client=httpx.AsyncClient(),
         timeout=_REQUEST_TIMEOUT,
         max_retries=_MAX_RETRIES,
     )

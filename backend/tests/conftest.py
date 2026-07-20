@@ -14,6 +14,13 @@
 `setdefault`를 쓰는 이유: 누군가 실제 Postgres에 대고 통합 테스트를 돌리고 싶어
 `GATEWAY_BACKEND=postgres pytest ...`처럼 환경변수를 명시적으로 주면 그 의도를
 존중한다 — 이 conftest는 "아무 설정도 안 했을 때의 안전한 기본값"만 강제한다.
+
+같은 이유로 `AUTOBIOGRAPHY_LLM_PROVIDER`도 강제한다(2026-07-20) — billgates 계정
+실험을 위해 `.env`에 `AUTOBIOGRAPHY_LLM_PROVIDER=gemini`를 켜둔 채 pytest를 돌리면,
+`app.clients.solar.*`를 패치해둔 기존 테스트(test_autobiography_phase34_pipeline.py
+등)가 그 패치를 우회해 실제 Gemini API를 호출해버린다(실제로 재현: 429
+RESOURCE_EXHAUSTED로 테스트 실패). 이 프로젝트 테스트는 전부 Solar 라우팅을
+전제로 목(mock)을 걸어뒀으므로 기본값을 고정한다.
 """
 
 import os
@@ -22,6 +29,7 @@ from unittest.mock import patch
 import pytest
 
 os.environ.setdefault("GATEWAY_BACKEND", "mock")
+os.environ.setdefault("AUTOBIOGRAPHY_LLM_PROVIDER", "solar")
 
 
 class _AlwaysAcquiringRedisClient:

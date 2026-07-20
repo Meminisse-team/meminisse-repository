@@ -68,3 +68,7 @@ def test_raw_input_text_from_persona_result_keeps_only_user_turns() -> None:
     assert "부산에서 태어났어요" in text
     assert "1963년 겨울이었어요" in text
     assert "그때가 언제였나요" not in text
+
+# NLI 기반 정합률 청크 분할(_chunk_raw_input_for_nli)은 2026-07-19 로컬 NLI가
+# 세션당 190~210초로 실측돼 코드베이스에서 완전히 삭제되며 함께 제거됐다 —
+# evals/information_preservation.py의 compute_precision docstring 참조.

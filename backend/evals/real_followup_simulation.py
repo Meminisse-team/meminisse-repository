@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -68,11 +69,11 @@ if str(_BACKEND) not in sys.path:
 from app.clients import solar
 from app.database import AsyncSessionLocal
 from app.gateways.dto import SessionCreateData, UserCreateData, UserRecord
-from app.gateways.factory import Gateways
+from app.gateways.factory import Gateways, gateways_context
 from app.models.enums import MessageRole, SessionType
 from app.services import event_extraction_service
-from evals.deepeval_narrative_coherence import _run_phase34
 from evals.followup_trigger_audit import _classify_with_retry
+from evals.parallel_chapters import DEFAULT_CHAPTER_CONCURRENCY, run_phase34_parallel
 from scripts.seed_dummy import fetch_questions, get_or_create_auth_user, parse_dummy_data
 
 _STAGE_TIMEOUT_SECONDS = 60
@@ -228,6 +229,21 @@ async def seed_augmented_shadow_user(
     return shadow_user
 
 
+_SESSION_CONCURRENCY = 4  # Phase 2 재처리(최대 100세션)를 순차로 돌리면 그것만으로도
+# 매우 오래 걸린다(scripts/process_seeded_sessions.py와 동일한 문제) — 세션마다
+# 독립 트랜잭션이라 병렬화가 안전하다(process_completed_session이 세션 하나
+# 안에서 완결되는 멱등 함수라는 전제, event_extraction_service 모듈 docstring 참조).
+
+
+async def _process_one_augmented_session(session_id: uuid.UUID) -> None:
+    async with gateways_context() as gateways:
+        await asyncio.wait_for(
+            event_extraction_service.process_completed_session(gateways, session_id),
+            timeout=_STAGE_TIMEOUT_SECONDS * 2,
+        )
+        await gateways.commit()
+
+
 async def run_with_followup_condition(
     gateways: Gateways,
     source_user: UserRecord,
@@ -236,13 +252,20 @@ async def run_with_followup_condition(
     audit_file_path: Path | None = None,
     shadow_email: str,
     password: str,
+    chapter_concurrency: int = DEFAULT_CHAPTER_CONCURRENCY,
+    session_concurrency: int = _SESSION_CONCURRENCY,
 ) -> dict[str, Any]:
     """with_followup 조건의 진입점 — evals/real_data_comparison.py가 호출한다.
 
     file_path/audit_file_path 중 정확히 하나만 준다. audit_file_path가 있으면
     사람이 직접 편집한 꼬리질문 답변(모듈 docstring 참조)을 그대로 쓰고,
     file_path만 있으면 자동 판정+LLM 시뮬레이션(build_augmented_qa)으로
-    근사한다."""
+    근사한다.
+
+    Phase 2(이벤트 추출, 최대 100세션)와 Phase 3/4(챕터 집필)를 각각
+    session_concurrency/chapter_concurrency로 병렬 처리한다(2026-07-19,
+    "5조건×30명을 5시간 안에" 요구에 대응 — evals/parallel_chapters.py 모듈
+    docstring 참조. 세션·챕터 전부 독립 트랜잭션이라 병렬화해도 안전하다)."""
     if audit_file_path is not None and file_path is not None:
         raise ValueError("file_path와 audit_file_path 중 하나만 지정하세요.")
     if audit_file_path is not None:
@@ -257,15 +280,16 @@ async def run_with_followup_condition(
     )
 
     sessions = await gateways.sessions.list_by_user(shadow_user.id)
-    for i, session_summary in enumerate(sessions, start=1):
-        print(f"    [with_followup Phase2] {i}/{len(sessions)}", file=sys.stderr)
-        try:
-            await asyncio.wait_for(
-                event_extraction_service.process_completed_session(gateways, session_summary.id),
-                timeout=_STAGE_TIMEOUT_SECONDS * 2,
-            )
-            await gateways.commit()
-        except Exception as exc:  # noqa: BLE001 — 세션 하나 실패해도 나머지는 계속
-            print(f"    [실패] session={session_summary.id}: {exc!r}", file=sys.stderr)
+    semaphore = asyncio.Semaphore(session_concurrency)
 
-    return await _run_phase34(gateways, shadow_user)
+    async def _worker(index: int, session_id: uuid.UUID) -> None:
+        async with semaphore:
+            print(f"    [with_followup Phase2] {index}/{len(sessions)}", file=sys.stderr)
+            try:
+                await _process_one_augmented_session(session_id)
+            except Exception as exc:  # noqa: BLE001 — 세션 하나 실패해도 나머지는 계속
+                print(f"    [실패] session={session_id}: {exc!r}", file=sys.stderr)
+
+    await asyncio.gather(*(_worker(i, s.id) for i, s in enumerate(sessions, start=1)))
+
+    return await run_phase34_parallel(shadow_user.id, chapter_concurrency=chapter_concurrency)

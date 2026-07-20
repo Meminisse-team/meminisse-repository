@@ -52,7 +52,7 @@ class SolarJudgeModel(DeepEvalBaseLLM):
     async def a_generate(self, prompt: str, schema: type[T] | None = None) -> str | T:
         if schema is None:
             response = await solar.chat_completion(
-                [{"role": "user", "content": prompt}], reasoning_effort="low"
+                [{"role": "user", "content": prompt}], reasoning_effort="high"
             )
             return response.choices[0].message.content or ""
 
@@ -61,6 +61,6 @@ class SolarJudgeModel(DeepEvalBaseLLM):
             [{"role": "user", "content": prompt}],
             schema_name=schema.__name__.lower(),
             json_schema=json_schema,
-            reasoning_effort="low",
+            reasoning_effort="high",
         )
         return schema(**result)

@@ -121,14 +121,33 @@ async def apply_fixed_chronological_toc(gateways: Gateways, autobiography_id: uu
     await gateways.commit()
 
 
-async def _finish_phase4_from_selected_toc(gateways: Gateways, autobiography_id: uuid.UUID) -> dict[str, Any]:
+async def _finish_phase4_from_selected_toc(
+    gateways: Gateways, autobiography_id: uuid.UUID, *, chapter_concurrency: int = 1
+) -> dict[str, Any]:
     """select_toc_candidate 이후 공통 꼬리(챕터 집필 → 통일성 윤문) — full과 모든
-    TOC 관련 어블레이션이 공유한다."""
+    TOC 관련 어블레이션이 공유한다.
+
+    chapter_concurrency=1(기본값)은 기존과 동일한 순차 처리로, Mock 페르소나
+    경로(run_ablation_no_dynamic_toc)가 계속 이걸 쓴다 — Mock 백엔드에서는
+    evals/parallel_chapters.write_chapters_parallel을 쓰면 안 되므로(그 모듈
+    docstring 참조) 기본값을 안전한 쪽으로 유지했다. 1보다 크면 실제 Postgres
+    백엔드 전용 병렬 경로를 탄다(evals/real_data_comparison.py가
+    chapter_concurrency>1로 호출)."""
     autobiography = await autobiography_service.select_toc_candidate(gateways, autobiography_id, 0)
-    chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
-    for chapter in chapters:
-        await autobiography_service.write_chapter(gateways, chapter.id)
-    autobiography = await autobiography_service.finalize_manuscript(gateways, autobiography.id)
+    chapter_ids = [c.id for c in await autobiography_service.list_chapter_drafts(gateways, autobiography.id)]
+
+    if chapter_concurrency > 1:
+        from evals.parallel_chapters import write_chapters_parallel
+        from app.gateways.factory import gateways_context
+
+        await write_chapters_parallel(chapter_ids, concurrency=chapter_concurrency)
+        async with gateways_context() as fresh_gateways:  # 병렬 집필 이후 새 세션으로 재확정 읽기
+            autobiography = await autobiography_service.finalize_manuscript(fresh_gateways, autobiography.id)
+    else:
+        for chapter_id in chapter_ids:
+            await autobiography_service.write_chapter(gateways, chapter_id)
+        autobiography = await autobiography_service.finalize_manuscript(gateways, autobiography.id)
+
     return {
         "title": autobiography.title,
         "book_synopsis": autobiography.book_synopsis,
@@ -136,13 +155,17 @@ async def _finish_phase4_from_selected_toc(gateways: Gateways, autobiography_id:
     }
 
 
-async def run_no_dynamic_toc_for_user(gateways: Gateways, user_id: uuid.UUID) -> dict[str, Any]:
+async def run_no_dynamic_toc_for_user(
+    gateways: Gateways, user_id: uuid.UUID, *, chapter_concurrency: int = 1
+) -> dict[str, Any]:
     """no_dynamic_toc 조건의 본체 — 이미 존재하는 (gateways, user_id)를 받아 그대로
     실행한다. Mock 페르소나(run_ablation_no_dynamic_toc)와 실제 DB 페르소나
     (evals/real_data_comparison.py) 양쪽이 이 함수를 공유한다."""
     autobiography = await autobiography_service.consolidate_autobiography(gateways, user_id)
     await apply_fixed_chronological_toc(gateways, autobiography.id)
-    return await _finish_phase4_from_selected_toc(gateways, autobiography.id)
+    return await _finish_phase4_from_selected_toc(
+        gateways, autobiography.id, chapter_concurrency=chapter_concurrency
+    )
 
 
 def _merge_extracted_events(extracted_events: list[dict[str, Any]]) -> dict[str, Any]:

@@ -27,7 +27,7 @@ from decimal import Decimal
 from app.agents import prompts
 from app.clients import embeddings as embeddings_client
 from app.clients import groundedness as groundedness_client
-from app.clients import solar
+from app.clients import llm_router
 from app.data.question_bank import QUESTION_BANK_BY_SEQUENCE
 from app.gateways.dto import (
     AutobiographyRecord,
@@ -96,6 +96,20 @@ def _strip_prompt_section_echo(text: str, *, body_marker: str) -> str:
     if body_marker in text:
         text = text.split(body_marker, 1)[1]
     return text.strip()
+
+
+# 책 시놉시스 응답이 "# 시놉시스: 『제목』" 같은 마크다운 제목 줄로 시작하는 경우를
+# 잡는다 — Claude 계열 모델이 프롬프트에 "제목을 붙이지 말라"는 명시적 지시가
+# 없으면 관성적으로 헤더를 앞에 붙이는 경향이 실사용 중 확인됐다(2026-07-20,
+# PDF 소개 페이지에서 제목·본문이 한 문단으로 뭉쳐 보이는 사고로 발견). 프롬프트
+# 자체도 이 지시를 명시하도록 고쳤지만(BOOK_SYNOPSIS_SYSTEM_PROMPT), 지시를
+# 어기는 경우에 대비한 코드 레벨 백스톱이다 — _strip_prompt_section_echo와 같은
+# 발상.
+_SYNOPSIS_MARKDOWN_HEADER_PATTERN = re.compile(r"^#+\s*[^\n]*\n+")
+
+
+def _strip_synopsis_markdown_header(text: str) -> str:
+    return _SYNOPSIS_MARKDOWN_HEADER_PATTERN.sub("", text.strip(), count=1).strip()
 
 
 def _count_overused_terms(content: str) -> list[str]:
@@ -344,7 +358,7 @@ async def _generate_content_based_customization_recommendation(
         f"(시기: {event.occurred_at_label or '미상'}, 감정: {event.emotion_tag or '미상'})"
         for event in events[:15]
     )
-    result = await solar.structured_completion(
+    result = await llm_router.structured_completion(
         prompts.build_customization_recommendation_prompt(
             style_bible=style_bible_text, event_summaries=event_summaries
         ),
@@ -444,7 +458,7 @@ async def generate_sample_previews(
             style_bible=style_bible_text,
             event_summaries=event_summaries,
         )
-        result = await solar.structured_completion(
+        result = await llm_router.structured_completion(
             messages,
             schema_name="sample_preview",
             json_schema=prompts.SAMPLE_PREVIEW_SCHEMA,
@@ -593,7 +607,7 @@ async def _judge_same_event(event_a: EventRecord, event_b: EventRecord) -> bool:
         event_a_summary=f"{event_a.one_line_summary} ({event_a.occurred_at_label or '시기 미상'})",
         event_b_summary=f"{event_b.one_line_summary} ({event_b.occurred_at_label or '시기 미상'})",
     )
-    result = await solar.structured_completion(
+    result = await llm_router.structured_completion(
         messages,
         schema_name="event_merge_judge",
         json_schema=prompts.EVENT_MERGE_JUDGE_SCHEMA,
@@ -657,7 +671,7 @@ async def _generate_style_bible(gateways: Gateways, user_id: uuid.UUID) -> dict 
     if not all_prose:
         return None
 
-    response = await solar.chat_completion(
+    response = await llm_router.chat_completion(
         prompts.build_style_bible_prompt(all_session_prose=all_prose),
         reasoning_effort="medium",
     )
@@ -693,7 +707,7 @@ async def generate_toc_candidates(gateways: Gateways, autobiography_id: uuid.UUI
             event_summaries_with_scores=summaries_block
         )
 
-    result_json = await solar.structured_completion(
+    result_json = await llm_router.structured_completion(
         toc_messages,
         schema_name="toc_generation",
         json_schema=prompts.TOC_GENERATION_SCHEMA,
@@ -921,7 +935,7 @@ async def _generate_part_synopses(
         # 계획 서술("The user wants us to create...")만 담긴 응답을 반환한 사고가
         # 있었다 — reasoning_effort="high"가 max_tokens를 추론 토큰만으로
         # 소진해버린 챕터 집필 사고와 같은 계열의 문제로 보인다. 넉넉한 여유를 둔다.
-        response = await solar.chat_completion(
+        response = await llm_router.chat_completion(
             prompts.build_part_synopsis_prompt(
                 book_synopsis=book_synopsis,
                 part_title=part["part_title"],
@@ -1064,11 +1078,11 @@ def _chapter_connecting_thread(autobiography: AutobiographyRecord, chapter_index
 
 async def _generate_book_synopsis(autobiography: AutobiographyRecord, selected_toc: dict) -> str:
     style_bible_text = (autobiography.style_bible or {}).get("content", "")
-    response = await solar.chat_completion(
+    response = await llm_router.chat_completion(
         prompts.build_book_synopsis_prompt(style_bible=style_bible_text, toc=_toc_text(selected_toc)),
         reasoning_effort="medium",
     )
-    return response.choices[0].message.content or ""
+    return _strip_synopsis_markdown_header(response.choices[0].message.content or "")
 
 
 async def _generate_book_title(autobiography: AutobiographyRecord, selected_toc: dict) -> str:
@@ -1077,7 +1091,7 @@ async def _generate_book_title(autobiography: AutobiographyRecord, selected_toc:
     확정돼야 비로소 책 전체를 관통하는 제목을 지을 컨텍스트(스타일 바이블 + 목차)가
     갖춰지므로, book_synopsis와 같은 시점에 함께 생성한다."""
     style_bible_text = (autobiography.style_bible or {}).get("content", "")
-    result = await solar.structured_completion(
+    result = await llm_router.structured_completion(
         prompts.build_book_title_prompt(style_bible=style_bible_text, toc=_toc_text(selected_toc)),
         schema_name="book_title",
         json_schema=prompts.BOOK_TITLE_SCHEMA,
@@ -1321,7 +1335,7 @@ async def _previous_chapter_summary(
         return previous.chapter_synopsis
     if not previous.content:
         return None
-    response = await solar.chat_completion(
+    response = await llm_router.chat_completion(
         prompts.build_chapter_recap_prompt(chapter_content=previous.content),
         reasoning_effort="low",
     )
@@ -1395,7 +1409,7 @@ async def _repair_chapter_content(
         flagged_items=_flagged_items_for_repair(factcheck_report, groundedness_report),
         source_events_text=source_events_text,
     )
-    response = await solar.chat_completion(messages, reasoning_effort="medium", max_tokens=24000)
+    response = await llm_router.chat_completion(messages, reasoning_effort="medium", max_tokens=24000)
     return response.choices[0].message.content or ""
 
 
@@ -1542,7 +1556,7 @@ async def write_chapter(gateways: Gateways, chapter_draft_id: uuid.UUID) -> Chap
     # 않는다. 빈 응답이거나 길이가 ±30% 넘게 변하면(교열이 아니라 개고를 한
     # 것) 원본을 유지한다.
     if content.strip():
-        proofread_response = await solar.chat_completion(
+        proofread_response = await llm_router.chat_completion(
             prompts.build_chapter_proofread_prompt(
                 chapter_content=content,
                 overused_terms=_count_overused_terms(content),
@@ -1599,7 +1613,7 @@ async def _generate_chapter_synopsis(
     part_context: dict | None = None,
     time_scope: str | None = None,
 ) -> str:
-    response = await solar.chat_completion(
+    response = await llm_router.chat_completion(
         prompts.build_chapter_synopsis_prompt(
             book_synopsis=book_synopsis,
             chapter_title=chapter_title,
@@ -1655,7 +1669,7 @@ async def _generate_chapter_content(
     # 실제 본문을 한 글자도 못 받는 경우가 실측됐다. 분량 지시 상향(2026-07-19,
     # 장면 6~7개·장면당 문단 8개 이상·문단당 4문장 이상 — 목표 약 5,500~7,000자)
     # 이후에는 추론 토큰 여유를 그만큼 더 넉넉히 둬야 같은 사고가 재현되지 않는다.
-    response = await solar.chat_completion(messages, reasoning_effort="high", max_tokens=24000)
+    response = await llm_router.chat_completion(messages, reasoning_effort="high", max_tokens=24000)
     return response.choices[0].message.content or ""
 
 
@@ -1732,7 +1746,7 @@ async def _run_factcheck(
     if not chapter_content.strip():
         return {"checked_at": _now_iso(), "total_facts": 0, "unchecked_facts": 0, "flags": []}
 
-    extraction = await solar.structured_completion(
+    extraction = await llm_router.structured_completion(
         prompts.build_fact_reextraction_prompt(chapter_content=chapter_content),
         schema_name="fact_reextraction",
         json_schema=prompts.FACT_REEXTRACTION_SCHEMA,
@@ -1831,7 +1845,7 @@ async def _run_groundedness_check(
         }
 
     source_events_text = _source_events_text(source_events)
-    result = await solar.structured_completion(
+    result = await llm_router.structured_completion(
         prompts.build_groundedness_judge_prompt(
             chapter_content=chapter_content,
             source_events_text=source_events_text,
@@ -2030,7 +2044,7 @@ async def _finalize_batch(
 
     chapter_indexes = [chapter.chapter_index for chapter in batch]
     try:
-        response = await solar.chat_completion(
+        response = await llm_router.chat_completion(
             revision_messages,
             reasoning_effort="high",
             max_tokens=_FINALIZE_BATCH_MAX_TOKENS,

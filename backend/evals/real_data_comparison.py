@@ -77,9 +77,8 @@ from app.gateways.dto import EventCreateData, UserCreateData, UserRecord
 from app.gateways.factory import Gateways, gateways_context
 from app.models.enums import EventSourceType
 from app.services import autobiography_service
-from evals import baseline_and_ablations, information_preservation, real_followup_simulation
+from evals import baseline_and_ablations, information_preservation, parallel_chapters, real_followup_simulation
 from evals.baseline_ablation_comparison import _score_coherence
-from evals.deepeval_narrative_coherence import _run_phase34
 from evals.solar_judge_model import SolarJudgeModel
 from scripts.seed_dummy import get_or_create_auth_user
 
@@ -161,8 +160,8 @@ async def _clone_events_to_shadow_user(
     return shadow_user
 
 
-async def run_full(gateways: Gateways, user: UserRecord) -> dict:
-    return await _run_phase34(gateways, user)
+async def run_full(gateways: Gateways, user: UserRecord, *, chapter_concurrency: int) -> dict:
+    return await parallel_chapters.run_phase34_parallel(user.id, chapter_concurrency=chapter_concurrency)
 
 
 async def run_baseline(raw_input_text: str, *, persona_name: str) -> dict:
@@ -180,22 +179,28 @@ async def run_baseline(raw_input_text: str, *, persona_name: str) -> dict:
     }
 
 
-async def run_no_dynamic_toc(gateways: Gateways, source_user: UserRecord, *, password: str) -> dict:
+async def run_no_dynamic_toc(
+    gateways: Gateways, source_user: UserRecord, *, password: str, chapter_concurrency: int
+) -> dict:
     events = await gateways.events.list_unmerged_verified(source_user.id)
     event_dicts = [baseline_and_ablations._event_record_to_merge_dict(e) for e in events]
     shadow_user = await _clone_events_to_shadow_user(
         gateways, source_user=source_user, event_dicts=event_dicts, email_suffix="no-dynamic-toc", password=password
     )
-    return await baseline_and_ablations.run_no_dynamic_toc_for_user(gateways, shadow_user.id)
+    return await baseline_and_ablations.run_no_dynamic_toc_for_user(
+        gateways, shadow_user.id, chapter_concurrency=chapter_concurrency
+    )
 
 
-async def run_no_event_split(gateways: Gateways, source_user: UserRecord, *, password: str) -> dict:
+async def run_no_event_split(
+    gateways: Gateways, source_user: UserRecord, *, password: str, chapter_concurrency: int
+) -> dict:
     events = await gateways.events.list_unmerged_verified(source_user.id)
     merged = baseline_and_ablations.merge_event_records(events)
     shadow_user = await _clone_events_to_shadow_user(
         gateways, source_user=source_user, event_dicts=[merged], email_suffix="no-event-split", password=password
     )
-    return await _run_phase34(gateways, shadow_user)
+    return await parallel_chapters.run_phase34_parallel(shadow_user.id, chapter_concurrency=chapter_concurrency)
 
 
 async def evaluate_one_persona(
@@ -204,6 +209,8 @@ async def evaluate_one_persona(
     password: str,
     file_path: Path | None = None,
     followup_audit_file: Path | None = None,
+    chapter_concurrency: int = parallel_chapters.DEFAULT_CHAPTER_CONCURRENCY,
+    precision_sample_size: int | None = None,
 ) -> dict:
     async with gateways_context() as gateways:
         source_user = await gateways.users.get_by_email(email)
@@ -214,10 +221,14 @@ async def evaluate_one_persona(
         judge = SolarJudgeModel()
 
         runners = {
-            "full": run_full(gateways, source_user),
+            "full": run_full(gateways, source_user, chapter_concurrency=chapter_concurrency),
             "baseline": run_baseline(raw_input_text, persona_name=source_user.name),
-            "no_dynamic_toc": run_no_dynamic_toc(gateways, source_user, password=password),
-            "no_event_split": run_no_event_split(gateways, source_user, password=password),
+            "no_dynamic_toc": run_no_dynamic_toc(
+                gateways, source_user, password=password, chapter_concurrency=chapter_concurrency
+            ),
+            "no_event_split": run_no_event_split(
+                gateways, source_user, password=password, chapter_concurrency=chapter_concurrency
+            ),
         }
         active_conditions = list(_CONDITIONS)
         if followup_audit_file is not None:
@@ -230,6 +241,7 @@ async def evaluate_one_persona(
                 audit_file_path=followup_audit_file,
                 shadow_email=_shadow_email(source_user.email, suffix="with-followup"),
                 password=password,
+                chapter_concurrency=chapter_concurrency,
             )
         elif file_path is not None:
             runners["with_followup"] = real_followup_simulation.run_with_followup_condition(
@@ -238,6 +250,7 @@ async def evaluate_one_persona(
                 file_path=file_path,
                 shadow_email=_shadow_email(source_user.email, suffix="with-followup"),
                 password=password,
+                chapter_concurrency=chapter_concurrency,
             )
         else:
             # --file도 --followup-audit-file도 없으면 with_followup의 원본 질문/답변
@@ -265,7 +278,9 @@ async def evaluate_one_persona(
                 coherence = await asyncio.wait_for(_score_coherence(judge, manuscript), timeout=_CONDITION_TIMEOUT_SECONDS)
                 info = await asyncio.wait_for(
                     information_preservation.evaluate_manuscript(
-                        raw_input_text=raw_input_text, final_content=final_content
+                        raw_input_text=raw_input_text,
+                        final_content=final_content,
+                        precision_sample_size=precision_sample_size,
                     ),
                     timeout=_CONDITION_TIMEOUT_SECONDS,
                 )
@@ -289,11 +304,22 @@ async def evaluate_one_persona(
 
 
 async def main(
-    email: str, *, password: str, file_path: Path | None, followup_audit_file: Path | None
+    email: str,
+    *,
+    password: str,
+    file_path: Path | None,
+    followup_audit_file: Path | None,
+    chapter_concurrency: int,
+    precision_sample_size: int | None,
 ) -> None:
     print(f"[평가 중] {email}", file=sys.stderr)
     per_condition = await evaluate_one_persona(
-        email, password=password, file_path=file_path, followup_audit_file=followup_audit_file
+        email,
+        password=password,
+        file_path=file_path,
+        followup_audit_file=followup_audit_file,
+        chapter_concurrency=chapter_concurrency,
+        precision_sample_size=precision_sample_size,
     )
 
     run_dir = _RESULTS_DIR / f"real_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -336,6 +362,23 @@ if __name__ == "__main__":
         "followup_answer를 채운 파일 — 있으면 --file 대신 이걸 그대로 써서 with_followup을 "
         "만든다(자동 판정·시뮬레이션 생략).",
     )
+    parser.add_argument(
+        "--chapter-concurrency",
+        type=int,
+        default=parallel_chapters.DEFAULT_CHAPTER_CONCURRENCY,
+        help=f"조건 하나당 챕터를 동시에 몇 개씩 집필할지(기본 {parallel_chapters.DEFAULT_CHAPTER_CONCURRENCY}). "
+        "높일수록 빠르지만 429(요청 한도) 위험도 커진다.",
+    )
+    parser.add_argument(
+        "--precision-sample-size",
+        type=int,
+        default=None,
+        help="사실정합률(precision) 채점에 쓸 문장 수 상한(기본 전체) — 책 한 권이면 문장이 "
+        "수백 개라 Solar API 호출도 그만큼 든다. 로컬 NLI로 무료 대체하려던 계획은 "
+        "2026-07-19 로컬 NLI가 세션당 190~210초로 실측돼 코드베이스에서 삭제되며 무산됐다 "
+        "(evals/information_preservation.py compute_precision 참조) — 지금은 이 값을 줄이는 "
+        "것이 유일한 비용 절감 레버다.",
+    )
     args = parser.parse_args()
     asyncio.run(
         main(
@@ -343,5 +386,7 @@ if __name__ == "__main__":
             password=args.password,
             file_path=Path(args.file) if args.file else None,
             followup_audit_file=Path(args.followup_audit_file) if args.followup_audit_file else None,
+            chapter_concurrency=args.chapter_concurrency,
+            precision_sample_size=args.precision_sample_size,
         )
     )

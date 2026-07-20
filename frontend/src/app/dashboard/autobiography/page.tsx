@@ -237,16 +237,43 @@ export default function AutobiographyPage() {
     setError(null);
     try {
       const updated = await autobiographiesApi.generateToc(autobiography.id);
+      // TOC 재생성 성공 — 기존 챕터 초안은 무효가 되므로 프론트 상태도 초기화한다.
+      setChapters([]);
       setAutobiography(updated);
     } catch (err) {
+      console.error("[handleGenerateToc] error:", err);
       if (err instanceof ApiError && err.status === 409) {
         setError("아직 목차를 만들 준비가 안 됐어요. 대화를 조금 더 나눠주세요.");
       } else {
-        setError("목차를 만들지 못했어요. 잠시 후 다시 시도해주세요.");
+        setError(
+          `목차를 만들지 못했어요. 잠시 후 다시 시도해주세요.${
+            err instanceof Error ? " (" + err.message + ")" : ""
+          }`,
+        );
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  // 목차를 이미 선택한 뒤(ChapterProgress/FinalManuscript 화면)에도 "목차부터 다시"
+  // 만들 수 있는 입구 — 예전에는 목차 선택이 한 번 하면 끝이라는 전제로 이 화면
+  // 분기(아래 렌더링부의 selectedIndex 기준 삼항)에 재진입 경로가 아예 없었다
+  // (2026-07-20 발견). 백엔드(generate_toc_candidates)는 재호출 시 이미
+  // toc_data.selected_candidate_index를 null로 되돌려주므로, 그 결과를
+  // setAutobiography에 반영하기만 하면 화면이 자동으로 TocSelection으로
+  // 돌아간다 — handleGenerateToc 자체는 그대로 재사용하고, 여기서는 "지금까지
+  // 쓴 챕터가 전부 사라진다"는 확인만 앞에 붙인다(다시 쓰기 handleRewriteChapter의
+  // window.confirm 패턴과 동일).
+  async function handleRegenerateToc() {
+    if (
+      !window.confirm(
+        "목차를 다시 만들면 지금까지 쓴 챕터 본문이 모두 사라지고, 새 목차를 고른 뒤 처음부터 다시 써야 해요. 계속할까요?"
+      )
+    ) {
+      return;
+    }
+    await handleGenerateToc();
   }
 
   async function handleSelectToc(index: number) {
@@ -367,7 +394,9 @@ export default function AutobiographyPage() {
     <main className="px-6 pb-10 pt-14">
       <h1 className="mb-8 font-serif-kr text-2xl text-black">자서전 집필</h1>
 
-      {error && <p className="mb-6 text-base text-black/60">{error}</p>}
+      {error && (
+        <p className="mb-6 rounded-md bg-red-50 px-4 py-3 text-base text-red-700">{error}</p>
+      )}
 
       {autobiography.final_content ? (
         <FinalManuscript
@@ -382,6 +411,7 @@ export default function AutobiographyPage() {
             setChapters((prev) => prev.map((c) => (c.id === chapterId ? { ...c, content } : c)))
           }
           onRewrite={handleRewriteChapter}
+          onRegenerateToc={handleRegenerateToc}
         />
       ) : selectedIndex !== null ? (
         <ChapterProgress
@@ -399,6 +429,7 @@ export default function AutobiographyPage() {
           onRewrite={handleRewriteChapter}
           onWriteAll={handleWriteAll}
           onFinalize={handleFinalize}
+          onRegenerateToc={handleRegenerateToc}
         />
       ) : candidates.length > 0 ? (
         <TocSelection candidates={candidates} selecting={selecting} onSelect={handleSelectToc} />
@@ -607,6 +638,7 @@ function ChapterProgress({
   onRewrite,
   onWriteAll,
   onFinalize,
+  onRegenerateToc,
 }: {
   chapters: ChapterDraft[];
   selectedCandidate: TocCandidate | null;
@@ -620,6 +652,7 @@ function ChapterProgress({
   onRewrite: (chapter: ChapterDraft) => void;
   onWriteAll: () => void;
   onFinalize: () => void;
+  onRegenerateToc: () => void;
 }) {
   const parts = selectedCandidate?.parts ?? [];
   const hasParts = parts.length > 1;
@@ -689,6 +722,20 @@ function ChapterProgress({
       {allWritten && finalizeTriggered && (
         <p className="text-sm text-black/40">최종 원고를 다듬고 있어요. 잠시만 기다려주세요...</p>
       )}
+
+      <div className="mt-4 border-t border-black/10 pt-4">
+        <button
+          type="button"
+          onClick={onRegenerateToc}
+          disabled={busy || rewritingChapterIds.size > 0}
+          className="text-sm text-black/40 underline underline-offset-4 hover:text-black/60 disabled:no-underline disabled:opacity-40"
+        >
+          목차 처음부터 다시 만들기
+        </button>
+        <p className="mt-1 text-xs text-black/30">
+          지금까지 쓴 챕터 본문이 전부 사라지고, 새 목차를 고른 뒤 처음부터 다시 쓰게 돼요.
+        </p>
+      </div>
     </div>
   );
 }
@@ -818,6 +865,7 @@ function FinalManuscript({
   onAutobiographyChange,
   onChapterContentSaved,
   onRewrite,
+  onRegenerateToc,
 }: {
   autobiography: Autobiography;
   chapters: ChapterDraft[];
@@ -828,6 +876,7 @@ function FinalManuscript({
   onAutobiographyChange: (updated: Autobiography) => void;
   onChapterContentSaved: (chapterId: string, content: string) => void;
   onRewrite: (chapter: ChapterDraft) => void;
+  onRegenerateToc: () => void;
 }) {
   const pdfUrl = autobiography.pdf_url;
   return (
@@ -894,6 +943,21 @@ function FinalManuscript({
           {autobiography.final_content}
         </p>
       )}
+
+      <div className="border-t border-black/10 pt-4">
+        <button
+          type="button"
+          onClick={onRegenerateToc}
+          disabled={busy || rewritingChapterIds.size > 0}
+          className="text-sm text-black/40 underline underline-offset-4 hover:text-black/60 disabled:no-underline disabled:opacity-40"
+        >
+          목차 처음부터 다시 만들기
+        </button>
+        <p className="mt-1 text-xs text-black/30">
+          완성된 책을 포함해 지금까지 쓴 챕터 본문이 전부 사라지고, 새 목차를 고른 뒤
+          처음부터 다시 쓰게 돼요.
+        </p>
+      </div>
     </article>
   );
 }

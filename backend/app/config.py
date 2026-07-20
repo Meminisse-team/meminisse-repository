@@ -78,4 +78,21 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str = ""
 
 
+    # ── Claude(Anthropic) — 자서전 집필(Phase 3/4) 세 번째 실험 프로바이더 ────────
+    # app/clients/claude.py 참조. Gemini와 같은 이유(AUTOBIOGRAPHY_LLM_PROVIDER가
+    # "claude"일 때만 적용)로 자서전 집필 파이프라인에만 쓰인다.
+    # 발급: https://console.anthropic.com → Settings → API Keys
+    ANTHROPIC_API_KEY: str = ""
+    # 이 프로젝트의 비용 논의(2026-07-20, 챕터 15개 전체 재생성 기준 대략 $2~4 추정)가
+    # Sonnet 5 가격을 전제로 이뤄졌다 — Opus는 그보다 훨씬 비싸고(약 1.7배) 이 작업
+    # (템플릿화된 한국어 장문 생성)에 필요한 지능 수준을 넘어선다고 판단해 기본값으로
+    # 삼았다. 더 높은 품질이 필요하면 .env에서 claude-opus-4-8로 바꿀 수 있다.
+    CLAUDE_MODEL: str = "claude-sonnet-5"
+
+    # "solar"(기본값) | "claude". 자서전 집필 파이프라인 전용 스위치 —
+    # 다른 곳에는 영향 없다. 계정별 실험 전환은 스크립트에서 이 값을 런타임에 잠깐
+    # 덮어써 처리한다(backend/scripts 참조) — .env 기본값은 항상 "solar"로 둔다.
+    AUTOBIOGRAPHY_LLM_PROVIDER: Literal["solar", "claude"] = "solar"
+
+
 settings = Settings()

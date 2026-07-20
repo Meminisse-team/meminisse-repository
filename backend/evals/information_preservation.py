@@ -145,21 +145,39 @@ def compute_recall_curve(
     return curve
 
 
+_PRECISION_CONCURRENCY = 5  # groundedness.check(Solar API)를 문장 수만큼 무제한 동시 호출하면
+# 429(요청 한도)를 유발한다(evals/followup_trigger_audit.py 실측 사례) — 상한을 둔다.
+
+
 async def compute_precision(
     raw_input_text: str, final_content: str, *, sample_size: int | None = None
 ) -> dict[str, Any]:
     """모듈 docstring 마지막 문단 참조 — 챕터 문장 단위로 groundedness 2차
     게이트(solar-mini, evals/groundedness_gate_accuracy.py로 실측 검증됨)를
-    재사용해 원본에 근거한 문장 비율을 사실 정합률로 낸다."""
+    재사용해 원본에 근거한 문장 비율을 사실 정합률로 낸다.
+
+    로컬 NLI로 이 API 호출을 대체하는 방안을 2026-07-19에 시도했다가 걷어냈다
+    — 같은 날 프로덕션 왜곡 탐지(event_extraction_service)에서 로컬 NLI가
+    세션당 190~210초(GPU 없는 개발 환경)로 실측돼 Solar LLM 판정으로 교체되고
+    app/clients/nli.py의 모델 로딩 코드 자체가 삭제됐다(요청한 사람이 기대한
+    "로컬이라 빠르고 무료"라는 전제가 이 환경에서는 거짓으로 판명됨) —
+    이 함수가 의존하던 nli.classify_entailment_batch도 함께 사라져 즉시
+    AttributeError로 깨졌다. "시간·비용이 빠듯하면 NLI" 같은 대안은 이 환경에서는
+    성립하지 않는다 — Solar API 호출(이 함수)이 사실상 유일한 선택지다. 비용을
+    줄이려면 sample_size로 문장 수를 제한하는 것이 현실적인 레버다."""
     sentences = nli.split_sentences(final_content)
     if sample_size is not None:
         sentences = sentences[:sample_size]
     if not sentences or not raw_input_text.strip():
         return {"precision": None, "sentence_count": len(sentences), "grounded_count": 0, "ungrounded_sentences": []}
 
-    verdicts = await asyncio.gather(
-        *(groundedness.check(context=raw_input_text, answer=sentence) for sentence in sentences)
-    )
+    semaphore = asyncio.Semaphore(_PRECISION_CONCURRENCY)
+
+    async def _check(sentence: str) -> str:
+        async with semaphore:
+            return await groundedness.check(context=raw_input_text, answer=sentence)
+
+    verdicts = await asyncio.gather(*(_check(s) for s in sentences))
     grounded_flags = [v == groundedness.GROUNDED for v in verdicts]
     ungrounded = [s for s, ok in zip(sentences, grounded_flags) if not ok]
     return {
@@ -171,11 +189,15 @@ async def compute_precision(
 
 
 async def evaluate_manuscript(
-    *, raw_input_text: str, final_content: str, cutoffs: tuple[int, ...] = (5, 10, 15)
+    *,
+    raw_input_text: str,
+    final_content: str,
+    cutoffs: tuple[int, ...] = (5, 10, 15),
+    precision_sample_size: int | None = None,
 ) -> dict[str, Any]:
     keywords = await extract_keyword_pool(raw_input_text, top_k=max(cutoffs))
     recall_curve = compute_recall_curve(keywords, final_content, cutoffs=cutoffs)
-    precision_report = await compute_precision(raw_input_text, final_content)
+    precision_report = await compute_precision(raw_input_text, final_content, sample_size=precision_sample_size)
     return {
         "keyword_pool": keywords,
         "recall_curve": recall_curve,

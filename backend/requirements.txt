@@ -28,12 +28,15 @@ python-dotenv==1.2.2
 # 둘 다 OpenAI SDK와 호환되므로 AsyncOpenAI(base_url="https://api.upstage.ai/v1")로 직통 호출
 openai==1.54.0
 
+
+# AI — Claude/Anthropic (자서전 집필 Phase 3/4의 세 번째 실험 프로바이더, app/clients/claude.py 참조)
+anthropic==0.117.0
+
 # AI — Upstage Document Parse (Phase 1 텍스트 사진 선(先) 라벨링)
 # openai 패키지와 별개로 multipart/form-data 업로드가 필요하므로 httpx 직접 사용.
-# 0.28대는 AsyncClient에서 `proxies` 인자를 제거했는데 openai==1.54.0이 내부적으로
-# 그 인자를 여전히 넘겨 AsyncOpenAI() 생성 자체가 TypeError로 죽는다(실제 Solar
-# 채팅 호출에서 재현, 2026-07-11). 0.27대로 고정해 호환시킨다.
-httpx==0.27.2
+# app/clients/base.py의 get_upstage_client()가 AsyncOpenAI에 http_client를
+# 직접 넘겨 깨진 내부 생성 경로 자체를 우회하도록 고쳐 고정을 풀었다(2026-07-20).
+httpx>=0.28.1
 
 # 비동기 워커 (세션 후처리 / Phase 3·4 파이프라인 / PDF 조판)
 celery==5.4.0
