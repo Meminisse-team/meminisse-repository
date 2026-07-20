@@ -16,11 +16,12 @@ Solar 호출은 전부 모킹한다 — 이 테스트의 목적은 프롬프트 
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 
-from app.gateways.dto import EventCreateData, SessionCreateData
+from app.gateways.dto import EventCreateData, EventImportanceUpdate, SessionCreateData
 from app.gateways.factory import Gateways, _build_mock_gateways
 from app.models.enums import ConsentGrantedBy, ConsentType, EventSourceType, SessionType
 from app.schemas.user import UserCreate
@@ -167,6 +168,63 @@ async def test_full_phase3_4_pipeline_runs_end_to_end() -> None:
 
         finalized_chapters = await autobiography_service.list_chapter_drafts(gateways, autobiography.id)
         assert all(c.status.value == "finalized" for c in finalized_chapters)
+
+
+@pytest.mark.asyncio
+async def test_generate_toc_candidates_caps_events_by_importance() -> None:
+    """실측(2026-07-20, ordinary@dummy.com — 미병합 verified 이벤트 437개)으로
+    이벤트 전량을 프롬프트에 넣으면 Solar가 클라이언트 타임아웃(90s)을 넘겨
+    openai.APITimeoutError로 매번 실패하는 사고가 재현됐다. _TOC_GENERATION_MAX_EVENTS
+    (150)를 넘는 계정은 중요도 상위만 골라 프롬프트 크기를 상한선 아래로 유지해야
+    한다 — 이 테스트는 이벤트 200개(중요도 0~199) 중 상위 150개만, 그것도 중요도가
+    가장 높은 것들만 프롬프트에 남는지 확인한다."""
+    captured_messages: list[list[dict[str, str]]] = []
+
+    async def _recording_structured_completion(messages, *, schema_name, json_schema, **kwargs):
+        captured_messages.append(messages)
+        return _STRUCTURED_RESPONSES[schema_name]
+
+    with (
+        patch("app.clients.solar.structured_completion", new=_recording_structured_completion),
+        patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
+    ):
+        gateways = _build_mock_gateways()
+        user = await user_service.create_user(
+            gateways, UserCreate(email="p34-toc-cap@example.com", name="테스터", password="test-password-123")
+        )
+        events = await gateways.events.bulk_create(
+            [
+                EventCreateData(
+                    user_id=user.id, source_type=EventSourceType.SESSION_CHAT,
+                    one_line_summary=f"사건 {i}", prose_paragraph=f"사건 {i}에 대한 이야기.",
+                    verified=True, emotion_intensity=3,
+                )
+                for i in range(200)
+            ]
+        )
+        await gateways.events.bulk_update_importance(
+            [
+                EventImportanceUpdate(
+                    event_id=event.id,
+                    importance_score=Decimal(i),
+                    importance_signals={},
+                    life_milestone_category=None,
+                )
+                for i, event in enumerate(events)
+            ]
+        )
+        await gateways.commit()
+
+        autobiography = await autobiography_service.get_or_create_autobiography(gateways, user.id)
+        await autobiography_service.generate_toc_candidates(gateways, autobiography.id)
+
+    toc_prompt_content = captured_messages[0][1]["content"]
+    lines = toc_prompt_content.splitlines()
+    assert len(lines) == 150
+    # 중요도 199~50이 남아야 한다(0~49는 잘려나감).
+    assert "[중요도 199]" in lines[0]
+    assert "[중요도 50]" in lines[-1]
+    assert "[중요도 49]" not in toc_prompt_content
 
 
 @pytest.mark.asyncio

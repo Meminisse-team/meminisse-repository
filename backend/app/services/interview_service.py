@@ -401,6 +401,17 @@ async def add_user_turn(
             newly_filled = gating.get("newly_filled_slots", [])
             updated_slots = {**session.slots_filled, **{slot: True for slot in newly_filled}}
             missing_required = [key for key in prompts.REQUIRED_SLOTS if not updated_slots.get(key)]
+            if missing_required and session.question_id is not None:
+                # 사건형이 아닌 성찰·메시지·자유 발언 질문은 장소·시기·누구와 같은
+                # 필수 슬롯을 캐물으면 부자연스럽다 — prompts.REFLECTIVE_QUESTION_
+                # SEQUENCE_ORDERS 참조. missing_required가 실제로 있을 때만 조회해
+                # 매 턴 불필요한 질문 조회를 피한다.
+                question = await gateways.questions.get_by_id(session.question_id)
+                if (
+                    question is not None
+                    and question.sequence_order in prompts.REFLECTIVE_QUESTION_SEQUENCE_ORDERS
+                ):
+                    missing_required = []
             # "한 세션 = 사건 하나" 관례를 따르는 세션 타입 전부 — 슬롯 충족 후 마무리
             # 확인을 거쳐 자동 완료되고, 맥락 기반 꼬리질문도 이 타입들에서만 시도한다.
             # EPISODE(사용자가 직접 시작한 자유 에피소드, 2026-07-16)도 같은 관례를

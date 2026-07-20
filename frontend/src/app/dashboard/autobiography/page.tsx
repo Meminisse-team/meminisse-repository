@@ -415,6 +415,7 @@ export default function AutobiographyPage() {
         />
       ) : selectedIndex !== null ? (
         <ChapterProgress
+          autobiographyId={autobiography.id}
           chapters={chapters}
           selectedCandidate={selectedIndex !== null ? (candidates[selectedIndex] ?? null) : null}
           allWritten={chaptersAllWritten}
@@ -426,6 +427,10 @@ export default function AutobiographyPage() {
           onAcknowledge={(chapterId) =>
             setAcknowledgedChapterIds((current) => new Set(current).add(chapterId))
           }
+          onChapterContentSaved={(chapterId, content) => {
+            setChapters((prev) => prev.map((c) => (c.id === chapterId ? { ...c, content } : c)));
+            setAcknowledgedChapterIds((current) => new Set(current).add(chapterId));
+          }}
           onRewrite={handleRewriteChapter}
           onWriteAll={handleWriteAll}
           onFinalize={handleFinalize}
@@ -626,6 +631,7 @@ function TocSelection({
 }
 
 function ChapterProgress({
+  autobiographyId,
   chapters,
   selectedCandidate,
   allWritten,
@@ -635,11 +641,13 @@ function ChapterProgress({
   acknowledgedChapterIds,
   rewritingChapterIds,
   onAcknowledge,
+  onChapterContentSaved,
   onRewrite,
   onWriteAll,
   onFinalize,
   onRegenerateToc,
 }: {
+  autobiographyId: string;
   chapters: ChapterDraft[];
   selectedCandidate: TocCandidate | null;
   allWritten: boolean;
@@ -649,6 +657,7 @@ function ChapterProgress({
   acknowledgedChapterIds: Set<string>;
   rewritingChapterIds: Set<string>;
   onAcknowledge: (chapterId: string) => void;
+  onChapterContentSaved: (chapterId: string, content: string) => void;
   onRewrite: (chapter: ChapterDraft) => void;
   onWriteAll: () => void;
   onFinalize: () => void;
@@ -675,11 +684,13 @@ function ChapterProgress({
                   .map((chapter) => (
                     <ChapterReviewItem
                       key={chapter.id}
+                      autobiographyId={autobiographyId}
                       chapter={chapter}
                       writing={writeTriggered && chapter.content === null}
                       rewriting={rewritingChapterIds.has(chapter.id)}
                       acknowledged={acknowledgedChapterIds.has(chapter.id)}
                       onAcknowledge={() => onAcknowledge(chapter.id)}
+                      onSaved={(content) => onChapterContentSaved(chapter.id, content)}
                       onRewrite={() => onRewrite(chapter)}
                     />
                   ))}
@@ -692,11 +703,13 @@ function ChapterProgress({
           {chapters.map((chapter) => (
             <ChapterReviewItem
               key={chapter.id}
+              autobiographyId={autobiographyId}
               chapter={chapter}
               writing={writeTriggered && chapter.content === null}
               rewriting={rewritingChapterIds.has(chapter.id)}
               acknowledged={acknowledgedChapterIds.has(chapter.id)}
               onAcknowledge={() => onAcknowledge(chapter.id)}
+              onSaved={(content) => onChapterContentSaved(chapter.id, content)}
               onRewrite={() => onRewrite(chapter)}
             />
           ))}
@@ -758,26 +771,66 @@ const STATUS_LABEL: Record<ChapterDraft["status"], string> = {
  * 있게 하는 프론트 전용 토글 — 백엔드 데이터는 바뀌지 않고 화면에서만 감춘다.
  * rewriting/onRewrite: 이미 집필된 챕터를 처음부터 다시 쓰는 액션(write_chapter가
  * 챕터 단위 멱등이라 같은 API를 재호출하면 된다) — 플래그가 많은 챕터를 사용자가
- * 실제로 "해소"할 수 있는 첫 수단(2026-07-18). */
+ * 실제로 "해소"할 수 있는 첫 수단(2026-07-18).
+ * onSaved: "직접 수정" 저장 — 최종본(FinalManuscript)의 FinalChapterItem과 같은
+ * PATCH .../content 엔드포인트를 재사용한다(2026-07-20). 이전엔 "확인 필요"
+ * 배지가 붙어도 검토 단계에서는 AI 전체 재집필("이 챕터 다시 쓰기")이나
+ * 배지 무시("확인했어요")만 가능해, 문제 되는 한두 문장만 사람이 바로 고치고
+ * 싶어도 챕터 전체를 다시 쓰게 하거나 경고를 무시하게 만드는 수밖에 없었다.
+ * 저장에 성공하면 onAcknowledge와 동일하게 이 챕터의 배지도 함께 지운다 —
+ * 사용자가 방금 직접 고쳤으니 그 경고를 계속 보여줄 이유가 없다. */
 function ChapterReviewItem({
+  autobiographyId,
   chapter,
   writing,
   rewriting,
   acknowledged,
   onAcknowledge,
+  onSaved,
   onRewrite,
 }: {
+  autobiographyId: string;
   chapter: ChapterDraft;
   writing: boolean;
   rewriting: boolean;
   acknowledged: boolean;
   onAcknowledge: () => void;
+  onSaved: (content: string) => void;
   onRewrite: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(chapter.content ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const flagCount = chapterFlagCount(chapter);
   const showFlagBadge = flagCount > 0 && !acknowledged;
   const canExpand = chapter.content !== null;
+
+  function startEditing() {
+    setDraft(chapter.content ?? "");
+    setSaveError(null);
+    setEditing(true);
+  }
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setSaveError("본문을 비워둘 수는 없어요.");
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await autobiographiesApi.updateChapterContent(autobiographyId, chapter.id, trimmed);
+      onSaved(trimmed);
+      setEditing(false);
+    } catch {
+      setSaveError("수정한 내용을 저장하지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <li className="rounded-2xl border border-black/10 p-5">
@@ -812,9 +865,35 @@ function ChapterReviewItem({
 
       {expanded && chapter.content && (
         <div className="mt-4 flex flex-col gap-4 border-t border-black/10 pt-4">
-          <p className="whitespace-pre-wrap text-base leading-relaxed text-black/80">
-            {chapter.content}
-          </p>
+          {editing ? (
+            <div className="flex flex-col gap-3">
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                disabled={saving}
+                rows={12}
+                className="w-full rounded-xl border border-black/15 p-4 text-base leading-relaxed text-black outline-none focus:border-black disabled:opacity-60"
+              />
+              {saveError && <p className="text-sm text-black/60">{saveError}</p>}
+              <div className="flex items-center gap-3">
+                <Button onClick={() => void handleSave()} disabled={saving}>
+                  {saving ? "저장하는 중..." : "저장"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                  className="text-sm text-black/50 underline underline-offset-4 hover:text-black/70 disabled:opacity-40"
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="whitespace-pre-wrap text-base leading-relaxed text-black/80">
+              {chapter.content}
+            </p>
+          )}
           {showFlagBadge && (
             <div className="flex flex-col gap-2 rounded-xl bg-amber-50 p-4">
               <p className="text-sm font-medium text-amber-900">
@@ -841,14 +920,26 @@ function ChapterReviewItem({
               </button>
             </div>
           )}
-          <button
-            type="button"
-            onClick={onRewrite}
-            disabled={rewriting}
-            className="self-start text-sm text-black/50 underline underline-offset-4 hover:text-black/70 disabled:no-underline disabled:opacity-40"
-          >
-            {rewriting ? "다시 쓰고 있어요..." : "이 챕터 다시 쓰기"}
-          </button>
+          {!editing && (
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={startEditing}
+                disabled={rewriting}
+                className="text-sm text-black/50 underline underline-offset-4 hover:text-black/70 disabled:no-underline disabled:opacity-40"
+              >
+                직접 수정
+              </button>
+              <button
+                type="button"
+                onClick={onRewrite}
+                disabled={rewriting}
+                className="text-sm text-black/50 underline underline-offset-4 hover:text-black/70 disabled:no-underline disabled:opacity-40"
+              >
+                {rewriting ? "다시 쓰고 있어요..." : "이 챕터 다시 쓰기"}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </li>

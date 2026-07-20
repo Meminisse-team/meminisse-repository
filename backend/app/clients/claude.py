@@ -40,6 +40,14 @@ DEFAULT_MODEL = settings.CLAUDE_MODEL
 # 배치(32000) 등 이 프로젝트에서 가장 큰 출력에 쓰는 상한과 맞춰 여유를 크게 둔다.
 _DEFAULT_MAX_TOKENS = 32000
 
+# reasoning_effort="low"로 호출하는 곳(이벤트 병합 판정, 챕터 인수인계 요약, 제3자
+# 위해성 분류 등, autobiography_service.py/character_service.py 참조)은 전부 원래
+# 짧은 구조화 출력·요약이 목적이다 — 실제 생성량만큼만 과금되므로 max_tokens 상한
+# 자체가 비용을 만들지는 않지만, 혹시 모를 폭주(끝없는 반복 생성 등)를 조기에
+# 끊어내는 안전판으로 이 경우엔 _DEFAULT_MAX_TOKENS보다 훨씬 낮게 잡는다
+# (2026-07-20). 호출부가 max_tokens를 명시하면 이 값보다 우선한다.
+_LOW_EFFORT_DEFAULT_MAX_TOKENS = 4096
+
 
 @lru_cache(maxsize=1)
 def get_claude_client() -> anthropic.AsyncAnthropic:
@@ -105,14 +113,29 @@ async def chat_completion(
     client = get_claude_client()
     system, claude_messages = _to_claude_messages(messages)
 
+    if max_tokens is not None:
+        resolved_max_tokens = max_tokens
+    elif reasoning_effort == "low":
+        resolved_max_tokens = _LOW_EFFORT_DEFAULT_MAX_TOKENS
+    else:
+        resolved_max_tokens = _DEFAULT_MAX_TOKENS
+
     kwargs: dict[str, Any] = {
         "model": model,
-        "max_tokens": max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
+        "max_tokens": resolved_max_tokens,
         "messages": claude_messages,
         "thinking": {"type": "adaptive"},
     }
     if system is not None:
-        kwargs["system"] = system
+        # 챕터 집필·수리·교열 등의 시스템 프롬프트(2000~4000 토큰급)는 책 한 권
+        # 안에서 챕터마다 토씨 하나 안 바뀌고 그대로 재사용된다(build_chapter_
+        # writing_prompt 등 — 챕터별로 달라지는 내용은 전부 user 메시지 쪽에 있다).
+        # 캐싱 없이는 매 챕터 정가로 다시 처리되던 것을, 첫 호출만 정가로 쓰고
+        # 이후엔 10% 가격으로 읽는다(2026-07-20). 최소 캐시 길이(모델별 1024~4096
+        # 토큰) 미만인 system은 그냥 조용히 캐시가 안 걸릴 뿐이라 손해가 없다.
+        kwargs["system"] = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
     if reasoning_effort is not None:
         kwargs["output_config"] = {"effort": reasoning_effort}
     if response_format is not None:

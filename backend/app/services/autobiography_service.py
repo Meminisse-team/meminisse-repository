@@ -682,12 +682,26 @@ async def _generate_style_bible(gateways: Gateways, user_id: uuid.UUID) -> dict 
 # Phase 4: 동적 목차 · 하향식 집필 · 팩트체크 · 근거검증 · 등장인물 스캔        #
 # --------------------------------------------------------------------------- #
 
+# 이벤트가 이 개수를 넘으면 중요도 상위 항목만 남겨 목차 생성 프롬프트에 넣는다.
+# 실측(2026-07-20, ordinary@dummy.com 계정 — 통합 후에도 미병합 verified 이벤트
+# 437개)으로 summaries_block이 통째로 들어가면 Solar 응답이 클라이언트
+# 타임아웃(_REQUEST_TIMEOUT=90s)을 넘겨 매번 openai.APITimeoutError로 실패하는
+# 사고가 재현됐다. 15~20챕터 목차 설계에 사건 요약 400개 이상의 세부가 필요하지도
+# 않아, 중요도 기준 상위로 추리는 편이 타임아웃 방지와 목차 품질 양쪽에 낫다.
+_TOC_GENERATION_MAX_EVENTS = 150
+
+
 async def generate_toc_candidates(gateways: Gateways, autobiography_id: uuid.UUID) -> AutobiographyRecord:
     autobiography = await get_autobiography_by_id(gateways, autobiography_id)
 
     events = await gateways.events.list_unmerged_verified(autobiography.user_id)
     if not events:
         raise ValueError("목차를 생성하려면 먼저 Phase 3(consolidate_autobiography)이 완료되어야 합니다.")
+
+    if len(events) > _TOC_GENERATION_MAX_EVENTS:
+        events = sorted(
+            events, key=lambda e: e.importance_score or Decimal(0), reverse=True
+        )[:_TOC_GENERATION_MAX_EVENTS]
 
     summaries_block = "\n".join(
         f"- [중요도 {event.importance_score}] {event.one_line_summary} "
@@ -1934,27 +1948,35 @@ def _join_chapters_into_final_content(chapters: list[ChapterDraftRecord]) -> str
 async def edit_chapter_content(
     gateways: Gateways, autobiography_id: uuid.UUID, chapter_draft_id: uuid.UUID, content: str
 ) -> AutobiographyRecord:
-    """완성된 자서전의 챕터 본문을 사용자가 직접 고쳐 쓴다(2026-07-18, '나의 자서전'
-    직접 수정 기능). AI 재집필(write_chapter)과 달리 LLM·외부 API 호출이 전혀
-    없는 순수 텍스트 저장이라 요청이 즉시 끝난다 — 느린 외부 호출을 기다리며 DB
-    세션을 오래 붙잡다 Supabase가 idle 커넥션을 끊어버리는 문제
-    (interview_service.add_user_turn 모듈 docstring 참조: 예전에 세션 대화 저장
-    경로에서 실제로 겪었던 사고)가 애초에 발생할 여지가 없다 — 이 함수 전체가
-    조회 몇 번 + 텍스트 조립 + 커밋 하나뿐이다.
+    """작성된 챕터 본문을 사용자가 직접 고쳐 쓴다('나의 자서전' 직접 수정 기능).
+    AI 재집필(write_chapter)과 달리 LLM·외부 API 호출이 전혀 없는 순수 텍스트
+    저장이라 요청이 즉시 끝난다 — 느린 외부 호출을 기다리며 DB 세션을 오래
+    붙잡다 Supabase가 idle 커넥션을 끊어버리는 문제(interview_service.
+    add_user_turn 모듈 docstring 참조: 예전에 세션 대화 저장 경로에서 실제로
+    겪었던 사고)가 애초에 발생할 여지가 없다 — 이 함수 전체가 조회 몇 번 + 텍스트
+    조립 + 커밋 하나뿐이다.
 
-    아직 최종 윤문(finalize_manuscript)이 끝나지 않은 자서전은 이 경로를 쓰지
-    않는다 — 그 단계에서는 챕터별 검토·재집필만 가능하고, 최종본이 나온 뒤에야
-    "완성된 자서전을 직접 고친다"는 개념이 성립한다(호출부인 API 라우터가 이
-    선행 조건을 확인한다)."""
+    최종 윤문(finalize_manuscript) 이전 검토 단계에서도 호출된다(2026-07-20 —
+    "확인 필요" 배지가 붙은 챕터를 그 자리에서 바로 고칠 수 있어야 함). 이때는
+    final_content가 아직 없으므로(finalize를 아직 안 거침) 건드리지 않는다 —
+    여기서 final_content를 채워버리면 finalize_manuscript가 하는 통일성 윤문
+    (문체·종결어미 통일)을 건너뛴 채로 프론트가 "최종본이 나왔다"고 오인해
+    자동으로 FinalManuscript 화면으로 넘어가버린다. final_content는 오직 이미
+    한 번 최종본이 나온 뒤의 수정(재조립)에서만 갱신한다."""
     chapter = await get_chapter_draft(gateways, chapter_draft_id)
     if chapter is None or chapter.autobiography_id != autobiography_id:
         raise ValueError(f"자서전 {autobiography_id}에 속한 챕터 {chapter_draft_id}를 찾을 수 없습니다.")
 
     await gateways.chapters.update_content(chapter_draft_id, content)
-    chapters = await gateways.chapters.list_by_autobiography(autobiography_id)
-    final_content = _join_chapters_into_final_content(chapters)
 
-    autobiography = await gateways.autobiographies.update(autobiography_id, final_content=final_content)
+    autobiography = await gateways.autobiographies.get_by_id(autobiography_id)
+    assert autobiography is not None
+    if autobiography.final_content is not None:
+        chapters = await gateways.chapters.list_by_autobiography(autobiography_id)
+        final_content = _join_chapters_into_final_content(chapters)
+        autobiography = await gateways.autobiographies.update(
+            autobiography_id, final_content=final_content
+        )
     await gateways.commit()
     return autobiography
 

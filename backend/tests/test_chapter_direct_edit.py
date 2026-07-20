@@ -1,8 +1,12 @@
-"""'나의 자서전' 직접 수정 기능(2026-07-18) 회귀 테스트.
+"""'나의 자서전' 직접 수정 기능(2026-07-18, 2026-07-20 검토 단계로 확장) 회귀 테스트.
 
-완성된 자서전(final_content 존재)의 챕터 본문을 사용자가 직접 고쳐 저장하는
-PATCH /{autobiography_id}/chapters/{chapter_draft_id}/content 엔드포인트와
-서비스 함수 autobiography_service.edit_chapter_content를 검증한다.
+작성된(집필 완료) 챕터 본문을 사용자가 직접 고쳐 저장하는 PATCH
+/{autobiography_id}/chapters/{chapter_draft_id}/content 엔드포인트와 서비스 함수
+autobiography_service.edit_chapter_content를 검증한다. 처음엔 완성된 자서전
+(final_content 존재)에서만 열려 있었지만, 최종 윤문 이전 검토 단계("확인 필요"
+배지가 붙은 챕터)에서도 그 자리에서 바로 고칠 수 있도록 확장됐다 — 이때는
+final_content가 아직 없으므로 건드리지 않아야 한다(finalize_manuscript의 통일성
+윤문을 건너뛴 것처럼 프론트가 오인하지 않도록).
 
 핵심 요구사항: 이 경로는 LLM/외부 API 호출이 전혀 없어야 한다 — 세션 대화 저장
 경로(interview_service.add_user_turn)에서 예전에 실제로 겪었던 "느린 외부 호출을
@@ -175,6 +179,35 @@ async def test_edit_chapter_content_updates_chapter_and_rejoins_final_content() 
 
 
 @pytest.mark.asyncio
+async def test_edit_chapter_content_leaves_final_content_null_before_finalize() -> None:
+    """final_content가 아직 없는(=finalize 이전) 자서전의 챕터를 고치면, 저장은
+    되지만 final_content는 계속 None이어야 한다 — 여기서 채워버리면
+    finalize_manuscript의 통일성 윤문을 건너뛴 채 자동으로 완성된 것처럼
+    보이는 사고가 난다(2026-07-20)."""
+    gateways: Gateways = _build_mock_gateways()
+    user = await gateways.users.create(
+        UserCreateData(id=uuid.uuid4(), email="edit-prefinalize@example.com", name="테스터")
+    )
+    await gateways.commit()
+
+    autobiography = await gateways.autobiographies.create(user.id)
+    chapters = await gateways.chapters.replace_all(
+        autobiography.id, [ChapterDraftCreateData(chapter_index=1, title="1장")]
+    )
+    await gateways.chapters.update_content(chapters[0].id, "윤문 전 원본 본문.")
+    await gateways.commit()
+
+    updated = await autobiography_service.edit_chapter_content(
+        gateways, autobiography.id, chapters[0].id, "검토 단계에서 고친 본문."
+    )
+
+    assert updated.final_content is None
+    refreshed_chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
+    edited = next(c for c in refreshed_chapters if c.id == chapters[0].id)
+    assert edited.content == "검토 단계에서 고친 본문."
+
+
+@pytest.mark.asyncio
 async def test_edit_chapter_content_rejects_chapter_from_other_autobiography() -> None:
     gateways: Gateways = _build_mock_gateways()
     user = await gateways.users.create(
@@ -199,8 +232,14 @@ async def test_edit_chapter_content_rejects_chapter_from_other_autobiography() -
         )
 
 
-def test_patch_endpoint_requires_finalized_autobiography(client: TestClient) -> None:
-    """최종 윤문(final_content)이 아직 없으면 409 — 라우터 레벨 선행 조건."""
+def test_patch_endpoint_allows_edit_before_finalize_without_setting_final_content(
+    client: TestClient,
+) -> None:
+    """최종 윤문(final_content) 이전 검토 단계에서도 이미 집필된 챕터는 직접
+    고칠 수 있어야 한다(2026-07-20) — "확인 필요" 배지가 붙은 챕터를 검토 화면
+    에서 바로 수정하는 경로. 단, final_content는 아직 존재하면 안 된다 — 여기서
+    채워지면 프론트가 자동으로 FinalManuscript 화면(최종본 열람)으로 넘어가버려
+    finalize_manuscript의 통일성 윤문을 건너뛴 것처럼 보인다."""
     import asyncio
 
     user_id, token = _signup_and_login(client, "notfinal@example.com")
@@ -217,9 +256,50 @@ def test_patch_endpoint_requires_finalized_autobiography(client: TestClient) -> 
 
     autobiography_id, chapter_id = asyncio.run(_seed_unfinalized())
 
+    with (
+        patch("app.clients.solar.chat_completion", side_effect=_fail_if_called),
+        patch("app.clients.solar.structured_completion", side_effect=_fail_if_called),
+    ):
+        resp = client.patch(
+            f"/api/v1/autobiographies/{autobiography_id}/chapters/{chapter_id}/content",
+            json={"content": "검토 단계에서 직접 고친 내용"},
+            headers=_auth_headers(token),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["final_content"] is None
+
+    async def _refetch_content():
+        gateways: Gateways = _build_mock_gateways()
+        chapters = await gateways.chapters.list_by_autobiography(autobiography_id)
+        return next(c for c in chapters if c.id == chapter_id).content
+
+    # 목(mock) 게이트웨이는 프로세스 전역 저장소(default_store)를 공유하므로
+    # 새 Gateways 인스턴스로 다시 읽어도 방금 저장한 값이 그대로 보인다.
+    assert asyncio.run(_refetch_content()) == "검토 단계에서 직접 고친 내용"
+
+
+def test_patch_endpoint_rejects_unwritten_chapter(client: TestClient) -> None:
+    """아직 한 번도 집필되지 않은 챕터(content is None)는 고칠 본문 자체가 없으므로
+    409 — 라우터 레벨 선행 조건."""
+    import asyncio
+
+    user_id, token = _signup_and_login(client, "unwritten@example.com")
+
+    async def _seed_unwritten():
+        gateways: Gateways = _build_mock_gateways()
+        autobiography = await gateways.autobiographies.create(uuid.UUID(user_id))
+        chapters = await gateways.chapters.replace_all(
+            autobiography.id, [ChapterDraftCreateData(chapter_index=1, title="1장")]
+        )
+        await gateways.commit()
+        return autobiography.id, chapters[0].id
+
+    autobiography_id, chapter_id = asyncio.run(_seed_unwritten())
+
     resp = client.patch(
         f"/api/v1/autobiographies/{autobiography_id}/chapters/{chapter_id}/content",
-        json={"content": "직접 고친 내용"},
+        json={"content": "집필도 안 된 챕터를 고치려는 시도"},
         headers=_auth_headers(token),
     )
     assert resp.status_code == 409

@@ -307,21 +307,28 @@ async def update_chapter_content(
     gateways: GatewaysDep,
     current_user: CurrentUserDep,
 ) -> AutobiographyRead:
-    """완성된 자서전의 챕터 본문을 사용자가 직접 고쳐 저장한다("나의 자서전" 직접
-    수정 — AI 재집필(POST .../write)과는 별개 기능으로 둘 다 계속 쓸 수 있다).
+    """작성된 챕터 본문을 사용자가 직접 고쳐 저장한다("나의 자서전" 직접 수정 —
+    AI 재집필(POST .../write)과는 별개 기능으로 둘 다 계속 쓸 수 있다).
+
+    최종 윤문(finalize) 이전 검토 단계에도 열어둔다(2026-07-20) — 팩트체크·근거
+    검증이 "확인 필요"로 표시한 챕터를 사용자가 그 자리에서 바로 고칠 수 있어야
+    하는데, 이전엔 최종본이 나온 뒤에만 직접 수정이 가능해 그 사이(검토~최종본
+    생성)에는 "다시 쓰기"(AI 전체 재집필)나 "확인했어요"(경고 무시)만 가능했다.
+    막아야 할 유일한 경우는 챕터가 아직 한 번도 집필되지 않은 것(content is
+    None)뿐이다 — 존재하지 않는 본문을 고칠 수는 없으므로.
 
     이 요청은 LLM/외부 API를 전혀 호출하지 않는 즉시 완료되는 단순 텍스트
     저장이다(autobiography_service.edit_chapter_content 참조) — 세션 대화 저장
     경로에서 예전에 실제로 겪었던 "느린 외부 호출을 기다리며 DB 트랜잭션을
     오래 열어둬 Supabase가 idle 커넥션을 끊어버리는" 문제(interview_service.
     add_user_turn 모듈 docstring)가 애초에 발생할 여지가 없도록 설계했다."""
-    autobiography = await _require_own_autobiography(gateways, autobiography_id, current_user)
+    await _require_own_autobiography(gateways, autobiography_id, current_user)
     chapter = await autobiography_service.get_chapter_draft(gateways, chapter_draft_id)
     if chapter is None or chapter.autobiography_id != autobiography_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "해당 자서전에 속한 챕터를 찾을 수 없습니다.")
-    if not autobiography.final_content:
+    if chapter.content is None:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "최종본이 완성된 뒤에만 직접 수정할 수 있습니다."
+            status.HTTP_409_CONFLICT, "아직 집필되지 않은 챕터는 직접 수정할 수 없습니다."
         )
 
     updated = await autobiography_service.edit_chapter_content(
