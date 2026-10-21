@@ -1,7 +1,7 @@
 """
 Phase 5(실물 출판) 회귀 테스트: Phase 3/4 파이프라인을 끝까지 돌려 final_content를
 만든 뒤, pdf_service.generate_manuscript_pdf가 실제로 유효한 PDF를 만들어 Mock
-오브젝트 스토리지에 올리고 Autobiography.pdf_url을 채우는지 검증한다.
+오브젝트 스토리지에 올리고 Autobiography.pdf_key을 채우는지 검증한다.
 
 WeasyPrint 자체는 모킹하지 않는다 — 이 프로젝트에서 실제로 GTK3 런타임을 설치해
 동작을 확인했으므로(2026-07-12), 여기서도 실제 렌더링을 태워 결과 PDF가 유효한지
@@ -34,7 +34,6 @@ async def test_generate_manuscript_pdf_produces_valid_pdf_and_stores_url() -> No
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.services.pdf_service._resolve_manuscript_font_url", return_value=""),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)
@@ -49,11 +48,11 @@ async def test_generate_manuscript_pdf_produces_valid_pdf_and_stores_url() -> No
 
         autobiography = await pdf_service.generate_manuscript_pdf(gateways, autobiography.id)
 
-        assert autobiography.pdf_url is not None
-        assert autobiography.pdf_url.startswith("mock://objects/")
+        assert autobiography.pdf_key is not None
+        assert autobiography.pdf_key.endswith(".pdf")
 
         pdf_bytes = gateways.storage._store.objects[  # type: ignore[attr-defined]
-            f"users/{user.id}/manuscripts/{autobiography.id}.pdf"
+            autobiography.pdf_key
         ]
         reader = PdfReader(io.BytesIO(pdf_bytes))
         # 표지 + 목차 + 챕터 1개 = 최소 3페이지.
@@ -112,7 +111,6 @@ async def test_generate_manuscript_pdf_renders_part_divider_pages() -> None:
         patch("app.clients.solar.structured_completion", new=_fake_structured_completion_with_parts),
         patch("app.clients.embeddings.embed_query", return_value=[1.0, 0.0, 0.0]),
         patch("app.clients.supabase_auth.admin_create_user", new=_fake_admin_create_user),
-        patch("app.services.pdf_service._resolve_manuscript_font_url", return_value=""),
     ):
         gateways = _build_mock_gateways()
         user = await _seed_user_with_events(gateways)
@@ -129,7 +127,7 @@ async def test_generate_manuscript_pdf_renders_part_divider_pages() -> None:
         autobiography = await pdf_service.generate_manuscript_pdf(gateways, autobiography.id)
 
         pdf_bytes = gateways.storage._store.objects[  # type: ignore[attr-defined]
-            f"users/{user.id}/manuscripts/{autobiography.id}.pdf"
+            autobiography.pdf_key
         ]
         reader = PdfReader(io.BytesIO(pdf_bytes))
         # 표지 + 목차 + Part 구분 페이지 2장 + 챕터 4장 = 최소 8페이지.

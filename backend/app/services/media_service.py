@@ -65,15 +65,14 @@ async def upload_media_asset(
     filename: str,
     content_type: str,
 ) -> MediaAssetRecord:
-    s3_key = f"users/{payload.user_id}/media/{uuid.uuid4()}_{filename}"
-    s3_url = await gateways.storage.put_object(s3_key, file_bytes, content_type=content_type)
+    s3_key = f"users/{payload.user_id}/media/{uuid.uuid4()}.{content_type.split('/')[-1]}"
+    await gateways.storage.put_object(s3_key, file_bytes, content_type=content_type)
 
     asset = await gateways.media_assets.create(
         MediaAssetCreateData(
             user_id=payload.user_id,
             session_id=payload.session_id,
             s3_key=s3_key,
-            s3_url=s3_url,
             asset_type=payload.asset_type,
             age_at_time=payload.age_at_time,
             location_at_time=payload.location_at_time,

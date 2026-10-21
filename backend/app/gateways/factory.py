@@ -1,20 +1,8 @@
-"""
-의존성 주입(DI)의 유일한 조립 지점.
+"""Runtime assembly for gateway contracts.
 
-서비스 레이어와 라우터는 이 파일의 `Gateways` 번들만 주입받는다. 어떤 백엔드가
-실제로 붙어 있는지는 `settings.GATEWAY_BACKEND` 하나로 결정되며, 팀원이 완성된
-Postgres/S3 연동 코드를 가져왔을 때 실제로 손대야 하는 곳은 원칙적으로 이 파일뿐이다.
-
-### 팀원의 완성 코드를 갈아 끼우는 법
-
-1. 팀원의 게이트웨이 클래스가 `app/gateways/interfaces.py`의 ABC를 상속하도록
-   맞춘다(메서드 시그니처만 맞으면 내부 구현은 SQLAlchemy든 raw asyncpg든 자유).
-2. 아래 `_build_postgres_gateways`에서 `SqlAlchemy*Gateway` 임포트를
-   팀원 클래스 임포트로 바꾼다. 서비스 코드는 한 줄도 건드릴 필요 없다.
-3. S3도 마찬가지로 `_build_postgres_gateways`(혹은 별도 스토리지 팩토리 함수)의
-   `S3ObjectStorageGateway` 자리만 교체한다.
-
-즉 실제 교체 범위는 이 파일의 임포트문 및 생성자 호출 몇 줄이다.
+GATEWAY_BACKEND selects in-memory or PostgreSQL/S3 implementations. Services and
+routers receive the Gateways bundle; this module manages session and commit wiring.
+See docs/architecture/gateways.md for the persistence and storage boundaries.
 """
 
 from __future__ import annotations

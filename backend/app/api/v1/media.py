@@ -5,6 +5,7 @@ from fastapi import APIRouter, Form, HTTPException, UploadFile, status
 from app.api.deps import CurrentUserDep, GatewaysDep
 from app.models import AssetType
 from app.schemas.media import MediaAssetCreate, MediaAssetRead
+from app.media.uploads import read_image_upload
 from app.services import interview_service, media_service
 
 router = APIRouter(prefix="/media-assets", tags=["media"])
@@ -41,22 +42,22 @@ async def upload_media_asset(
         people_at_time=people_at_time,
         user_comment=user_comment,
     )
-    file_bytes = await file.read()
+    file_bytes, content_type = await read_image_upload(file)
     asset = await media_service.upload_media_asset(
         gateways,
         payload,
         file_bytes=file_bytes,
         filename=file.filename or "upload",
-        content_type=file.content_type or "application/octet-stream",
+        content_type=content_type,
     )
-    return MediaAssetRead.model_validate(asset)
+    return await _read_asset(gateways, asset)
 
 
 @router.get("", response_model=list[MediaAssetRead])
 async def list_media_assets(gateways: GatewaysDep, current_user: CurrentUserDep) -> list[MediaAssetRead]:
     """본인이 업로드한 미디어 전체를 최근 업로드순으로 반환한다(사진첩 탭)."""
     assets = await media_service.list_media_assets(gateways, current_user.id)
-    return [MediaAssetRead.model_validate(asset) for asset in assets]
+    return [await _read_asset(gateways, asset) for asset in assets]
 
 
 @router.get("/{media_asset_id}", response_model=MediaAssetRead)
@@ -67,4 +68,9 @@ async def get_media_asset(
     asset = await media_service.get_media_asset(gateways, media_asset_id)
     if asset is None or asset.user_id != current_user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "미디어를 찾을 수 없습니다.")
-    return MediaAssetRead.model_validate(asset)
+    return await _read_asset(gateways, asset)
+
+
+async def _read_asset(gateways, asset) -> MediaAssetRead:
+    data = MediaAssetRead.model_validate(asset)
+    return data.model_copy(update={"s3_url": await gateways.storage.get_presigned_url(asset.s3_key)})

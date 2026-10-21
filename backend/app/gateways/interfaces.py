@@ -67,10 +67,10 @@ class ObjectStorageGateway(ABC):
 
     @abstractmethod
     async def put_object(self, key: str, data: bytes, *, content_type: str) -> str:
-        """객체를 저장하고 접근 가능한 URL을 반환한다."""
+        """private 객체를 저장하고 object key를 반환한다."""
 
     @abstractmethod
-    async def get_presigned_url(self, key: str, *, expires_in: int = 3600) -> str:
+    async def get_presigned_url(self, key: str, *, expires_in: int = 300) -> str:
         """제한 시간 동안 유효한 접근 URL을 발급한다."""
 
     @abstractmethod
@@ -453,7 +453,7 @@ class AutobiographyGateway(ABC):
         toc_data: dict | None = None,
         book_synopsis: str | None = None,
         final_content: str | None = None,
-        pdf_url: str | None = None,
+        pdf_key: str | None = None,
         photo_placements: list[dict] | None = None,
     ) -> AutobiographyRecord:
         """None인 인자는 "이 필드는 건드리지 않는다"는 뜻이다 — 부분 갱신 전용이며,

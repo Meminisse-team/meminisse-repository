@@ -632,15 +632,9 @@ null)`로 구성된다. 같은 인물을 가리키는 다른 표현(별칭·호�
 
 ---
 
-## 부록: Upstage 문서 자체 모순
+## 부록: Provider integration
 
-`upstage_solar_api_docs.txt`가 `response_format`(Structured Outputs) 지원 모델을 문서
-내에서 서로 다르게 적어놓은 문제와, `app/clients/solar.py`에 넣어둔 solar-pro3 → solar-pro2
-자동 폴백에 대해서는 [API_ENDPOINTS.md의 부록](./API_ENDPOINTS.md#부록-발견한-upstage-문서-자체-모순과-구현한-대안)을 참고할 것.
-이 샌드박스의 Structured Outputs 엔드포인트(`slot-gating`, `event-extraction`,
-`ocr-validity-check`, `event-merge-judge`, `toc-generation`, `fact-reextraction`,
-`third-party-risk`, `ner-extraction`)는 전부 그 폴백 로직을 거친다 — 즉 이 8개 중 어느
-것을 호출하든, solar-pro3가 400을 반환하면 자동으로 solar-pro2가 대신 응답하고
-`InterviewTurnResponse`류가 아닌 응답에는 실제 사용된 모델명이 노출되지 않으므로(이
-8개는 `model_used` 필드가 없음), 폴백이 실제로 발생했는지 궁금하면 서버 로그를 확인해야
-한다.
+Structured Outputs 엔드포인트는 `app/clients/solar.py`를 통해 `solar-pro3`를 호출한다.
+다른 모델로 자동 폴백하지 않는다. 자세한 내용은
+[API_ENDPOINTS.md](./API_ENDPOINTS.md#부록-provider-integration)와
+[Upstage 공식 문서](https://console.upstage.ai/docs)를 참고한다.

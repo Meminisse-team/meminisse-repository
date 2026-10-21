@@ -1,3 +1,5 @@
+import json
+import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -30,9 +32,21 @@ async def upstage_api_error_handler(request: Request, exc: APIStatusError) -> JS
     (잘못된 UPSTAGE_API_KEY, 요금 초과, 모델/파라미터 비호환 등)를 Swagger에서 바로
     읽을 수 있게 하기 위함이다. solar_service를 호출하는 다른 라우터에도 동일하게 적용된다.
     """
-    return JSONResponse(status_code=exc.status_code, content={"detail": f"Upstage API 오류: {exc}"})
+    logging.getLogger(__name__).error(json.dumps({
+        "event": "provider_error", "provider": "upstage", "status": exc.status_code,
+        "request_id": exc.request_id, "method": request.method,
+    }))
+    return JSONResponse(status_code=502, content={"detail": "외부 AI 서비스 요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요."})
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.middleware("http")
+async def private_response_cache_control(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, no-store"
+    return response

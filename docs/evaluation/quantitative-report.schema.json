@@ -1,0 +1,208 @@
+{
+  "$defs": {
+    "EvaluationMetadata": {
+      "properties": {
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "git_revision": {
+          "title": "Git Revision",
+          "type": "string"
+        },
+        "python_version": {
+          "title": "Python Version",
+          "type": "string"
+        },
+        "source_sha256": {
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "manuscript_sha256": {
+          "title": "Manuscript Sha256",
+          "type": "string"
+        },
+        "keyword_fixture_sha256": {
+          "title": "Keyword Fixture Sha256",
+          "type": "string"
+        },
+        "keyword_fixture": {
+          "additionalProperties": true,
+          "title": "Keyword Fixture",
+          "type": "object"
+        },
+        "normalizer_version": {
+          "title": "Normalizer Version",
+          "type": "string"
+        },
+        "cutoffs": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Cutoffs",
+          "type": "array"
+        },
+        "judge_model": {
+          "title": "Judge Model",
+          "type": "string"
+        },
+        "judge_reasoning_effort": {
+          "title": "Judge Reasoning Effort",
+          "type": "string"
+        },
+        "geval_requested_runs": {
+          "minimum": 1,
+          "title": "Geval Requested Runs",
+          "type": "integer"
+        },
+        "geval_completed_runs": {
+          "minimum": 0,
+          "title": "Geval Completed Runs",
+          "type": "integer"
+        },
+        "chapter_concurrency": {
+          "minimum": 1,
+          "title": "Chapter Concurrency",
+          "type": "integer"
+        },
+        "regenerate": {
+          "title": "Regenerate",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "created_at",
+        "git_revision",
+        "python_version",
+        "source_sha256",
+        "manuscript_sha256",
+        "keyword_fixture_sha256",
+        "keyword_fixture",
+        "normalizer_version",
+        "cutoffs",
+        "judge_model",
+        "judge_reasoning_effort",
+        "geval_requested_runs",
+        "geval_completed_runs",
+        "chapter_concurrency",
+        "regenerate"
+      ],
+      "title": "EvaluationMetadata",
+      "type": "object"
+    },
+    "RecallScore": {
+      "properties": {
+        "recall": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recall"
+        },
+        "survived": {
+          "minimum": 0,
+          "title": "Survived",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "missing_keywords": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Keywords",
+          "type": "array"
+        }
+      },
+      "required": [
+        "recall",
+        "survived",
+        "total"
+      ],
+      "title": "RecallScore",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evaluation": {
+      "$ref": "#/$defs/EvaluationMetadata"
+    },
+    "email": {
+      "title": "Email",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Title"
+    },
+    "final_content_length": {
+      "minimum": 0,
+      "title": "Final Content Length",
+      "type": "integer"
+    },
+    "phase2_distortion_detection": {
+      "additionalProperties": true,
+      "title": "Phase2 Distortion Detection",
+      "type": "object"
+    },
+    "phase4_own_verification": {
+      "additionalProperties": true,
+      "title": "Phase4 Own Verification",
+      "type": "object"
+    },
+    "information_preservation_recall": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RecallScore"
+      },
+      "title": "Information Preservation Recall",
+      "type": "object"
+    },
+    "narrative_coherence_geval": {
+      "additionalProperties": true,
+      "title": "Narrative Coherence Geval",
+      "type": "object"
+    },
+    "structure": {
+      "additionalProperties": true,
+      "title": "Structure",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "evaluation",
+    "email",
+    "title",
+    "final_content_length",
+    "phase2_distortion_detection",
+    "phase4_own_verification",
+    "information_preservation_recall",
+    "narrative_coherence_geval",
+    "structure"
+  ],
+  "title": "QuantitativeReport",
+  "type": "object"
+}

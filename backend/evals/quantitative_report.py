@@ -50,6 +50,8 @@ import argparse
 import asyncio
 import json
 import statistics
+import subprocess
+import platform
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +62,8 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 from evals import information_preservation, parallel_chapters
+from evals.report_schema import QuantitativeReport
+from evals.frozen_keywords import load_fixture, digest, NORMALIZER_VERSION
 from evals.baseline_ablation_comparison import _score_coherence
 from evals.solar_judge_model import SolarJudgeModel
 from app.gateways.factory import gateways_context
@@ -70,7 +74,7 @@ _RESULTS_DIR = Path(__file__).parent / "results"
 async def _get_raw_input_text(gateways, user_id) -> str:
     sessions = await gateways.sessions.list_by_user(user_id)
     chunks: list[str] = []
-    for session_summary in sessions:
+    for session_summary in sorted(sessions, key=lambda item: str(item.id)):
         session = await gateways.sessions.get_by_id(session_summary.id)
         chunks.extend(log.content for log in session.chat_logs if log.role.value == "user")
     return "\n".join(chunks)
@@ -124,14 +128,19 @@ def _structural_stats(toc_data: dict | None, chapters: list) -> dict:
 
 
 async def run_report(
-    email: str, *, chapter_concurrency: int, regenerate: bool = False, geval_runs: int = 3
+    email: str, *, keyword_fixture: Path, chapter_concurrency: int, regenerate: bool = False, geval_runs: int = 3
 ) -> dict:
+    if geval_runs < 1 or chapter_concurrency < 1:
+        raise ValueError("Run counts and concurrency must be positive")
     async with gateways_context() as gateways:
         user = await gateways.users.get_by_email(email)
         if user is None:
             raise ValueError(f"{email}에 해당하는 유저가 없습니다 — seed_dummy.py를 먼저 실행하세요.")
         user_id = user.id
         raw_input_text = await _get_raw_input_text(gateways, user_id)
+        fixture = load_fixture(keyword_fixture, raw_input_text)
+        if len(fixture.keywords) < 30:
+            raise ValueError("Quantitative report requires at least 30 reviewed keywords")
         phase2_stats = await _phase2_distortion_stats(gateways, user_id)
         existing = [] if regenerate else await gateways.autobiographies.list_finished_by_user(user_id)
 
@@ -165,7 +174,10 @@ async def run_report(
     # 뿐 진짜 독립적인 신호가 아니다(모듈 docstring, 2026-07-19 사용자 확인).
 
     print("[2/4] 정보보존율(recall) 계산 중...", file=sys.stderr)
-    keywords = await information_preservation.extract_keyword_pool(raw_input_text, top_k=30)
+    fixture = load_fixture(keyword_fixture, raw_input_text)
+    keywords = fixture.keywords
+    if len(keywords) < 30:
+        raise ValueError("Quantitative report requires at least 30 reviewed keywords")
     recall_curve = information_preservation.compute_recall_curve(keywords, final_content, cutoffs=(10, 20, 30))
 
     # G-Eval 점수 한 번만 돌리면 신뢰할 수 없다 — 같은 원고를 세 번 채점했더니
@@ -193,6 +205,21 @@ async def run_report(
 
     print("[4/4] 리포트 정리 중...", file=sys.stderr)
     return {
+        "schema_version": "2",
+        "evaluation": {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "git_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=_BACKEND, text=True).strip(),
+            "python_version": platform.python_version(),
+            "source_sha256": digest(raw_input_text),
+            "manuscript_sha256": digest(final_content),
+            "keyword_fixture_sha256": digest(keyword_fixture.read_text(encoding="utf-8")),
+            "keyword_fixture": fixture.model_dump(),
+            "normalizer_version": NORMALIZER_VERSION,
+            "cutoffs": [10, 20, 30], "judge_model": "solar-pro3",
+            "judge_reasoning_effort": "high", "geval_requested_runs": geval_runs,
+            "geval_completed_runs": len(geval_scores), "chapter_concurrency": chapter_concurrency,
+            "regenerate": regenerate,
+        },
         "email": email,
         "title": manuscript.get("title"),
         "final_content_length": len(final_content),
@@ -249,11 +276,12 @@ def _print_summary(report: dict) -> None:
         )
 
 
-async def main(email: str, *, chapter_concurrency: int, regenerate: bool, geval_runs: int) -> None:
+async def main(email: str, *, keyword_fixture: Path, chapter_concurrency: int, regenerate: bool, geval_runs: int) -> None:
     report = await run_report(
-        email, chapter_concurrency=chapter_concurrency, regenerate=regenerate, geval_runs=geval_runs
+        email, keyword_fixture=keyword_fixture, chapter_concurrency=chapter_concurrency, regenerate=regenerate, geval_runs=geval_runs
     )
 
+    report = QuantitativeReport.model_validate(report).model_dump()
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     local_part = email.split("@")[0]
     out_path = _RESULTS_DIR / f"quantitative_report_{local_part}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
@@ -282,10 +310,12 @@ if __name__ == "__main__":
         help="G-Eval 서사일관성을 몇 번 반복해 평균 낼지(기본 3) — 같은 원고로 0.00/0.70/0.90이 "
         "나온 실측 사례가 있어 한 번만 돌리면 신뢰할 수 없다.",
     )
+    parser.add_argument("--keyword-fixture", type=Path, required=True, help="Reviewed frozen ground truth; source hash must match")
     args = parser.parse_args()
     asyncio.run(
         main(
             args.email,
+            keyword_fixture=args.keyword_fixture,
             chapter_concurrency=args.chapter_concurrency,
             regenerate=args.regenerate,
             geval_runs=args.geval_runs,

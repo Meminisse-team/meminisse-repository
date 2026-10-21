@@ -51,8 +51,16 @@ class AutobiographyPollingStatus(BaseModel):
     id: uuid.UUID
     status: AutobiographyStatus
     final_content_ready: bool
-    pdf_url: str | None
+    pdf_url: str | None = None
+    pdf_version: str | None = None
     chapters: list[ChapterStatusItem]
+
+
+class AutobiographyProgress(BaseModel):
+    from app.autobiography import policy as _policy
+    minimum_sessions: int = _policy.MIN_COMPLETED_SESSIONS_FOR_AUTOBIOGRAPHY
+    recommended_sessions: int = _policy.RECOMMENDED_COMPLETED_SESSIONS
+    progress_total: int = _policy.AUTOBIOGRAPHY_PROGRESS_TOTAL
 
 
 class AutobiographyRead(BaseModel):
@@ -66,13 +74,15 @@ class AutobiographyRead(BaseModel):
     style_bible: dict | None
     book_synopsis: str | None
     final_content: str | None
-    pdf_url: str | None
+    pdf_url: str | None = None
+    pdf_version: str | None = None
     photo_placements: list[PhotoPlacementItem] | None
     created_at: datetime
     updated_at: datetime
     # GET /{user_id}에서만 실제로 채워진다(진행률 게이트 UI용) — 그 외 응답(예:
     # /finished 목록)에서는 의미가 없어 기본값 0으로 둔다.
     completed_session_count: int = 0
+    progress: AutobiographyProgress = Field(default_factory=AutobiographyProgress)
 
 
 class TocCandidateSelect(BaseModel):

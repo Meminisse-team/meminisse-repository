@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { authApi } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
-import { session } from "@/lib/auth/session";
 import { signupDraft } from "@/lib/auth/signupDraft";
 
 type Mode = "login" | "signup";
@@ -21,8 +20,7 @@ export default function EntryPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function handleLogin() {
-    const { access_token, refresh_token } = await authApi.login({ email, password });
-    session.setTokens(access_token, refresh_token);
+    await authApi.login({ email, password });
     router.push("/dashboard");
   }
 

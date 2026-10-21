@@ -877,26 +877,14 @@ real_name_retained, disclosure_notice_version, disclosure_acknowledged_at, creat
 
 ---
 
-## 부록: 발견한 Upstage 문서 자체 모순과 구현한 대안
+## 부록: Provider integration
 
-`upstage_solar_api_docs.txt` 안에서 `response_format`(Structured Outputs) 지원 모델 범위가
-**문서 자체적으로 세 군데가 서로 다르게** 적혀 있다:
+Structured Outputs는 `app/clients/solar.py::structured_completion`에서 `solar-pro3`의
+`response_format`을 사용한다. 다른 모델로 자동 폴백하지 않는다.
+API 계약은 [Upstage 공식 문서](https://console.upstage.ai/docs)를 참고한다.
 
-1. 파라미터 표: "all solar models (solar-pro3 포함)"이 지원한다고 명시
-2. Structured Outputs 예제 코드: `model="solar-pro3"`로 실제 동작하는 예시를 보여줌
-3. `response_format` 필드 상세 설명: "only compatible with the `solar-pro-2` model"이라고 명시
-
-이벤트 추출을 포함한 이 프로젝트의 핵심 파이프라인 전체(Phase 2~4 대부분)가 Structured
-Outputs에 의존하므로, 실제 키로 검증할 때까지 기다리지 않고 **자동 폴백을 코드로 구현**했다
-(`app/clients/solar.py::structured_completion`): 기본값인 `solar-pro3`로 먼저 시도하고,
-Upstage가 `response_format` 관련 400 에러를 반환하면 `solar-pro2`로 1회 자동 재시도한다.
-실제 `UPSTAGE_API_KEY`로 두 모델 다 확인해본 뒤, solar-pro3가 항상 성공한다면 이 폴백
-분기는 영구히 실행되지 않는 죽은 코드가 되므로 그때 제거해도 무방하다 — 지금은 "모델
-선택을 잘못 짚어서 파이프라인 전체가 막히는 상황"을 막기 위한 안전장치로 남겨두었다.
-
-(참고: 임베딩 벡터 차원(`EMBEDDING_DIM` 4096 vs 1024) 문서 모순은 별개 사안으로,
-`backend/app/gateways/README.md`에 이미 기록되어 있다 — DB 담당 팀원이 실제 스키마 확정
-전에 확인해야 할 항목이라 그쪽 문서에 두었다.)
+임베딩은 실제 API 호출로 검증된 4096차원을 사용한다. 저장소 구성은
+[Gateway architecture](../../docs/architecture/gateways.md)에 정리되어 있다.
 
 ## 부록: 현재 알려진 한계 요약 (다시 보기 편하도록 한 곳에 모음)
 

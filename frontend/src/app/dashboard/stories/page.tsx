@@ -51,7 +51,7 @@ export default function StoriesPage() {
   }, [page]);
 
   useEffect(() => {
-    setLoading(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh is an external async data load.
     void refresh().finally(() => setLoading(false));
 
     const intervalId = setInterval(() => void refresh(), POLL_INTERVAL_MS);
@@ -123,9 +123,7 @@ export default function StoriesPage() {
   // 바뀜) — 그런 경우 현재 페이지가 범위를 벗어나지 않도록 보정한다. 이 보정
   // 자체가 setPage를 호출해 refresh를 다시 트리거하므로(page가 refresh의 의존성),
   // 서버가 이미 돌려준 stories를 다시 자르는 게 아니라 새 offset으로 재요청한다.
-  useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
+  if (page > totalPages) setPage(totalPages);
 
   const pageStories = stories;
 

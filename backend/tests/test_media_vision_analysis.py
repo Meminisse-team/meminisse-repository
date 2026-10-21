@@ -105,7 +105,7 @@ async def _create_user_and_asset(gateways):
     )
     asset = await gateways.media_assets.create(
         MediaAssetCreateData(
-            user_id=user.id, s3_key="k", s3_url="https://example.com/k", asset_type=AssetType.IMAGE,
+            user_id=user.id, s3_key="k", asset_type=AssetType.IMAGE,
         )
     )
     await gateways.commit()

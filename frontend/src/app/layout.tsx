@@ -1,19 +1,14 @@
 import type { Metadata } from "next";
-import { Gowun_Batang, Noto_Sans_KR } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const gowunBatang = Gowun_Batang({
-  variable: "--font-serif-kr",
-  subsets: ["latin"],
-  weight: ["400", "700"],
-  display: "swap",
+const gowunBatang = localFont({
+  src: [{ path: "./fonts/GowunBatang-Regular.woff2", weight: "400" }, { path: "./fonts/GowunBatang-Bold.woff2", weight: "700" }],
+  variable: "--font-serif-kr", display: "swap",
 });
-
-const notoSansKr = Noto_Sans_KR({
-  variable: "--font-sans-kr",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "700"],
-  display: "swap",
+const notoSansKr = localFont({
+  src: [{ path: "./fonts/NotoSansKR.woff2", weight: "100 900" }],
+  variable: "--font-sans-kr", display: "swap",
 });
 
 export const metadata: Metadata = {

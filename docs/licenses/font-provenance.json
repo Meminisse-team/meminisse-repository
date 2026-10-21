@@ -1,0 +1,23 @@
+{
+  "GowunBatang-Regular": {
+    "upstream": "https://github.com/google/fonts/tree/main/ofl/gowunbatang",
+    "source_sha256": "466c593e7147412e748af4856d5ad14709b5a860bdf62b9c2546f2c5874e9849",
+    "woff2_sha256": "864265dda2e84bb07ff2c1b31341743657bf9fe659c3071ed2f78841ce1c7d28",
+    "conversion": "fontTools lossless WOFF2 compression, no glyph subsetting",
+    "license": "SIL Open Font License 1.1"
+  },
+  "GowunBatang-Bold": {
+    "upstream": "https://github.com/google/fonts/tree/main/ofl/gowunbatang",
+    "source_sha256": "dbfcaa646e5831e7478524924f02906f550285a5050699b4e38c9950b3ec4b94",
+    "woff2_sha256": "9febb7f8fecdec02113a548856b4e355ff297068cf5b3ae34f5c8fe40ea67ad1",
+    "conversion": "fontTools lossless WOFF2 compression, no glyph subsetting",
+    "license": "SIL Open Font License 1.1"
+  },
+  "NotoSansKR": {
+    "upstream": "https://github.com/google/fonts/tree/main/ofl/notosanskr",
+    "source_sha256": "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252",
+    "woff2_sha256": "40dea32258d97f137762eeefcaf4fcbf33b61542e93cbc568fb8b1a196750884",
+    "conversion": "fontTools lossless WOFF2 compression, no glyph subsetting",
+    "license": "SIL Open Font License 1.1"
+  }
+}

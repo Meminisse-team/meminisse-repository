@@ -262,7 +262,7 @@ async def test_select_persists_assignment_and_write_skips_retrieval() -> None:
             raise AssertionError("write_chapter가 배정 저장분 대신 재검색을 수행했다")
 
         with patch(
-            "app.services.autobiography_service._retrieve_events_for_chapter",
+            "app.autobiography.retrieval._retrieve_events_for_chapter",
             new=_must_not_retrieve,
         ):
             chapter = await autobiography_service.write_chapter(gateways, chapters[0].id)

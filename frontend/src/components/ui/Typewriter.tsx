@@ -22,7 +22,7 @@ interface TypewriterProps {
  * framer-motion의 stagger보다 텍스트 길이 변화에 더 안정적이다), 깜빡이는
  * 커서는 framer-motion으로 처리한다.
  */
-export function Typewriter({
+function TypewriterAnimation({
   text,
   speed = 55,
   startDelay = 0,
@@ -34,12 +34,13 @@ export function Typewriter({
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    setDisplayed("");
-    setDone(false);
     let index = 0;
     let intervalId: ReturnType<typeof setInterval> | undefined;
 
     const timeoutId = setTimeout(() => {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        setDisplayed(text); setDone(true); onComplete?.(); return;
+      }
       intervalId = setInterval(() => {
         index += 1;
         setDisplayed(text.slice(0, index));
@@ -77,4 +78,8 @@ export function Typewriter({
       ))}
     </span>
   );
+}
+
+export function Typewriter(props: TypewriterProps) {
+  return <TypewriterAnimation key={`${props.text}:${props.speed}:${props.startDelay}`} {...props} />;
 }

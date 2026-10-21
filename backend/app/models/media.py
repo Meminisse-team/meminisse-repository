@@ -20,7 +20,6 @@ class MediaAsset(Base):
     # FK 제약은 interview_sessions 생성 후 ALTER로 추가 (순환 참조 해소)
     session_id = Column(UUID(as_uuid=True), nullable=True)
     s3_key = Column(String(1024), unique=True, nullable=False)
-    s3_url = Column(String(2048), nullable=False)
     asset_type = Column(
         str_enum(AssetType, name="assettype"),
         nullable=False,

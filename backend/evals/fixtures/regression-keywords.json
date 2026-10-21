@@ -1,0 +1,14 @@
+{
+  "schema_version": "1",
+  "source_sha256": "14ad1f3dcf77d4e9e82bd9180ad5f05873f4bd7f9efa53a45d71a9ace497fa42",
+  "provenance": "Synthetic regression example; not Bill Gates evaluation",
+  "extractor": "human-authored regression fixture",
+  "keywords": [
+    "서울",
+    "부산",
+    "학교",
+    "교사",
+    "가족",
+    "여행"
+  ]
+}

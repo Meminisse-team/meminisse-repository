@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/Button";
 import { usersApi } from "@/lib/api/users";
-import { session } from "@/lib/auth/session";
+import { authApi } from "@/lib/api/auth";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import type { ConsentRecord } from "@/types/api";
 
@@ -33,8 +33,8 @@ export default function ProfilePage() {
       .catch(() => setConsents([]));
   }, [user]);
 
-  function handleLogout() {
-    session.clear();
+  async function handleLogout() {
+    await authApi.logout();
     router.replace("/");
   }
 

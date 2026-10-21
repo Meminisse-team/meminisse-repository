@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 
 import { authApi } from "@/lib/api/auth";
-import { session } from "@/lib/auth/session";
 import type { User } from "@/types/api";
 
 /** GET /api/v1/auth/me를 호출해 현재 로그인 사용자를 가져온다. 토큰이 없으면
@@ -15,16 +14,11 @@ export function useCurrentUser() {
 
   useEffect(() => {
     let active = true;
-    if (!session.getAccessToken()) {
-      setLoading(false);
-      return;
-    }
     authApi
       .me()
       .then((current) => {
         if (!active) return;
         setUser(current);
-        session.setUserId(current.id);
       })
       .catch(() => {
         if (active) setError("사용자 정보를 불러오지 못했어요.");

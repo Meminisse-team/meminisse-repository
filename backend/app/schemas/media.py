@@ -22,7 +22,7 @@ class MediaAssetRead(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
     session_id: uuid.UUID | None
-    s3_url: str
+    s3_url: str = ""
     asset_type: AssetType
     age_at_time: int | None
     location_at_time: str | None

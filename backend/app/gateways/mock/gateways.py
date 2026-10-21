@@ -69,11 +69,10 @@ class MockObjectStorage(ObjectStorageGateway):
 
     async def put_object(self, key: str, data: bytes, *, content_type: str) -> str:
         self._store.objects[key] = data
-        return f"mock://objects/{key}"
+        return key
 
-    async def get_presigned_url(self, key: str, *, expires_in: int = 3600) -> str:
-        if key not in self._store.objects:
-            raise KeyError(f"object not found in mock store: {key}")
+    async def get_presigned_url(self, key: str, *, expires_in: int = 300) -> str:
+        # Like S3 signing, this does not perform a HEAD request.
         return f"mock://objects/{key}?expires_in={expires_in}"
 
     async def get_object(self, key: str) -> bytes:
@@ -522,7 +521,6 @@ class MockMediaAssetGateway(MediaAssetGateway):
             user_id=data.user_id,
             session_id=data.session_id,
             s3_key=data.s3_key,
-            s3_url=data.s3_url,
             asset_type=data.asset_type,
             age_at_time=data.age_at_time,
             location_at_time=data.location_at_time,
@@ -636,7 +634,7 @@ class MockAutobiographyGateway(AutobiographyGateway):
         toc_data: dict | None = None,
         book_synopsis: str | None = None,
         final_content: str | None = None,
-        pdf_url: str | None = None,
+        pdf_key: str | None = None,
         photo_placements: list[dict] | None = None,
     ) -> AutobiographyRecord:
         autobiography = self._store.autobiographies.get(autobiography_id)
@@ -656,8 +654,8 @@ class MockAutobiographyGateway(AutobiographyGateway):
             autobiography.book_synopsis = book_synopsis
         if final_content is not None:
             autobiography.final_content = final_content
-        if pdf_url is not None:
-            autobiography.pdf_url = pdf_url
+        if pdf_key is not None:
+            autobiography.pdf_key = pdf_key
         if photo_placements is not None:
             autobiography.photo_placements = photo_placements
         autobiography.updated_at = datetime.now(timezone.utc)
@@ -677,7 +675,7 @@ class MockAutobiographyGateway(AutobiographyGateway):
             user_id=autobiography.user_id,
             status=autobiography.status,
             final_content_ready=autobiography.final_content is not None,
-            pdf_url=autobiography.pdf_url,
+            pdf_key=autobiography.pdf_key,
             updated_at=autobiography.updated_at,
         )
 

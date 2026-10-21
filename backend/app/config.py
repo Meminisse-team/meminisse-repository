@@ -28,13 +28,11 @@ class Settings(BaseSettings):
     # Embeddings:  같은 클라이언트, model="embedding-query" | "embedding-passage"
     UPSTAGE_API_KEY: str = ""
 
-    # ── Azure Computer Vision (사진 캡셔닝 + 사진 속 텍스트 인식, Image Analysis 4.0) ──
-    # 사진 한 장당 API 호출 1번으로 캡션(예: "집 앞에서 5명이 함께 찍은 사진")과 사진
-    # 속 인쇄/손글씨 텍스트(예: "1990년 집 앞에서 가족들과.")를 동시에 받아온다
-    # (app/clients/azure_vision.py, features=caption,read). 예전에는 텍스트 인식만
-    # 가능한 Upstage Document Parse를 썼는데, 캡션 없이는 순수 추억 사진(글자가 없는
-    # 사진)에 대해 의미 있는 시작 질문을 만들 수 없었다 — Azure Vision 한 번의 호출로
-    # 캡션+텍스트를 함께 얻는 방식으로 교체했다(app/services/media_service.py 참조).
+    # ── Azure Computer Vision (물체 탐지·장면 태그·텍스트 인식, Image Analysis 4.0) ──
+    # 사진 한 장당 Azure API를 한 번 호출해 objects/tags/read를 받아온다
+    # (app/clients/azure_vision.py, features=objects,tags,read).
+    # media_service.py는 objects/tags를 Solar에 전달해 한국어 장면 설명을 생성하고,
+    # read 결과는 OCR 텍스트로 별도 처리한다. Azure의 caption 기능은 사용하지 않는다.
     #
     # 발급: https://portal.azure.com → "Computer Vision" 리소스 생성
     #   AZURE_CV_ENDPOINT → 리소스 개요의 "엔드포인트"
@@ -69,9 +67,9 @@ class Settings(BaseSettings):
     #                                RLS를 완전히 우회하는 매우 민감한 키 —
     #                                절대 프론트엔드/커밋에 노출하지 말 것.
     #   SUPABASE_JWT_SECRET       → Settings → API → JWT Settings → "JWT Secret".
-    #                                세션 토큰(HS256) 서명 검증에 사용. 프로젝트가
-    #                                비대칭키(RS256/ES256) 서명으로 전환돼 있으면
-    #                                이 방식 대신 JWKS 엔드포인트 검증으로 바꿔야 한다.
+    #                                HS256/HS384/HS512 토큰의 대칭키 서명 검증에 사용.
+    #   ES/RS 비대칭키 토큰은 app/core/security.py가 SUPABASE_URL 아래의
+    #   /auth/v1/.well-known/jwks.json 공개키로 검증한다. 두 경로 모두 구현되어 있다.
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""

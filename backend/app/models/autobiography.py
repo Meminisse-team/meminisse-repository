@@ -51,7 +51,7 @@ class Autobiography(Base):
     # Phase 5: Jinja2+WeasyPrint로 조판한 국판(A5) PDF의 S3 URL. final_content가
     # 채워진 뒤에만 생성 가능하다(app/services/pdf_service.py 참조). POD(주문형 인쇄)
     # 발주 연계는 범위 밖 — 이 필드는 완성된 PDF 파일 위치까지만 담당한다.
-    pdf_url = Column(String(2048), nullable=True)
+    pdf_key = Column(String(2048), nullable=True)
     # 사용자가 PDF 조판 직전에 직접 고른 수록 사진 배치(2026-07-16). 기획안 5절의
     # 고정 슬롯 템플릿 원칙에 따라 [{media_asset_id, chapter_index, slot, caption}]
     # 배열로만 표현한다(slot: "chapter_top" | "full_page_before"). NULL(미지정)과

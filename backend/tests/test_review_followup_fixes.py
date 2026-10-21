@@ -361,7 +361,7 @@ async def test_get_polling_status_omits_heavy_fields_but_reports_readiness() -> 
     )
     autobiography = await gateways.autobiographies.create(user.id)
     await gateways.autobiographies.update(
-        autobiography.id, final_content="완성된 원고" * 1000, pdf_url="https://example.com/book.pdf"
+        autobiography.id, final_content="완성된 원고" * 1000, pdf_key="https://example.com/book.pdf"
     )
     await gateways.chapters.replace_all(
         autobiography.id,
@@ -382,7 +382,7 @@ async def test_get_polling_status_omits_heavy_fields_but_reports_readiness() -> 
     assert result is not None
     autobiography_status, chapters_status = result
     assert autobiography_status.final_content_ready is True
-    assert autobiography_status.pdf_url == "https://example.com/book.pdf"
+    assert autobiography_status.pdf_key == "https://example.com/book.pdf"
     # 경량 DTO는애초에 final_content/content 필드 자체가 없다 — 무거운 필드가
     # 실려 있지 않다는 것 자체가 계약이다.
     assert not hasattr(autobiography_status, "final_content")

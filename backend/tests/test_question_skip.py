@@ -98,7 +98,6 @@ async def test_skip_next_item_skips_photo_session_too() -> None:
         MediaAssetCreateData(
             user_id=user.id,
             s3_key="k",
-            s3_url="https://example.com/k",
             asset_type=AssetType.IMAGE,
             life_period_mapped=LifePeriod.CHILDHOOD,
         )

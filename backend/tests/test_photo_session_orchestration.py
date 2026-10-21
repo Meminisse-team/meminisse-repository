@@ -126,7 +126,6 @@ async def test_photo_session_offered_right_after_its_life_period_finishes() -> N
             MediaAssetCreateData(
                 user_id=user.id,
                 s3_key="k",
-                s3_url="https://example.com/k",
                 asset_type=AssetType.IMAGE,
                 life_period_mapped=LifePeriod.CHILDHOOD,
             )
@@ -171,7 +170,6 @@ async def test_late_uploaded_photo_does_not_interrupt_a_later_period_already_in_
             MediaAssetCreateData(
                 user_id=user.id,
                 s3_key="k",
-                s3_url="https://example.com/k",
                 asset_type=AssetType.IMAGE,
                 life_period_mapped=LifePeriod.CHILDHOOD,
             )
@@ -229,7 +227,6 @@ async def test_unmapped_period_photo_offered_only_after_all_fixed_questions_done
             MediaAssetCreateData(
                 user_id=user.id,
                 s3_key="k",
-                s3_url="https://example.com/k",
                 asset_type=AssetType.IMAGE,
                 life_period_mapped=None,
             )
@@ -288,7 +285,6 @@ async def test_photo_session_opening_uses_caption_and_ocr_text_from_media_asset(
             MediaAssetCreateData(
                 user_id=user.id,
                 s3_key="k",
-                s3_url="https://example.com/k",
                 asset_type=AssetType.IMAGE,
                 life_period_mapped=LifePeriod.CHILDHOOD,
             )
@@ -336,7 +332,6 @@ async def test_completing_photo_session_does_not_delete_vision_staged_event() ->
             MediaAssetCreateData(
                 user_id=user.id,
                 s3_key="k",
-                s3_url="https://example.com/k",
                 asset_type=AssetType.IMAGE,
                 life_period_mapped=LifePeriod.CHILDHOOD,
             )

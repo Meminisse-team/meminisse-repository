@@ -113,9 +113,9 @@ function UserAutobiographiesSection({ userId }: { userId: string }) {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
-    setError(null);
     try {
       const list = await adminApi.listUserAutobiographies(userId);
+      setError(null);
       setBooks(list);
       setPdfTriggeredIds((prev) => {
         if (prev.size === 0) return prev;
@@ -132,6 +132,7 @@ function UserAutobiographiesSection({ userId }: { userId: string }) {
   useEffect(() => {
     // loading 초기값이 이미 true라 여기서 다시 setLoading(true)를 부를 필요가 없다
     // (react-hooks/set-state-in-effect).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh updates state after an awaited API request.
     void refresh().finally(() => setLoading(false));
   }, [refresh]);
 

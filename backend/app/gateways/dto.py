@@ -245,7 +245,6 @@ class MediaAssetRecord:
     user_id: UUID
     session_id: UUID | None
     s3_key: str
-    s3_url: str
     asset_type: AssetType
     age_at_time: int | None
     location_at_time: str | None
@@ -263,7 +262,6 @@ class MediaAssetRecord:
 class MediaAssetCreateData:
     user_id: UUID
     s3_key: str
-    s3_url: str
     asset_type: AssetType
     session_id: UUID | None = None
     age_at_time: int | None = None
@@ -292,7 +290,7 @@ class AutobiographyRecord:
     style_bible: dict | None = None
     book_synopsis: str | None = None
     final_content: str | None = None
-    pdf_url: str | None = None
+    pdf_key: str | None = None
     # PDF 조판 직전 사용자가 고른 수록 사진 배치(고정 슬롯) — None이면 미지정.
     photo_placements: list[dict] | None = None
 
@@ -324,7 +322,7 @@ class AutobiographyStatusRecord:
     user_id: UUID
     status: AutobiographyStatus
     final_content_ready: bool
-    pdf_url: str | None
+    pdf_key: str | None
     updated_at: datetime
 
 

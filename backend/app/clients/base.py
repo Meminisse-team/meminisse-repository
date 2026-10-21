@@ -1,6 +1,5 @@
 """
-Upstage Chat Completions / Embeddings는 OpenAI SDK와 호환되므로(upstage_solar_api_docs.txt,
-upstage_embeddings_api_docs.txt의 "OpenAI SDK Compatible" 섹션 참조) base_url만 갈아끼운
+Upstage Chat Completions / Embeddings는 OpenAI SDK와 호환되므로 base_url만 갈아끼운
 AsyncOpenAI 클라이언트 하나를 Solar와 Embeddings가 함께 재사용한다. OpenAI SDK와 호환되지
 않는 외부 API(예: 사진 캡셔닝/텍스트 인식 — clients/azure_vision.py)는 httpx로 별도 처리한다.
 """

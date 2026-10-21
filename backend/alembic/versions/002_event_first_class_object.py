@@ -11,7 +11,7 @@
   세션이 아닌 이벤트이므로 참조 대상을 이벤트로 교정.
 - 임베딩 차원을 OpenAI(1536) → Upstage embedding-query/embedding-passage로 전환.
   실제 UPSTAGE_API_KEY로 embedding-query/embedding-passage를 1회 호출해 확인한 결과
-  4096차원으로 검증됨(upstage_embeddings_api_docs.txt의 1024차원 서술은 오기로 판단).
+  4096차원으로 검증됨.
   단, pgvector의 HNSW/IVFFlat 인덱스는 vector 타입 기준 2000차원, halfvec 타입도
   4000차원까지만 지원하므로(Supabase pgvector 0.8.2 실측) 4096차원에는 근사 인덱스를
   아예 만들 수 없다 — 저장 자체는 문제없다(vector 타입 저장 한계는 16,000차원). 따라서

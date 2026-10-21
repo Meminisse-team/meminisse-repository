@@ -6,7 +6,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 # Upstage Embeddings API (embedding-query / embedding-passage).
 # 실제 UPSTAGE_API_KEY로 1회 호출해 응답 벡터 길이를 확인한 결과 4096차원으로 검증됨
-# (upstage_embeddings_api_docs.txt의 1024차원 서술은 오기로 판단). pgvector HNSW/IVFFlat
+# pgvector HNSW/IVFFlat
 # 인덱스는 2000~4000차원까지만 지원해 이 차원에는 근사 인덱스를 만들 수 없으므로,
 # events.embedding은 인덱스 없이 순차 스캔으로 검색한다(alembic/versions/002 참조).
 EMBEDDING_DIM = 4096

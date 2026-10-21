@@ -614,7 +614,6 @@ class SqlAlchemyMediaAssetGateway(MediaAssetGateway):
             user_id=data.user_id,
             session_id=data.session_id,
             s3_key=data.s3_key,
-            s3_url=data.s3_url,
             asset_type=data.asset_type,
             age_at_time=data.age_at_time,
             location_at_time=data.location_at_time,
@@ -729,7 +728,7 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
         toc_data: dict | None = None,
         book_synopsis: str | None = None,
         final_content: str | None = None,
-        pdf_url: str | None = None,
+        pdf_key: str | None = None,
         photo_placements: list[dict] | None = None,
     ) -> AutobiographyRecord:
         obj = await self._session.get(Autobiography, autobiography_id)
@@ -749,8 +748,8 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
             obj.book_synopsis = book_synopsis
         if final_content is not None:
             obj.final_content = final_content
-        if pdf_url is not None:
-            obj.pdf_url = pdf_url
+        if pdf_key is not None:
+            obj.pdf_key = pdf_key
         if photo_placements is not None:
             obj.photo_placements = photo_placements
         await self._session.flush()
@@ -776,7 +775,7 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
             Autobiography.user_id,
             Autobiography.status,
             Autobiography.final_content.is_not(None).label("final_content_ready"),
-            Autobiography.pdf_url,
+            Autobiography.pdf_key,
             Autobiography.updated_at,
         ).where(Autobiography.id == autobiography_id)
         result = await self._session.execute(stmt)
@@ -788,7 +787,7 @@ class SqlAlchemyAutobiographyGateway(AutobiographyGateway):
             user_id=row.user_id,
             status=row.status,
             final_content_ready=row.final_content_ready,
-            pdf_url=row.pdf_url,
+            pdf_key=row.pdf_key,
             updated_at=row.updated_at,
         )
 
@@ -1147,7 +1146,7 @@ def _to_event_record(event: Event) -> EventRecord:
 def _to_media_asset_record(asset: MediaAsset) -> MediaAssetRecord:
     return MediaAssetRecord(
         id=asset.id, user_id=asset.user_id, session_id=asset.session_id,
-        s3_key=asset.s3_key, s3_url=asset.s3_url, asset_type=asset.asset_type,
+        s3_key=asset.s3_key, asset_type=asset.asset_type,
         age_at_time=asset.age_at_time, location_at_time=asset.location_at_time,
         people_at_time=asset.people_at_time, life_period_mapped=asset.life_period_mapped,
         analysis_track=asset.analysis_track, pre_extracted_labels=asset.pre_extracted_labels,
@@ -1165,7 +1164,7 @@ def _to_autobiography_record(autobiography: Autobiography) -> AutobiographyRecor
         style_bible=autobiography.style_bible,
         book_synopsis=autobiography.book_synopsis,
         final_content=autobiography.final_content,
-        pdf_url=autobiography.pdf_url,
+        pdf_key=autobiography.pdf_key,
         photo_placements=autobiography.photo_placements,
     )
 

@@ -46,7 +46,7 @@ async def get_autobiography(
     require_self(current_user, user_id)
     autobiography = await autobiography_service.get_or_create_autobiography(gateways, user_id)
     completed_session_count = await gateways.sessions.count_completed_by_user(user_id)
-    data = AutobiographyRead.model_validate(autobiography)
+    data = await _read_autobiography(gateways, autobiography)
     return data.model_copy(update={"completed_session_count": completed_session_count})
 
 
@@ -57,7 +57,7 @@ async def list_finished_autobiographies(
     """"나의 책장" 전용 — 이 유저가 완성한 자서전 전체(최신순)."""
     require_self(current_user, user_id)
     autobiographies = await autobiography_service.list_finished_autobiographies(gateways, user_id)
-    return [AutobiographyRead.model_validate(a) for a in autobiographies]
+    return [await _read_autobiography(gateways, a) for a in autobiographies]
 
 
 @router.get("/{autobiography_id}/polling-status", response_model=AutobiographyPollingStatus)
@@ -82,7 +82,9 @@ async def get_polling_status(
         id=autobiography_status.id,
         status=autobiography_status.status,
         final_content_ready=autobiography_status.final_content_ready,
-        pdf_url=autobiography_status.pdf_url,
+        pdf_version=autobiography_status.pdf_key,
+        pdf_url=(await gateways.storage.get_presigned_url(autobiography_status.pdf_key)
+                 if autobiography_status.pdf_key else None),
         chapters=[
             ChapterStatusItem(
                 id=c.id,
@@ -185,7 +187,7 @@ async def select_customization(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    return AutobiographyRead.model_validate(autobiography)
+    return await _read_autobiography(gateways, autobiography)
 
 
 @router.post("/{autobiography_id}/customization/previews", status_code=status.HTTP_202_ACCEPTED)
@@ -230,7 +232,7 @@ async def confirm_customization(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    return AutobiographyRead.model_validate(autobiography)
+    return await _read_autobiography(gateways, autobiography)
 
 
 @router.post("/{autobiography_id}/toc/generate", response_model=AutobiographyRead)
@@ -242,7 +244,7 @@ async def generate_toc(
         autobiography = await autobiography_service.generate_toc_candidates(gateways, autobiography_id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    return AutobiographyRead.model_validate(autobiography)
+    return await _read_autobiography(gateways, autobiography)
 
 
 @router.post("/{autobiography_id}/toc/select", response_model=AutobiographyRead)
@@ -259,7 +261,7 @@ async def select_toc(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    return AutobiographyRead.model_validate(autobiography)
+    return await _read_autobiography(gateways, autobiography)
 
 
 @router.get("/{autobiography_id}/chapters", response_model=list[ChapterDraftRead])
@@ -334,7 +336,7 @@ async def update_chapter_content(
     updated = await autobiography_service.edit_chapter_content(
         gateways, autobiography_id, chapter_draft_id, payload.content
     )
-    return AutobiographyRead.model_validate(updated)
+    return await _read_autobiography(gateways, updated)
 
 
 @router.post("/{autobiography_id}/finalize", status_code=status.HTTP_202_ACCEPTED)
@@ -388,7 +390,7 @@ async def set_photo_placements(
         )
     except autobiography_service.InvalidPhotoPlacementError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-    return AutobiographyRead.model_validate(updated)
+    return await _read_autobiography(gateways, updated)
 
 
 @router.post("/{autobiography_id}/pdf/generate", status_code=status.HTTP_202_ACCEPTED)
@@ -452,3 +454,18 @@ async def retain_real_name(
     except PermissionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return CharacterRead.model_validate(character)
+
+
+async def _read_autobiography(gateways, record) -> AutobiographyRead:
+    data = AutobiographyRead.model_validate(record)
+    return data.model_copy(update={"pdf_version": record.pdf_key, "pdf_url": await gateways.storage.get_presigned_url(record.pdf_key) if record.pdf_key else None})
+
+
+@router.get("/{autobiography_id}/pdf-url")
+async def get_pdf_url(
+    autobiography_id: uuid.UUID, gateways: GatewaysDep, current_user: CurrentUserDep
+) -> dict[str, str | int]:
+    record = await _require_own_autobiography(gateways, autobiography_id, current_user)
+    if not record.pdf_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "PDF가 아직 준비되지 않았습니다.")
+    return {"url": await gateways.storage.get_presigned_url(record.pdf_key), "expires_in": 300}

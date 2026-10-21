@@ -1,4 +1,5 @@
 "use client";
+import { PdfDownloadButton } from "@/features/autobiography/components/PdfDownloadButton";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -27,9 +28,9 @@ export default function BookshelfPage() {
 
   const refresh = useCallback(async () => {
     if (!user) return;
-    setError(null);
     try {
       const list = await autobiographiesApi.listFinished(user.id);
+      setError(null);
       setBooks(list);
       // pdf_url이 채워진 책은 더 이상 폴링 대상이 아니다.
       setPdfTriggeredIds((prev) => {
@@ -47,6 +48,7 @@ export default function BookshelfPage() {
   useEffect(() => {
     // loading 초기값이 이미 true라 여기서 다시 setLoading(true)를 부를 필요가 없다
     // (react-hooks/set-state-in-effect).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh updates state after an awaited API request.
     void refresh().finally(() => setLoading(false));
   }, [refresh]);
 
@@ -110,14 +112,7 @@ export default function BookshelfPage() {
 
               <div className="mt-4">
                 {book.pdf_url ? (
-                  <a
-                    href={book.pdf_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-block rounded-full bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-black/80"
-                  >
-                    PDF 열기 / 다운로드
-                  </a>
+                  <PdfDownloadButton autobiographyId={book.id}>PDF 열기 / 다운로드</PdfDownloadButton>
                 ) : (
                   <>
                     <Button

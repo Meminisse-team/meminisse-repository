@@ -1,8 +1,8 @@
-"""
+r"""
 Phase 5: 실물 출판 파이프라인 — Jinja2로 최종 원고를 고정 슬롯 템플릿에 주입하고
 WeasyPrint(CSS Paged Media)로 국판(A5) PDF를 조판한다(기획안 "실물 책 출판을 위한
 자동 조판 파이프라인 설계" 절 참조). POD(주문형 인쇄) 발주 연계는 범위 밖 — 완성된
-PDF를 S3에 올려 URL을 Autobiography.pdf_url에 저장하는 데까지만 담당한다.
+PDF를 private S3에 올려 key를 Autobiography.pdf_key에 저장하는 데까지만 담당한다.
 
 WeasyPrint는 Windows에서 순수 pip 설치만으로는 동작하지 않는다 — pango/gobject 등
 네이티브 라이브러리가 필요해 GTK3 런타임을 별도로 설치해야 한다(2026-07-12 실제
@@ -110,7 +110,7 @@ async def render_manuscript_html(gateways: Gateways, autobiography: Autobiograph
     chapters = await gateways.chapters.list_by_autobiography(autobiography.id)
     author = await gateways.users.get_by_id(autobiography.user_id)
     media_assets = await gateways.media_assets.list_by_user(autobiography.user_id)
-    media_url_by_id = {m.id: m.s3_url for m in media_assets if m.asset_type == AssetType.IMAGE}
+    media_url_by_id = {m.id: await gateways.storage.get_presigned_url(m.s3_key) for m in media_assets if m.asset_type == AssetType.IMAGE}
 
     # 사용자가 "책에 실을 사진 고르기"에서 직접 지정한 배치만 반영한다.
     # 미지정(None)과 빈 배열 모두 "사진 없음"으로 취급 — 챕터 소환 이벤트의
@@ -223,9 +223,9 @@ async def generate_manuscript_pdf(gateways: Gateways, autobiography_id: uuid.UUI
             qa_report,
         )
 
-    key = f"users/{autobiography.user_id}/manuscripts/{autobiography.id}.pdf"
-    pdf_url = await gateways.storage.put_object(key, pdf_bytes, content_type="application/pdf")
+    key = f"users/{autobiography.user_id}/manuscripts/{autobiography.id}/{uuid.uuid4()}.pdf"
+    await gateways.storage.put_object(key, pdf_bytes, content_type="application/pdf")
 
-    autobiography = await gateways.autobiographies.update(autobiography_id, pdf_url=pdf_url)
+    autobiography = await gateways.autobiographies.update(autobiography_id, pdf_key=key)
     await gateways.commit()
     return autobiography

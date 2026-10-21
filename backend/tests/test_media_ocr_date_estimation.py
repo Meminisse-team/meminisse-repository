@@ -84,7 +84,6 @@ async def _create_asset(gateways, user_id, *, life_period_mapped=None):
         MediaAssetCreateData(
             user_id=user_id,
             s3_key="k",
-            s3_url="https://example.com/k",
             asset_type=AssetType.IMAGE,
             life_period_mapped=life_period_mapped,
         )

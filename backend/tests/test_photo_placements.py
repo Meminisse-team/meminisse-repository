@@ -32,7 +32,7 @@ async def _setup(gateways):
     )
     photo = await gateways.media_assets.create(
         MediaAssetCreateData(
-            user_id=user.id, s3_key="k", s3_url="https://example.com/k.jpg",
+            user_id=user.id, s3_key="k",
             asset_type=AssetType.IMAGE,
         )
     )

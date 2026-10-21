@@ -3,14 +3,11 @@ Solar LLM (solar-pro3) 채팅 완성 클라이언트.
 
 기획안 3절: 핀셋 질문 생성, 슬롯 게이팅, 이벤트 분할·라벨 추출, 세션 산문 재조립,
 스타일 바이블·시놉시스·챕터 집필, 제3자 언급 위해성 분류 전 단계에서 이 모듈을 통해
-Solar를 호출한다. 프롬프트 자체(페르소나/슬롯/세이프가드 문구)는 app/agents/prompts.py에서
+Solar를 호출한다. 프롬프트 자체(페르소나/슬롯/세이프가드 문구)는 app/agents/prompts/에서
 관리하고, 이 모듈은 순수하게 "메시지 배열을 넣으면 응답을 받는" 얇은 API 래퍼로 유지한다.
 
-한때 upstage_solar_api_docs.txt의 자체 모순(Structured Outputs 지원 모델 범위가 세 군데에서
-다르게 기재) 때문에 solar-pro2 자동 폴백 분기를 두었으나, 실 API 키로 수개월 운영하며
-solar-pro3의 response_format이 정상 동작함이 확인돼 제거했다(2026-07-18 — 폴백 도입 당시
-주석부터 "검증되면 제거해도 된다"고 명시돼 있었다). tools/tool_choice/prompt_cache_key
-파라미터도 이 프로젝트에 호출부가 하나도 없어 함께 정리했다.
+Structured Outputs는 solar-pro3의 response_format을 사용하며 다른 모델로 자동 폴백하지 않는다.
+공식 API 문서: https://console.upstage.ai/docs
 """
 
 from __future__ import annotations
